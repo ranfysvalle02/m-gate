@@ -104,11 +104,12 @@ def tenant_id_from_db_name(db_name: str) -> str | None:
     raw = db_name.removeprefix(cfg.tenant_db_prefix)
     if not raw:
         return None
-    # Backwards compatibility with legacy db names that had no hash suffix.
+    # Tenant db names are always ``{prefix}{sanitized}_{sha256[:8]}``; anything
+    # that doesn't carry the hash suffix is not one of ours.
     match = re.match(r"(?P<tenant>.+)_[0-9a-f]{8}$", raw)
-    if match:
-        return match.group("tenant")
-    return raw
+    if not match:
+        return None
+    return match.group("tenant")
 
 
 def get_tenant_database(tenant_id: str):

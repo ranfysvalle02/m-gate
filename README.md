@@ -489,11 +489,11 @@ touching any tenant collection:
 
 ### Rate limiting
 
-`RATE_LIMIT_STRATEGY=sliding_window` (default) counts requests per fixed sub-window but
+The per-(tenant, client-ip) limiter counts requests per fixed sub-window but
 estimates the rate over a rolling window by weighting the previous window by how much
 of it still overlaps "now". This removes the fixed-window failure mode where a caller
 spends a full quota at the end of one window and again at the start of the next (a 2x
-boundary burst). Set `RATE_LIMIT_STRATEGY=fixed_window` to restore the legacy counter.
+boundary burst). Tune it with `RATE_LIMIT_WINDOW_SECONDS` and `RATE_LIMIT_MAX_REQUESTS`.
 
 ### From the blog post to this repo
 

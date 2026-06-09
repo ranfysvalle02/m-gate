@@ -15,14 +15,13 @@ from database.mongo import get_control_database, mongo_server_now
 
 
 class RateLimitMiddleware:
-    """Per-(tenant, client-ip) request limiter.
+    """Per-(tenant, client-ip) sliding-window request limiter.
 
-    The default ``sliding_window`` strategy keeps a count per fixed sub-window but
-    estimates the rate over a rolling window by weighting the previous window by
-    the fraction of it that still overlaps "now". This removes the classic
-    fixed-window failure mode where a caller can spend its full quota at the end of
-    one window and again at the start of the next — a 2x burst across the boundary.
-    Setting ``rate_limit_strategy=fixed_window`` restores the legacy behavior.
+    Keeps a count per fixed sub-window but estimates the rate over a rolling
+    window by weighting the previous window by the fraction of it that still
+    overlaps "now". This removes the classic fixed-window failure mode where a
+    caller can spend its full quota at the end of one window and again at the
+    start of the next — a 2x burst across the boundary.
     """
 
     def __init__(self, app):
@@ -77,13 +76,12 @@ class RateLimitMiddleware:
         now_ts = now.timestamp()
         window_seconds = max(1, self.settings.rate_limit_window_seconds)
         limit = self.settings.rate_limit_max_requests
-        sliding = self.settings.rate_limit_strategy == "sliding_window"
 
         current_epoch = int(now_ts // window_seconds) * window_seconds
         window_end_epoch = current_epoch + window_seconds
         # Keep buckets alive an extra window so the sliding calculation can still
         # read the immediately-previous window before TTL cleanup reaps it.
-        bucket_lifetime_end = window_end_epoch + (window_seconds if sliding else 0)
+        bucket_lifetime_end = window_end_epoch + window_seconds
         expires_at = datetime.fromtimestamp(bucket_lifetime_end, tz=UTC)
 
         tenant_id = getattr(request.state, "tenant_id", self.settings.default_tenant_id)
@@ -108,19 +106,18 @@ class RateLimitMiddleware:
         current_count = int((bucket or {}).get("count", 1))
 
         effective = float(current_count)
-        if sliding:
-            previous = await collection.find_one(
-                {
-                    "tenant_id": tenant_id,
-                    "client_ip": client_ip,
-                    "window_epoch": current_epoch - window_seconds,
-                }
-            )
-            previous_count = int((previous or {}).get("count", 0))
-            if previous_count:
-                elapsed = now_ts - current_epoch
-                previous_weight = max(0.0, (window_seconds - elapsed) / window_seconds)
-                effective += previous_count * previous_weight
+        previous = await collection.find_one(
+            {
+                "tenant_id": tenant_id,
+                "client_ip": client_ip,
+                "window_epoch": current_epoch - window_seconds,
+            }
+        )
+        previous_count = int((previous or {}).get("count", 0))
+        if previous_count:
+            elapsed = now_ts - current_epoch
+            previous_weight = max(0.0, (window_seconds - elapsed) / window_seconds)
+            effective += previous_count * previous_weight
 
         retry_after = max(0, int(math.ceil(window_end_epoch - now_ts)))
         remaining = max(0, limit - int(math.ceil(effective)))

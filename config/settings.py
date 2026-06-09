@@ -82,10 +82,6 @@ class Settings(BaseSettings):
 
     rate_limit_window_seconds: int = 60
     rate_limit_max_requests: int = 120
-    # "sliding_window" weights the previous window into the current one to remove
-    # the fixed-window burst-at-the-boundary problem. "fixed_window" keeps the
-    # legacy behavior for callers that explicitly want it.
-    rate_limit_strategy: Literal["sliding_window", "fixed_window"] = "sliding_window"
 
     hybrid_vector_weight: float = 0.5
     hybrid_text_weight: float = 0.5

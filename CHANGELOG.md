@@ -65,11 +65,9 @@
   result. Disable auto-provisioning where tenant ids are untrusted.
 
 ### Routing and resiliency
-- Replaced the fixed-window rate limiter with a sliding-window counter
-  (`RATE_LIMIT_STRATEGY=sliding_window`) that weights the previous window into
-  the current one, closing the 2x burst-at-the-boundary gap; `fixed_window`
-  restores the legacy behavior. Buckets now live one extra window so the
-  rolling calculation can read the prior window before TTL cleanup.
+- Sliding-window rate limiter that weights the previous window into the current
+  one, closing the 2x burst-at-the-boundary gap. Buckets live one extra window so
+  the rolling calculation can read the prior window before TTL cleanup.
 - Made downstream timeout detection type-based: the connect+call is bounded by
   our own `asyncio.wait_for` deadline and timeouts are recognized by walking the
   exception cause/context chain for known timeout types (`TimeoutError`,

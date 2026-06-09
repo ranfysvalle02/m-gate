@@ -145,7 +145,6 @@ async def test_rate_limit_sliding_window_blocks_boundary_burst(patch_mongo, monk
     mw.settings = get_settings()
     object.__setattr__(mw.settings, "rate_limit_max_requests", 10)
     object.__setattr__(mw.settings, "rate_limit_window_seconds", 60)
-    object.__setattr__(mw.settings, "rate_limit_strategy", "sliding_window")
 
     base, clock = _fixed_clock(mw, monkeypatch)
 
@@ -161,35 +160,6 @@ async def test_rate_limit_sliding_window_blocks_boundary_burst(patch_mongo, monk
     sink = _Sink()
     await mw(_scope(), sink.receive, sink.send)
     assert sink.status == 429
-
-
-@pytest.mark.asyncio
-async def test_rate_limit_fixed_window_allows_boundary_burst(patch_mongo, monkeypatch):
-    from config.settings import get_settings
-    from gateway.middleware.ratelimit import RateLimitMiddleware
-
-    mw = RateLimitMiddleware(_ok_app)
-    mw.settings = get_settings()
-    object.__setattr__(mw.settings, "rate_limit_max_requests", 10)
-    object.__setattr__(mw.settings, "rate_limit_window_seconds", 60)
-    object.__setattr__(mw.settings, "rate_limit_strategy", "fixed_window")
-
-    base, clock = _fixed_clock(mw, monkeypatch)
-
-    for _ in range(10):
-        sink = _Sink()
-        await mw(_scope(), sink.receive, sink.send)
-        assert sink.status == 200
-
-    # Legacy behavior: the counter resets hard at the boundary, so window 2 lets a
-    # fresh burst straight through. This is exactly the gap sliding_window closes.
-    clock["ts"] = float(base + 60)
-    sink = _Sink()
-    await mw(_scope(), sink.receive, sink.send)
-    assert sink.status == 200
-
-    # Restore default so the mutated singleton doesn't leak the strategy.
-    object.__setattr__(mw.settings, "rate_limit_strategy", "sliding_window")
 
 
 @pytest.mark.asyncio

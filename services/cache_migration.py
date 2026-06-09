@@ -81,7 +81,7 @@ class SemanticCacheMigrationService:
         counts_by_version: dict[str, int] = {}
         stale_docs: list[dict[str, Any]] = []
         for doc in docs:
-            version = str(doc.get("embedding_version") or "legacy")
+            version = str(doc.get("embedding_version") or "unversioned")
             counts_by_version[version] = counts_by_version.get(version, 0) + 1
             if version != self.active_embedding_version:
                 stale_docs.append(doc)

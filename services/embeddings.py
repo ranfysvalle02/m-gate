@@ -14,9 +14,9 @@ from config.settings import Settings, get_settings
 if TYPE_CHECKING:
     from services.embedding_config import EmbeddingConfig
 
-# Providers the gateway can drive as an embedding backend. The Ollama default
-# keeps the historical zero-config local experience; the rest are managed cloud
-# providers reached over their REST APIs (no vendor SDKs required).
+# Providers the gateway can drive as an embedding backend. Ollama is the
+# zero-config local default; the rest are managed cloud providers reached over
+# their REST APIs (no vendor SDKs required).
 SUPPORTED_PROVIDERS: tuple[str, ...] = ("ollama", "openai", "azure_openai", "voyage", "gemini")
 
 # Per-provider default model used when the operator does not pick one explicitly.

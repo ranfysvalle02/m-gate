@@ -37,7 +37,7 @@ async def test_cache_migration_status_reports_version_counts(patch_mongo, fake_e
             _seed_cache_doc(
                 tenant_id=tenant,
                 tool_name="find_order",
-                version="legacy:8",
+                version="prev-model:8",
                 suffix="stale",
             ),
         ]
@@ -48,7 +48,7 @@ async def test_cache_migration_status_reports_version_counts(patch_mongo, fake_e
     assert summary["active_entries"] == 1
     assert summary["stale_entries"] == 1
     assert summary["counts_by_version"][service.active_embedding_version] == 1
-    assert summary["counts_by_version"]["legacy:8"] == 1
+    assert summary["counts_by_version"]["prev-model:8"] == 1
 
 
 @pytest.mark.asyncio
@@ -67,7 +67,7 @@ async def test_cache_migration_purge_removes_stale_versions(patch_mongo, fake_em
             _seed_cache_doc(
                 tenant_id=tenant,
                 tool_name="find_order",
-                version="legacy:8",
+                version="prev-model:8",
                 suffix="stale",
             ),
         ]
@@ -88,7 +88,7 @@ async def test_cache_migration_reembed_updates_stale_entries(patch_mongo, fake_e
         _seed_cache_doc(
             tenant_id=tenant,
             tool_name="find_order",
-            version="legacy:8",
+            version="prev-model:8",
             suffix="stale",
         )
     )
@@ -98,4 +98,4 @@ async def test_cache_migration_reembed_updates_stale_entries(patch_mongo, fake_e
     assert summary["reembedded_entries"] == 1
     versions = {doc.get("embedding_version") for doc in coll.docs}
     assert service.active_embedding_version in versions
-    assert "legacy:8" not in versions
+    assert "prev-model:8" not in versions

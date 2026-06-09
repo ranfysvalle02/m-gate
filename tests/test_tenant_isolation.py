@@ -72,8 +72,9 @@ def test_tenant_db_name_disambiguates_sanitization_collisions():
     assert len({a, b, c}) == 3
 
 
-def test_tenant_id_from_db_name_supports_hashed_and_legacy_formats():
+def test_tenant_id_from_db_name_decodes_hashed_names_only():
     hashed_name = tenant_db_name("local-dev")
     # Decoding preserves the sanitized tenant token used in db names.
     assert tenant_id_from_db_name(hashed_name) == "local_dev"
-    assert tenant_id_from_db_name("tenant_local_dev") == "local_dev"
+    # Names without the sha256 suffix are not ours and decode to None.
+    assert tenant_id_from_db_name("tenant_local_dev") is None
