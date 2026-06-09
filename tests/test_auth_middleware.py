@@ -46,6 +46,55 @@ async def test_auth_middleware_rejects_missing_token_when_required(monkeypatch):
     get_settings.cache_clear()
 
 
+@pytest.mark.parametrize("path", ["/health/live", "/health/ready", "/health", "/metrics"])
+@pytest.mark.asyncio
+async def test_auth_middleware_exempts_probes_and_metrics(monkeypatch, path):
+    """Liveness/readiness probes and the metrics scrape must succeed without a token
+    even when auth is required, so k8s probes and Prometheus work in prod auth modes.
+    """
+    monkeypatch.setenv("AUTH_MODE", "jwks")
+    monkeypatch.setenv("JWT_ISSUER", "iss")
+    monkeypatch.setenv("JWT_AUDIENCE", "aud")
+    monkeypatch.setenv("JWKS_URI", "https://issuer/jwks")
+    get_settings.cache_clear()
+
+    reached = {"app": False}
+
+    async def ok_app(scope, receive, send):
+        reached["app"] = True
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    middleware = AuthMiddleware(ok_app)
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 5000),
+        "server": ("testserver", 80),
+    }
+
+    await middleware(scope, receive, send)
+    status = next(msg["status"] for msg in sent if msg["type"] == "http.response.start")
+    assert status == 200
+    assert reached["app"] is True
+
+    get_settings.cache_clear()
+
+
 @pytest.mark.asyncio
 async def test_auth_middleware_uses_verified_claim_scopes(monkeypatch):
     monkeypatch.setenv("AUTH_MODE", "hs256")

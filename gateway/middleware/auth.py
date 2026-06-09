@@ -170,7 +170,11 @@ class AuthMiddleware:
 
         if self.settings.auth_mode != "disabled" and not request.state.is_admin_principal:
             path = request.url.path
-            if self._is_public_path(path) or self._is_ui_path(path):
+            if (
+                self._is_observability_path(path)
+                or self._is_public_path(path)
+                or self._is_ui_path(path)
+            ):
                 await self.app(scope, request.receive, send)
                 return
 
@@ -222,6 +226,17 @@ class AuthMiddleware:
                 return claims, False
 
         return None, False
+
+    @staticmethod
+    def _is_observability_path(path: str) -> bool:
+        """Liveness/readiness probes and metrics must be reachable in every auth mode.
+
+        These endpoints expose only operational status and aggregate counters (no
+        tenant data), and infra-level probes/scrapers cannot present a bearer token.
+        They stay reachable while the rest of the surface requires authentication;
+        restrict them at the network layer (see NETWORK-SECURITY.md).
+        """
+        return path == "/metrics" or path == "/health" or path.startswith("/health/")
 
     def _is_public_path(self, path: str) -> bool:
         if not self.settings.admin_ui_enabled:

@@ -116,13 +116,14 @@ async def test_rate_limit_blocks_over_limit(patch_mongo, monkeypatch):
     assert "retry-after" in last.headers
 
 
+@pytest.mark.parametrize("path", ["/health/live", "/metrics"])
 @pytest.mark.asyncio
-async def test_rate_limit_skips_health(patch_mongo):
+async def test_rate_limit_skips_observability(patch_mongo, path):
     from gateway.middleware.ratelimit import RateLimitMiddleware
 
     mw = RateLimitMiddleware(_ok_app)
     sink = _Sink()
-    await mw(_scope(path="/health/live", method="GET"), sink.receive, sink.send)
+    await mw(_scope(path=path, method="GET"), sink.receive, sink.send)
     assert sink.status == 200
 
 

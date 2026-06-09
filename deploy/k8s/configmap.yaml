@@ -17,3 +17,7 @@ data:
   # Cloud-provider API keys belong in the Secret (EMBEDDING_API_KEY), not here.
   # The active embedding config can also be managed at runtime from the admin UI.
   ENABLE_METRICS: "true"
+  # Trust X-Forwarded-* only from your ingress/LB so client IP (rate limiting) and
+  # scheme (Secure cookies) are correct. Set to the proxy's pod/CIDR, never "*" if the
+  # gateway can be reached directly. Read natively by uvicorn (--proxy-headers is on).
+  FORWARDED_ALLOW_IPS: "10.0.0.0/8"

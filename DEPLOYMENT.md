@@ -290,6 +290,8 @@ When `ENVIRONMENT=production`, the gateway **fails to start** unless these hold
 Also recommended (not boot-enforced):
 
 - [ ] Set a stable, random `EMBEDDING_SECRET`.
+- [ ] Behind a TLS-terminating proxy, set `FORWARDED_ALLOW_IPS` to the proxy IP/CIDR so
+      per-IP rate limiting and `Secure` cookies work (the image already runs `--proxy-headers`).
 - [ ] Mount secrets as files (`*_FILE`) rather than plain env vars.
 - [ ] Use TLS + auth to Atlas (`ATLAS_TLS`, `ATLAS_USERNAME`/`ATLAS_PASSWORD`, or
       an `mongodb+srv://` URI with credentials).

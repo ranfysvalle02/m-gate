@@ -173,3 +173,49 @@ async def test_metrics_middleware_observes_status():
 
     await mw(scope, receive, send)
     assert recorded == {"method": "POST", "path": "/rpc", "status": 201}
+
+
+@pytest.mark.parametrize(
+    ("raw_path", "raw_method", "expected_path", "expected_method"),
+    [
+        ("/rpc", "POST", "/rpc", "POST"),
+        ("/health/live", "GET", "/health", "GET"),
+        ("/ui/login", "GET", "/ui", "GET"),
+        ("/admin/tenants", "POST", "/admin", "POST"),
+        ("/mcp/whatever", "POST", "/mcp", "POST"),
+        # Unbounded inputs must collapse so an attacker can't explode label cardinality.
+        ("/not-a-real-route-xyz", "GET", "other", "GET"),
+        ("/aaaa", "GET", "other", "GET"),
+        ("/rpc", "WEIRDVERB", "/rpc", "OTHER"),
+        ("/", "GET", "/", "GET"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_metrics_middleware_bounds_label_cardinality(
+    reset_settings, monkeypatch, raw_path, raw_method, expected_path, expected_method
+):
+    import gateway.middleware.metrics as mm
+    from gateway.middleware.metrics import MetricsMiddleware
+
+    recorded = {}
+
+    def fake_observe(*, method, path, status, duration_seconds):
+        recorded.update(method=method, path=path, status=status)
+
+    monkeypatch.setattr(mm, "observe_request", fake_observe)
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 404, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    mw = MetricsMiddleware(app)
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_m):
+        pass
+
+    await mw({"type": "http", "method": raw_method, "path": raw_path}, receive, send)
+    assert recorded["path"] == expected_path
+    assert recorded["method"] == expected_method

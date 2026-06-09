@@ -68,7 +68,10 @@ class RateLimitMiddleware:
             return await self.app(scope, receive, send)
 
         request = Request(scope, receive=receive)
-        if request.url.path.startswith("/health"):
+        # Observability endpoints are infra-driven (probes, scrapers) and must not
+        # consume a tenant's request budget.
+        path = request.url.path
+        if path.startswith("/health") or path == "/metrics":
             return await self.app(scope, request.receive, send)
 
         await self._maybe_refresh_clock_offset()

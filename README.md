@@ -139,7 +139,11 @@ fusion was computed:
 
 > Deploying for real? See **[DEPLOYMENT.md](DEPLOYMENT.md)** for Docker Compose,
 > single-container, Kubernetes, and Helm paths, plus an embeddings setup and
-> production hardening checklist.
+> production hardening checklist. For going live, also read
+> **[PRODUCTION.md](PRODUCTION.md)** (operations & hardening),
+> **[SECURITY.md](SECURITY.md)** (security model & vulnerability reporting), and
+> **[NETWORK-SECURITY.md](NETWORK-SECURITY.md)** (trust boundaries & what's handled
+> at the perimeter).
 
 This repository now includes a working end-to-end MCP Gateway with:
 

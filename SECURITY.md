@@ -1,0 +1,231 @@
+# Security Policy
+
+This document describes the security model of the MongoDB MCP Gateway, the
+controls it ships with, how to report a vulnerability, and — just as importantly —
+**what it deliberately does not do** because those concerns are owned by the layers
+around it.
+
+Companion documents:
+
+- [`NETWORK-SECURITY.md`](NETWORK-SECURITY.md) — trust boundaries, TLS, egress, and
+  the perimeter controls handled **outside** the product.
+- [`PRODUCTION.md`](PRODUCTION.md) — production deployment, hardening, and operations.
+- [`DEPLOYMENT.md`](DEPLOYMENT.md) — step-by-step deploy paths (Compose / container / k8s / Helm).
+
+---
+
+## Reporting a vulnerability
+
+**Please do not open a public GitHub issue for security problems.**
+
+Report privately through one of:
+
+- GitHub → **Security** tab → **Report a vulnerability** (private advisory), or
+- email **`security@your-org.example`** *(replace with your real security contact before publishing this repo)*.
+
+Include: affected version/commit, a description, reproduction steps or a proof of
+concept, and the impact you observed. We aim to acknowledge within **2 business days**
+and to provide a remediation timeline after triage. Please give us a reasonable
+disclosure window before publishing details. We credit reporters who request it.
+
+---
+
+## Supported versions
+
+This is a reference implementation; security fixes land on `main`. Pin to a commit or
+tagged image for production and track `main`/`CHANGELOG.md` for security-relevant
+changes. There is no long-term support branch.
+
+| Version | Supported |
+| --- | --- |
+| `main` (latest) | ✅ |
+| Older tags / commits | ❌ (upgrade to latest) |
+
+---
+
+## What the gateway is (trust model)
+
+The gateway is a **policy enforcement point and reverse proxy** between AI agents
+(upstream) and MCP tool servers (downstream), backed by MongoDB Atlas for its control
+plane, catalog, cache, and audit telemetry.
+
+```mermaid
+flowchart LR
+  A[Agent / Client] -->|Bearer JWT| GW[mdb-mcp-gateway]
+  ADM[Admin] -->|cookie session + CSRF| GW
+  GW -->|short-lived workload JWT| D[Downstream MCP servers]
+  GW -->|TLS + auth| DB[(MongoDB Atlas)]
+  GW -->|embed| E[Embedding provider]
+```
+
+Core trust assumptions:
+
+- **Upstream callers are untrusted** until a request passes authentication and
+  authorization. Identity comes from a verified bearer JWT (or an admin session).
+- **The gateway is trusted by downstream servers** as a workload identity — it
+  authenticates to each downstream with a short-lived token it mints itself
+  (see *Downstream credential brokering* below). End-user authorization is enforced
+  at the gateway **before** the downstream call.
+- **MongoDB Atlas is the source of truth** for catalog, sessions, rate-limit buckets,
+  audit telemetry, and the admin-managed embedding config. Its own access controls
+  (TLS, SCRAM/X.509, network access list) are part of the security boundary.
+- **The network perimeter is trusted to terminate TLS and filter traffic** (see
+  [`NETWORK-SECURITY.md`](NETWORK-SECURITY.md)). The gateway speaks plain HTTP on its
+  listen port and expects to sit behind an ingress/load balancer/service mesh.
+
+---
+
+## Built-in security controls
+
+All references point at the code that implements the control.
+
+### Authentication
+
+- **Three modes** via `AUTH_MODE` (`config/settings.py`): `disabled` (local dev only),
+  `hs256` (shared-secret JWT), `jwks` (asymmetric RS256 verified against a JWKS).
+- Bearer tokens are verified in `gateway/middleware/auth.py`. Issuer (`JWT_ISSUER`)
+  and audience (`JWT_AUDIENCE`) are enforced when configured.
+- **JWKS resolver hardening**: key cache with TTL; an unknown `kid` triggers a single
+  out-of-band refresh, **throttled** to at most once per `JWKS_MIN_REFRESH_SECONDS`, so
+  a flood of bogus `kid`s cannot amplify into a request storm against your IdP.
+- **Fail classification**: a *bad token* returns `401`; a *JWKS-unavailable* condition
+  returns `503` (retryable, server-side) so "users sent bad tokens" is never confused
+  with "our IdP is down". The client-facing body stays opaque; the precise reason is
+  emitted as a metric label + structured log only.
+- **Admin sessions** (`services/admin_session.py`): HS256-signed session token in an
+  **HttpOnly** cookie, `Secure` when served over HTTPS, `SameSite=Lax`, default 8h TTL.
+  Credential and CSRF comparisons use constant-time `hmac.compare_digest`.
+
+### Authorization
+
+- **Coarse RBAC** (`gateway/middleware/rbac.py`): `/rpc` requires the `admin` or
+  `tool:invoke` role; `/admin` and the admin `/ui` require an admin principal.
+- **Per-tool scope enforcement** (`services/authorization.py`): `tools/call` checks the
+  caller's `scopes`/`groups` against the tool's required scopes — not just at discovery
+  time. `admin` is an explicit override; tools with no required scope are open.
+- **CSRF protection** (`gateway/middleware/rbac.py`): cookie-authenticated state-changing
+  admin requests (`POST/PUT/PATCH/DELETE` under `/admin`) require a matching
+  double-submit CSRF token. Bearer-authenticated API calls are exempt (no ambient cookie).
+
+### Multi-tenant isolation
+
+- **Physical database-per-tenant** (`database/mongo.py`): each tenant's data lives in a
+  separate database named `tenant_<sanitized>_<sha256[:8]>`. The hash suffix makes the
+  mapping collision-safe (`tenant-a`, `tenant.a`, `tenant_a` cannot collide).
+- The semantic cache, tool catalog, and session context are all tenant-scoped; cache
+  lookups are gated by `tenant_id` so one tenant can never read another's cached results.
+- `AUTO_PROVISION_TENANTS=false` makes tenant creation an explicit operator step where
+  tenant ids come from untrusted callers.
+
+### Downstream credential brokering (JIT)
+
+- The gateway never hands a long-lived secret to a downstream server. For each
+  `(tenant, server)` it mints a **short-lived RS256 JWT** — a tenant-scoped *workload
+  identity* — and injects it as a transport credential (`Authorization: Bearer` for
+  HTTP/SSE, `MCP_DOWNSTREAM_TOKEN` env for stdio). See `services/credential_broker.py`.
+- Tokens are cached per `(tenant, server)` and rotated before expiry; the warm-client
+  pool reconnects with a fresh token on rotation. **Tokens are never logged.**
+- The **bundled dev signing key is rejected** when `ENVIRONMENT=production` — you must
+  configure your own `DOWNSTREAM_JWT_PRIVATE_KEY(_FILE)`.
+
+### Guardrails / data-loss prevention
+
+- `gateway/middleware/guardrails.py` runs on `/rpc` and the mounted `/mcp` surface:
+  - **Request size limit** (`REQUEST_MAX_BYTES`, default 256 KiB): rejected via the
+    declared `Content-Length` *before* buffering, with a post-read backstop → `413`.
+  - **Inbound prompt-injection / jailbreak screening** with a deterministic regex floor,
+    plus an optional semantic classifier (`GUARDRAIL_ML_ENABLED`) over a versioned
+    signature corpus.
+  - **Outbound PII redaction** of responses, with an optional Presidio NER fallback
+    (`GUARDRAIL_PII_NER_ENABLED`).
+  - **Resilience controls**: `GUARDRAIL_FAIL_MODE` (`open`/`closed`), timeout, and a
+    circuit breaker so a slow/broken classifier can't take down the request path.
+
+### Abuse / availability controls
+
+- **Distributed rate limiting** (`gateway/middleware/ratelimit.py`): per
+  `(tenant, client-ip)` sliding window, backed by MongoDB and synchronized to the DB
+  server clock so all replicas agree on window boundaries. Emits
+  `X-RateLimit-*`/`Retry-After`. *See the client-IP caveat in
+  [`NETWORK-SECURITY.md`](NETWORK-SECURITY.md).*
+- **Hard downstream deadline** (`DOWNSTREAM_TIMEOUT_MS`, default 2000ms) with
+  protocol-safe JSON-RPC error frames, so a hung tool can't pin a worker.
+
+### Secrets handling
+
+- **File-backed secrets**: every sensitive value has a `*_FILE` companion
+  (`MONGODB_URI_FILE`, `JWT_SECRET_FILE`, `ADMIN_PASSWORD_FILE`,
+  `ADMIN_SESSION_SECRET_FILE`, `EMBEDDING_API_KEY_FILE`, `EMBEDDING_SECRET_FILE`,
+  `DOWNSTREAM_JWT_PRIVATE_KEY_FILE`, `ATLAS_PASSWORD_FILE`), so you can mount them as
+  files instead of putting them in the environment (`config/settings.py`).
+- **Embedding API keys are encrypted at rest** (Fernet, keyed by `EMBEDDING_SECRET`) in
+  the control DB and always masked in API responses.
+- Secrets are never written to logs or telemetry; auth failures are logged by *category*
+  only, and downstream tokens are never logged.
+
+### Fail-closed production safety
+
+When `ENVIRONMENT=production`, the gateway **refuses to start** unless
+(`config/settings.py::_validate_prod_safety`):
+
+- `AUTH_MODE` is not `disabled`.
+- `hs256`: `JWT_SECRET` is ≥16 chars and not a known weak value.
+- `jwks`: `JWT_ISSUER` and `JWT_AUDIENCE` are set, plus `JWKS_URI` or `JWKS_LOCAL_PATH`.
+- `CORS_ALLOW_ORIGINS` is **not** `*`.
+- If the admin UI is enabled: `ADMIN_EMAIL` is set, `ADMIN_PASSWORD` ≥12 chars (not weak),
+  `ADMIN_SESSION_SECRET` ≥16 chars (not weak).
+- Downstream JWT brokering is not using the bundled dev signing key.
+
+### Container / runtime hardening
+
+- The image runs as a **non-root** user (uid 10001), multi-stage build, with a healthcheck
+  (`Dockerfile`).
+- The Kubernetes manifests (`deploy/k8s/`) set `runAsNonRoot`, `readOnlyRootFilesystem`,
+  drop **all** capabilities, `allowPrivilegeEscalation: false`, `seccompProfile:
+  RuntimeDefault`, resource limits, a PodDisruptionBudget, and a default-deny
+  NetworkPolicy.
+
+### Observability for security
+
+- Structured JSON logs with request IDs (`LOG_JSON`), Prometheus metrics (`/metrics`),
+  and optional OpenTelemetry tracing (`ENABLE_TRACING`).
+- Auth failures, guardrail events, rate-limit decisions, and downstream errors are all
+  surfaced as metrics so you can alert on credential-stuffing, injection attempts, and
+  abuse.
+
+---
+
+## Out of scope (owned by other layers)
+
+The gateway intentionally **does not** implement these — they are handled at the
+infrastructure/perimeter layer and are documented in
+[`NETWORK-SECURITY.md`](NETWORK-SECURITY.md):
+
+- **TLS termination / HTTPS** for inbound traffic — terminate at the ingress, load
+  balancer, or service mesh.
+- **IP allowlisting / denylisting, WAF, DDoS protection, L3/L4 firewalling, geo-blocking**
+  — enforce with cloud security groups, the ingress controller, a WAF, or a mesh.
+- **The identity provider itself** — the gateway *verifies* JWTs but does not issue
+  end-user credentials; bring your own IdP for `hs256`/`jwks`.
+- **Secret storage backend** — the gateway *consumes* secrets (env or file mounts); use
+  a real secret manager (Kubernetes Secrets + KMS, Vault, cloud secret managers).
+- **Database hardening** — Atlas network access lists, encryption at rest, backups, and
+  user/role management are configured in Atlas.
+- **Downstream MCP server security** — each downstream is responsible for verifying the
+  workload JWT the gateway presents and enforcing its own controls.
+
+---
+
+## Hardening checklist (summary)
+
+See [`PRODUCTION.md`](PRODUCTION.md) for the full, annotated checklist. The essentials:
+
+- [ ] `ENVIRONMENT=production` (turns on fail-closed validation).
+- [ ] A real `AUTH_MODE` (`jwks` recommended) with issuer + audience.
+- [ ] Explicit `CORS_ALLOW_ORIGINS` (never `*`).
+- [ ] Strong admin credentials and a stable `ADMIN_SESSION_SECRET` (or disable the UI).
+- [ ] A dedicated `DOWNSTREAM_JWT_PRIVATE_KEY(_FILE)` (not the bundled dev key).
+- [ ] A stable `EMBEDDING_SECRET` (key-encryption secret — see the caveat in PRODUCTION.md).
+- [ ] Secrets mounted as files / from a secret manager, never baked into images or ConfigMaps.
+- [ ] TLS terminated in front of the gateway; egress restricted (NetworkPolicy).
+- [ ] Atlas reached over TLS with auth and a locked-down network access list.

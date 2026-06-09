@@ -58,3 +58,7 @@ env:
   OLLAMA_MODEL: nomic-embed-text
   AZURE_OPENAI_API_VERSION: "2023-05-15"
   ENABLE_METRICS: "true"
+  # Trust X-Forwarded-* only from your ingress/LB (uvicorn reads this natively;
+  # --proxy-headers is enabled in the image). Set to the proxy CIDR, never "*" if the
+  # gateway is directly reachable.
+  FORWARDED_ALLOW_IPS: "10.0.0.0/8"

@@ -101,6 +101,15 @@
 - Added cache policy metadata (`cacheable`, TTL, invalidations) with write-through invalidation.
 
 ### Platform hardening
+- Fixed health/metrics being unreachable under `hs256`/`jwks` auth: `AuthMiddleware` now
+  exempts `/health`, `/health/live`, `/health/ready`, and `/metrics`
+  (`_is_observability_path`) so k8s `httpGet` probes and Prometheus scrapes work in every
+  auth mode without a token. These expose only status + aggregate counters (no tenant
+  data); the rate limiter also skips them so infra traffic never spends a tenant's budget.
+- Enabled `--proxy-headers` in the container and surfaced `FORWARDED_ALLOW_IPS`
+  (`.env.example`, k8s ConfigMap, Helm values) so per-IP rate limiting (`request.client.host`)
+  and `Secure` admin cookies (`X-Forwarded-Proto`) behave correctly behind a TLS-terminating
+  proxy — while only trusting forwarded headers from the configured proxy range.
 - Replaced rate limiter with atomic window bucket counters and limit headers.
 - Added request IDs, structured JSON logging, Prometheus `/metrics`, and readiness/liveness probes.
 - Added deployment scaffolding (`deploy/k8s`, Helm chart) and CI (`ruff`, `mypy`, `pytest`).
@@ -116,6 +125,10 @@
   hops (`services/tracing.py`), with attributes for tenant, tool, authorization
   outcome, cache result, and retry count. Degrades to a no-op when the OTel SDK
   is absent or `ENABLE_TRACING` is off, so it never affects the request path.
+- Bounded Prometheus label cardinality in the metrics middleware: HTTP method and
+  request path are normalized to a small fixed allow-set (unknown paths collapse to
+  `other`, unknown methods to `OTHER`), closing a memory-exhaustion vector where a
+  scanner hitting random URLs would mint an unbounded number of time series.
 
 ### Testing and quality gates
 - Fixed a broken CI gate: added package `__init__.py` files (mypy no longer
