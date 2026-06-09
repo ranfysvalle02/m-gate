@@ -5,6 +5,10 @@ from typing import Literal
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Bundled, repo-published dev signing key path. Used as the offline default but
+# rejected in production by the prod-safety validator below.
+_DEV_DOWNSTREAM_JWT_PRIVATE_KEY_FILE = "config/dev-private-key.pem"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -73,6 +77,8 @@ class Settings(BaseSettings):
     admin_session_ttl_seconds: int = 28800
     default_tenant_id: str = "local-dev"
     tenant_db_prefix: str = "tenant_"
+    gateway_instance_id: str | None = None
+    watcher_resume_ttl_seconds: int = 86400
     platform_admin_role: str = "platform-admin"
     # When a request arrives for a tenant that has never been provisioned, create
     # its database + indexes on first use. Disable in environments where tenant
@@ -109,6 +115,16 @@ class Settings(BaseSettings):
     embedding_cache_max_entries: int = 512
     # Hard deadline for a single downstream JSON-RPC call (Section 4 of the blog).
     downstream_timeout_ms: int = 2000
+    downstream_jwt_enabled: bool = True
+    downstream_jwt_algorithm: str = "RS256"
+    downstream_jwt_private_key: str = ""
+    downstream_jwt_private_key_file: str | None = _DEV_DOWNSTREAM_JWT_PRIVATE_KEY_FILE
+    downstream_jwt_kid: str = "dev-local-key-1"
+    downstream_jwt_issuer: str = "mdb-mcp-gateway"
+    downstream_token_ttl_seconds: int = 120
+    downstream_token_refresh_skew_seconds: int = 15
+    downstream_auth_header: str = "Authorization"
+    downstream_token_env_var: str = "MCP_DOWNSTREAM_TOKEN"
 
     enable_metrics: bool = True
     enable_tracing: bool = False
@@ -143,6 +159,7 @@ class Settings(BaseSettings):
             ("admin_session_secret_file", "admin_session_secret"),
             ("embedding_api_key_file", "embedding_api_key"),
             ("embedding_secret_file", "embedding_secret"),
+            ("downstream_jwt_private_key_file", "downstream_jwt_private_key"),
         ]
         for file_field, value_field in file_backed_fields:
             file_path = getattr(self, file_field)
@@ -198,6 +215,16 @@ class Settings(BaseSettings):
             session_secret = self.admin_session_secret or ""
             if len(session_secret) < 16 or session_secret in weak:
                 raise ValueError("admin_session_secret is too weak for production.")
+        # The bundled dev keypair is published in this repo; signing downstream
+        # workload tokens with it in production would let anyone forge them.
+        if (
+            self.downstream_jwt_enabled
+            and self.downstream_jwt_private_key_file == _DEV_DOWNSTREAM_JWT_PRIVATE_KEY_FILE
+        ):
+            raise ValueError(
+                "Configure a production DOWNSTREAM_JWT_PRIVATE_KEY(_FILE); the bundled "
+                "dev signing key must not be used in production."
+            )
         return self
 
 

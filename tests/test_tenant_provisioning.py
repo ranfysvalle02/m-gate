@@ -83,3 +83,32 @@ async def test_ensure_tenant_ready_is_cached_after_first_provision(patch_mongo, 
     await ensure_tenant_ready("repeat", settings=settings)
 
     assert calls["provision"] == 1
+
+
+@pytest.mark.asyncio
+async def test_watcher_state_index_is_recreated_when_ttl_changes():
+    class _Cursor:
+        async def to_list(self, length: int):
+            return [{"name": "updated_at_1", "expireAfterSeconds": 300}]
+
+    class _Collection:
+        def __init__(self) -> None:
+            self.dropped: list[str] = []
+            self.created: list[tuple[str, int]] = []
+
+        def list_indexes(self):
+            return _Cursor()
+
+        async def drop_index(self, name: str):
+            self.dropped.append(name)
+
+        async def create_index(self, key: str, **kwargs):
+            self.created.append((key, int(kwargs["expireAfterSeconds"])))
+
+    collection = _Collection()
+    control_db = {"watcher_state": collection}
+
+    await tp._ensure_watcher_state_ttl_index(control_db=control_db, ttl_seconds=86400)  # noqa: SLF001
+
+    assert collection.dropped == ["updated_at_1"]
+    assert collection.created == [("updated_at", 86400)]

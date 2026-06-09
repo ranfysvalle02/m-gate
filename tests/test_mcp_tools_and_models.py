@@ -101,7 +101,7 @@ async def test_discover_tools_parses_tools_list(patch_mongo, fake_embeddings):
         async def list_tools(self):
             return [{"name": "get_forecast", "description": "forecast", "inputSchema": {}}]
 
-    reg._build_client = lambda server: _Client()  # type: ignore[method-assign]
+    reg._build_client = lambda server, **_kwargs: _Client()  # type: ignore[method-assign]
     tools = await reg.discover_tools("weather")
     assert tools == [{"name": "get_forecast", "description": "forecast", "input_schema": {}}]
 

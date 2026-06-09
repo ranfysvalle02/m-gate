@@ -59,8 +59,8 @@ def rpc_module(patch_mongo, fake_embeddings, monkeypatch):
 class _FakeRegistry:
     last_call = None
 
-    async def call_tool(self, *, server_name, tool_name, arguments, tenant_id=None):
-        _FakeRegistry.last_call = (server_name, tool_name, arguments, tenant_id)
+    async def call_tool(self, *, server_name, tool_name, arguments, tenant_id=None, caller=None):
+        _FakeRegistry.last_call = (server_name, tool_name, arguments, tenant_id, caller)
         return {"echo": arguments, "server": server_name, "tool": tool_name}
 
 
@@ -124,7 +124,8 @@ async def test_tools_call_allowed_executes_downstream(rpc_module, patch_mongo):
     )
     assert resp.error is None
     assert resp.result["echo"] == {"id": 7}
-    assert _FakeRegistry.last_call == ("orders", "find_order", {"id": 7}, "local-dev")
+    assert _FakeRegistry.last_call[0:4] == ("orders", "find_order", {"id": 7}, "local-dev")
+    assert _FakeRegistry.last_call[4] is not None
 
 
 @pytest.mark.asyncio
@@ -174,7 +175,9 @@ async def test_tools_call_downstream_timeout_returns_upstream_timeout(rpc_module
     )
 
     class _TimingOutRegistry:
-        async def call_tool(self, *, server_name, tool_name, arguments, tenant_id=None):
+        async def call_tool(
+            self, *, server_name, tool_name, arguments, tenant_id=None, caller=None
+        ):
             raise DownstreamTimeout("downstream slow")
 
     rpc_module.get_proxy_registry = lambda: _TimingOutRegistry()

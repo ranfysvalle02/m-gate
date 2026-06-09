@@ -38,6 +38,7 @@ def test_prod_accepts_strong_hs256_secret():
         jwt_secret="a-sufficiently-long-secret-value",
         cors_allow_origins="https://app.example.com",
         admin_ui_enabled=False,
+        downstream_jwt_enabled=False,
     )
     assert s.auth_mode == "hs256"
 
@@ -72,6 +73,7 @@ def test_prod_jwks_valid_config_passes():
         jwks_local_path="/tmp/jwks.json",
         cors_allow_origins="https://app.example.com",
         admin_ui_enabled=False,
+        downstream_jwt_enabled=False,
     )
     assert s.auth_mode == "jwks"
 
@@ -94,6 +96,7 @@ def test_prod_accepts_explicit_cors_origins():
         jwt_secret="a-sufficiently-long-secret-value",
         cors_allow_origins="https://app.example.com,https://admin.example.com",
         admin_ui_enabled=False,
+        downstream_jwt_enabled=False,
     )
     assert s.cors_allow_origins == "https://app.example.com,https://admin.example.com"
 
@@ -154,5 +157,32 @@ def test_prod_admin_ui_with_strong_credentials_passes():
         admin_email="admin@example.com",
         admin_password="a-long-and-strong-password",
         admin_session_secret="another-long-secret-value",
+        downstream_jwt_enabled=False,
     )
     assert s.admin_email == "admin@example.com"
+
+
+def test_prod_rejects_bundled_dev_downstream_key():
+    with pytest.raises(ValueError, match="dev signing key must not be used in production"):
+        Settings(
+            environment="production",
+            auth_mode="hs256",
+            jwt_secret="a-sufficiently-long-secret-value",
+            cors_allow_origins="https://app.example.com",
+            admin_ui_enabled=False,
+            downstream_jwt_enabled=True,
+        )
+
+
+def test_prod_accepts_explicit_downstream_key():
+    s = Settings(
+        environment="production",
+        auth_mode="hs256",
+        jwt_secret="a-sufficiently-long-secret-value",
+        cors_allow_origins="https://app.example.com",
+        admin_ui_enabled=False,
+        downstream_jwt_enabled=True,
+        downstream_jwt_private_key_file=None,
+        downstream_jwt_private_key="-----BEGIN PRIVATE KEY-----prod-----END PRIVATE KEY-----",
+    )
+    assert s.downstream_jwt_enabled is True

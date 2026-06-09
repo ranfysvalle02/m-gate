@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 from datetime import UTC, datetime
 from typing import Any
 
@@ -21,7 +22,6 @@ logger = logging.getLogger(__name__)
 _watcher_task: asyncio.Task | None = None
 _catalog_version: int = 0
 _RESUME_STATE_COLLECTION = "watcher_state"
-_RESUME_DOC_ID = "routing_registry"
 
 
 def _bump_catalog_version() -> None:
@@ -98,23 +98,40 @@ async def _apply_change(change: dict[str, Any], registry: Any) -> None:
             _bump_catalog_version()
 
 
-async def _load_resume_token(state_collection: Any) -> Any | None:
-    state = await state_collection.find_one({"_id": _RESUME_DOC_ID})
+def _watcher_instance_id() -> str:
+    settings = get_settings()
+    return (settings.gateway_instance_id or socket.gethostname()).strip() or "gateway-instance"
+
+
+def _resume_doc_id(instance_id: str | None = None) -> str:
+    return f"routing_registry::{instance_id or _watcher_instance_id()}"
+
+
+async def _load_resume_token(state_collection: Any, *, resume_doc_id: str) -> Any | None:
+    state = await state_collection.find_one({"_id": resume_doc_id})
     if state:
         return state.get("resume_token")
     return None
 
 
-async def _save_resume_token(state_collection: Any, resume_token: Any) -> None:
+async def _save_resume_token(
+    state_collection: Any, resume_token: Any, *, resume_doc_id: str, instance_id: str
+) -> None:
     await state_collection.update_one(
-        {"_id": _RESUME_DOC_ID},
-        {"$set": {"resume_token": resume_token, "updated_at": datetime.now(UTC)}},
+        {"_id": resume_doc_id},
+        {
+            "$set": {
+                "resume_token": resume_token,
+                "instance_id": instance_id,
+                "updated_at": datetime.now(UTC),
+            }
+        },
         upsert=True,
     )
 
 
-async def _clear_resume_token(state_collection: Any) -> None:
-    await state_collection.delete_many({"_id": _RESUME_DOC_ID})
+async def _clear_resume_token(state_collection: Any, *, resume_doc_id: str) -> None:
+    await state_collection.delete_many({"_id": resume_doc_id})
 
 
 def _is_non_resumable_error(exc: OperationFailure) -> bool:
@@ -131,7 +148,9 @@ async def _watch_loop() -> None:
     state_collection = control_db[_RESUME_STATE_COLLECTION]
     client = get_client()
     registry = get_proxy_registry()
-    resume_token = await _load_resume_token(state_collection)
+    instance_id = _watcher_instance_id()
+    resume_doc_id = _resume_doc_id(instance_id)
+    resume_token = await _load_resume_token(state_collection, resume_doc_id=resume_doc_id)
     if resume_token is None:
         await _initial_sync_all_tenants(registry)
 
@@ -158,14 +177,19 @@ async def _watch_loop() -> None:
                     # event failed so a poisoned event does not replay forever.
                     resume_token = stream.resume_token or change.get("_id")
                     if resume_token is not None:
-                        await _save_resume_token(state_collection, resume_token)
+                        await _save_resume_token(
+                            state_collection,
+                            resume_token,
+                            resume_doc_id=resume_doc_id,
+                            instance_id=instance_id,
+                        )
         except asyncio.CancelledError:
             raise
         except OperationFailure as exc:
             if _is_non_resumable_error(exc):
                 logger.warning("Resume token unusable; clearing and full-resync: %s", exc)
                 resume_token = None
-                await _clear_resume_token(state_collection)
+                await _clear_resume_token(state_collection, resume_doc_id=resume_doc_id)
                 await _initial_sync_all_tenants(registry)
                 continue
             logger.warning("Registry watcher failed, retrying in 3s: %s", exc)

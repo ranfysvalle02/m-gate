@@ -150,6 +150,8 @@ This repository now includes a working end-to-end MCP Gateway with:
 - Hybrid tool search (`$rankFusion`: vector + full-text) over `tool_catalog`
 - **GA-safe hybrid fallback**: application-side RRF keeps hybrid retrieval working when `$rankFusion` preview features are unavailable
 - **Resiliency**: a hard downstream deadline (`DOWNSTREAM_TIMEOUT_MS`, default 2000ms) with protocol-safe JSON-RPC error frames
+- **Active-active-safe registry watching**: each gateway replica persists its own change-stream resume token (`routing_registry::<instance_id>`) so pods do not overwrite each other's stream position
+- **JIT downstream credentials**: every `tools/call` mints a short-lived RS256 bearer JWT (tenant-scoped workload identity) and rotates pooled downstream clients when a token nears expiry
 - **Embedding resiliency**: retries + circuit breaker + lexical fallback when embedding providers are unavailable
 - **Pluggable, admin-configurable embeddings**: Ollama, OpenAI, Azure OpenAI, Voyage AI, and Google Gemini — switchable at runtime from the admin panel, with vector width auto-detected per provider (see [Embeddings](#embeddings))
 - **Layered guardrails**: regex floor + optional semantic injection classifier over a versioned `guardrail_signatures` vector corpus, plus optional Presidio NER redaction
@@ -494,6 +496,42 @@ estimates the rate over a rolling window by weighting the previous window by how
 of it still overlaps "now". This removes the fixed-window failure mode where a caller
 spends a full quota at the end of one window and again at the start of the next (a 2x
 boundary burst). Tune it with `RATE_LIMIT_WINDOW_SECONDS` and `RATE_LIMIT_MAX_REQUESTS`.
+
+### Active-active watcher resume state
+
+`services/registry_watcher.py` stores resume tokens per gateway instance in
+`control_db.watcher_state` using `_id = routing_registry::<instance_id>` where
+`instance_id` comes from `GATEWAY_INSTANCE_ID` (or host name fallback). This keeps
+replicas from clobbering each other's stream position. Resume-token docs are TTL'd by
+`WATCHER_RESUME_TTL_SECONDS`, so stale pod IDs self-clean.
+
+### JIT downstream JWT brokering
+
+The gateway never hands a long-lived secret to a downstream MCP server. Instead it
+mints a short-lived RS256 JWT — a **tenant-scoped workload identity** asserting "the
+gateway, acting for this tenant, is calling this server" (claims: `iss`, `aud`, `sub =
+tenant:<id>:gateway`, `tenant_id`, `iat`, `exp`, `jti`) — and injects it into
+downstream transports:
+
+- HTTP/SSE: `Authorization: Bearer <token>`
+- stdio: `MCP_DOWNSTREAM_TOKEN=<token>` in child env
+
+The token is deliberately caller-independent: a single warm client is pooled per
+`(tenant, server)` and shared across every caller, so embedding volatile per-caller
+claims would be wrong for all but the first caller. End-user authorization is already
+enforced upstream by `AuthorizationService` before the call is made, and the caller is
+recorded on the `downstream.jsonrpc` span (`mcp.actor`) for audit/trace.
+
+The broker (`services/credential_broker.py`) caches tokens per `(tenant, server)` until
+they enter the refresh-skew window; the proxy pool checks the same skew on the warm-hit
+path and evicts/reconnects with a freshly minted token only when a (re)connect is
+actually needed, so steady-state calls never contend on the broker. Tokens are never
+logged. Configure via `DOWNSTREAM_JWT_*` and `DOWNSTREAM_TOKEN_*` settings; the bundled
+dev key is rejected in `ENVIRONMENT=production` so it can never sign real traffic.
+
+For the bundled demo servers (`servers/weather`, `servers/orders`), enable bearer
+verification with `DOWNSTREAM_JWT_VERIFY=true` (and optional `DOWNSTREAM_JWKS_PATH`,
+`DOWNSTREAM_JWT_ISSUER`, `DOWNSTREAM_JWT_AUDIENCE`).
 
 ### From the blog post to this repo
 

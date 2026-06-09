@@ -18,6 +18,7 @@ from models.jsonrpc import (
 )
 from services.authorization import AuthorizationService, get_authorization_service
 from services.cache_manager import SemanticCacheManager
+from services.credential_broker import CallerIdentity
 from services.hybrid_search import HybridSearchService
 from services.metrics import observe_cache_event, observe_downstream_error
 from services.proxy_registry import DownstreamTimeout, get_proxy_registry
@@ -358,6 +359,11 @@ async def _try_cache_lookup(
 
 
 async def _execute_downstream(context: RpcContext, call_params: ToolCallParams) -> dict[str, Any]:
+    caller = CallerIdentity(
+        user_id=context.user_id,
+        scopes=[scope for scope in getattr(context.http_request.state, "scopes", []) if scope],
+        roles=[role for role in getattr(context.http_request.state, "roles", []) if role],
+    )
     with start_span(
         "downstream.tools/call",
         {"mcp.server": call_params.server, "mcp.tool": call_params.name},
@@ -367,6 +373,7 @@ async def _execute_downstream(context: RpcContext, call_params: ToolCallParams) 
             tool_name=call_params.name,
             arguments=call_params.arguments,
             tenant_id=context.tenant_id,
+            caller=caller,
         )
 
 

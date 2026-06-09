@@ -40,6 +40,10 @@ class FakeChangeStream:
 async def test_watch_loop_isolates_bad_event_and_persists_resume_token(patch_mongo, monkeypatch):
     import services.registry_watcher as rw
 
+    settings = rw.get_settings()
+    object.__setattr__(settings, "gateway_instance_id", "watcher-a")
+    resume_doc_id = rw._resume_doc_id("watcher-a")
+
     mounted: list[str] = []
 
     class _Reg:
@@ -83,21 +87,26 @@ async def test_watch_loop_isolates_bad_event_and_persists_resume_token(patch_mon
         await rw._watch_loop()
 
     assert mounted == ["good"]
-    state_doc = await control_db["watcher_state"].find_one({"_id": "routing_registry"})
+    state_doc = await control_db["watcher_state"].find_one({"_id": resume_doc_id})
     assert state_doc is not None
     assert state_doc["resume_token"] == {"_data": "token-2"}
+    assert state_doc["instance_id"] == "watcher-a"
 
 
 @pytest.mark.asyncio
 async def test_watch_loop_uses_saved_token_and_skips_initial_sync(patch_mongo, monkeypatch):
     import services.registry_watcher as rw
 
+    settings = rw.get_settings()
+    object.__setattr__(settings, "gateway_instance_id", "watcher-a")
+    resume_doc_id = rw._resume_doc_id("watcher-a")
+
     resume_token = {"_data": "resume-me"}
     control_db = get_control_database()
     tenant_id = "local-dev"
     await control_db["tenants"].insert_one({"tenant_id": tenant_id})
     await control_db["watcher_state"].insert_one(
-        {"_id": "routing_registry", "resume_token": resume_token}
+        {"_id": resume_doc_id, "resume_token": resume_token, "instance_id": "watcher-a"}
     )
     await get_tenant_database(tenant_id)["routing_registry"].insert_one(
         {"server": "would-be-initial-sync", "endpoint": "http://x/mcp", "enabled": True}
@@ -133,12 +142,16 @@ async def test_watch_loop_uses_saved_token_and_skips_initial_sync(patch_mongo, m
 async def test_non_resumable_error_clears_token_and_resyncs(patch_mongo, monkeypatch):
     import services.registry_watcher as rw
 
+    settings = rw.get_settings()
+    object.__setattr__(settings, "gateway_instance_id", "watcher-a")
+    resume_doc_id = rw._resume_doc_id("watcher-a")
+
     old_token = {"_data": "old-token"}
     control_db = get_control_database()
     tenant_id = "local-dev"
     await control_db["tenants"].insert_one({"tenant_id": tenant_id})
     await control_db["watcher_state"].insert_one(
-        {"_id": "routing_registry", "resume_token": old_token}
+        {"_id": resume_doc_id, "resume_token": old_token, "instance_id": "watcher-a"}
     )
     await get_tenant_database(tenant_id)["routing_registry"].insert_one(
         {"server": "resync", "endpoint": "http://resync/mcp", "enabled": True}
@@ -175,4 +188,34 @@ async def test_non_resumable_error_clears_token_and_resyncs(patch_mongo, monkeyp
     assert seen_watch_kwargs[0].get("resume_after") == old_token
     assert "resume_after" not in seen_watch_kwargs[1]
     assert "resync" in mounted
-    assert await control_db["watcher_state"].find_one({"_id": "routing_registry"}) is None
+    assert await control_db["watcher_state"].find_one({"_id": resume_doc_id}) is None
+
+
+@pytest.mark.asyncio
+async def test_resume_tokens_are_isolated_per_instance(patch_mongo):
+    import services.registry_watcher as rw
+
+    control_db = get_control_database()
+    state_collection = control_db["watcher_state"]
+    await rw._save_resume_token(
+        state_collection,
+        {"_data": "token-a"},
+        resume_doc_id=rw._resume_doc_id("watcher-a"),
+        instance_id="watcher-a",
+    )
+    await rw._save_resume_token(
+        state_collection,
+        {"_data": "token-b"},
+        resume_doc_id=rw._resume_doc_id("watcher-b"),
+        instance_id="watcher-b",
+    )
+
+    token_a = await rw._load_resume_token(
+        state_collection, resume_doc_id=rw._resume_doc_id("watcher-a")
+    )
+    token_b = await rw._load_resume_token(
+        state_collection, resume_doc_id=rw._resume_doc_id("watcher-b")
+    )
+
+    assert token_a == {"_data": "token-a"}
+    assert token_b == {"_data": "token-b"}

@@ -105,9 +105,13 @@ async def ensure_tenant_ready(
 
 
 async def ensure_control_plane_indexes() -> None:
+    settings = get_settings()
     control_db = get_control_database()
     await control_db["tenants"].create_index("tenant_id", unique=True)
-    await control_db["watcher_state"].create_index("updated_at")
+    await _ensure_watcher_state_ttl_index(
+        control_db=control_db,
+        ttl_seconds=settings.watcher_resume_ttl_seconds,
+    )
     await control_db["session_context"].create_index("expires_at", expireAfterSeconds=0)
     await control_db["session_context"].create_index([("tenant_id", 1), ("user_id", 1)])
     await control_db["rate_limit_buckets"].create_index("expires_at", expireAfterSeconds=0)
@@ -127,6 +131,32 @@ async def ensure_control_plane_indexes() -> None:
         definition=guardrail_index_spec["definition"],
         index_type="vectorSearch",
     )
+
+
+async def _ensure_watcher_state_ttl_index(*, control_db, ttl_seconds: int) -> None:
+    collection = control_db["watcher_state"]
+    desired_ttl = max(1, int(ttl_seconds))
+    target_name = "updated_at_1"
+    list_indexes = getattr(collection, "list_indexes", None)
+    if callable(list_indexes):
+        try:
+            index_cursor = list_indexes()
+            if asyncio.iscoroutine(index_cursor):
+                index_cursor = await index_cursor
+            indexes = await index_cursor.to_list(length=100)
+        except Exception:
+            indexes = []
+        existing = next(
+            (idx for idx in indexes if isinstance(idx, dict) and idx.get("name") == target_name),
+            None,
+        )
+        if existing is not None and int(existing.get("expireAfterSeconds") or -1) != desired_ttl:
+            drop_index = getattr(collection, "drop_index", None)
+            if callable(drop_index):
+                dropped = drop_index(target_name)
+                if asyncio.iscoroutine(dropped):
+                    await dropped
+    await collection.create_index("updated_at", expireAfterSeconds=desired_ttl)
 
 
 async def provision_tenant(

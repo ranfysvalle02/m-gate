@@ -8,11 +8,12 @@ from typing import Any
 
 import pytest
 
+from config.settings import get_settings
 from database.mongo import get_control_database, tenant_db_name
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
-_WATCHER_STATE_ID = "routing_registry"
+_WATCHER_INSTANCE_ID = "itest-watcher"
 _TEST_SERVER_PREFIX = "itest_watcher_"
 
 
@@ -79,9 +80,12 @@ async def watcher_registry(live_db, live_embeddings, monkeypatch):
     import services.registry_watcher as rw
     from services.proxy_registry import InMemoryFastMCPRegistry
 
+    settings = get_settings()
+    object.__setattr__(settings, "gateway_instance_id", _WATCHER_INSTANCE_ID)
+    watcher_state_id = rw._resume_doc_id(_WATCHER_INSTANCE_ID)
     control_db = get_control_database()
     await rw.stop_registry_watcher()
-    await control_db["watcher_state"].delete_many({"_id": _WATCHER_STATE_ID})
+    await control_db["watcher_state"].delete_many({"_id": watcher_state_id})
     await control_db["tenants"].update_one(
         {"tenant_id": "local-dev"},
         {"$set": {"tenant_id": "local-dev", "db_name": tenant_db_name("local-dev")}},
@@ -102,7 +106,7 @@ async def watcher_registry(live_db, live_embeddings, monkeypatch):
         yield registry
     finally:
         await rw.stop_registry_watcher()
-        await control_db["watcher_state"].delete_many({"_id": _WATCHER_STATE_ID})
+        await control_db["watcher_state"].delete_many({"_id": watcher_state_id})
         await live_db["routing_registry"].delete_many(
             {"_id": {"$regex": f"^{_TEST_SERVER_PREFIX}"}}
         )
@@ -176,10 +180,11 @@ async def test_watcher_resumes_missed_events_after_restart(
 ):
     import services.registry_watcher as rw
 
+    watcher_state_id = rw._resume_doc_id(_WATCHER_INSTANCE_ID)
     first_doc = _server_doc(temp_server, enabled=True)
     await _mount_via_watcher(live_db, watcher_registry, first_doc)
     await _until(
-        lambda: get_control_database()["watcher_state"].find_one({"_id": _WATCHER_STATE_ID}),
+        lambda: get_control_database()["watcher_state"].find_one({"_id": watcher_state_id}),
         message="resume token never persisted before restart",
     )
 

@@ -1,6 +1,9 @@
+from datetime import UTC, datetime, timedelta
+
 import httpx
 import pytest
 
+from services.credential_broker import MintedCredential
 from services.proxy_registry import (
     DownstreamError,
     DownstreamProtocolError,
@@ -36,6 +39,15 @@ class _ResultObj:
             setattr(self, key, value)
 
 
+def _credential(token_id: str) -> MintedCredential:
+    return MintedCredential(
+        headers={"Authorization": f"Bearer token-{token_id}"},
+        env={"MCP_DOWNSTREAM_TOKEN": f"token-{token_id}"},
+        expires_at=datetime.now(UTC) + timedelta(minutes=1),
+        token_id=token_id,
+    )
+
+
 @pytest.mark.asyncio
 async def test_build_client_supports_all_transports():
     registry = InMemoryFastMCPRegistry()
@@ -68,6 +80,46 @@ async def test_build_client_supports_all_transports():
     assert streamable.transport.__class__.__name__ == "StreamableHttpTransport"
     assert sse.transport.__class__.__name__ == "SSETransport"
     assert stdio.transport.__class__.__name__ == "StdioTransport"
+
+
+@pytest.mark.asyncio
+async def test_build_client_injects_bearer_headers_and_env():
+    registry = InMemoryFastMCPRegistry()
+    minted = _credential("abc")
+    streamable = registry._build_client(  # noqa: SLF001 - transport unit test
+        DownstreamServer(
+            tenant_id="t1",
+            server="weather",
+            transport="streamable_http",
+            endpoint="http://weather:8101/mcp",
+        ),
+        credential=minted,
+    )
+    sse = registry._build_client(  # noqa: SLF001 - transport unit test
+        DownstreamServer(
+            tenant_id="t1",
+            server="weather",
+            transport="sse",
+            endpoint="http://weather:8101/sse",
+        ),
+        credential=minted,
+    )
+    stdio = registry._build_client(  # noqa: SLF001 - transport unit test
+        DownstreamServer(
+            tenant_id="t1",
+            server="weather",
+            transport="stdio",
+            command="python",
+            args=["-m", "server"],
+            env={"EXISTING": "1"},
+        ),
+        credential=minted,
+    )
+
+    assert streamable.transport.headers["Authorization"] == "Bearer token-abc"
+    assert sse.transport.headers["Authorization"] == "Bearer token-abc"
+    assert stdio.transport.env["EXISTING"] == "1"
+    assert stdio.transport.env["MCP_DOWNSTREAM_TOKEN"] == "token-abc"
 
 
 @pytest.mark.asyncio
@@ -125,6 +177,19 @@ async def test_call_tool_surfaces_timeout_after_retries():
 
 
 @pytest.mark.asyncio
+async def test_call_tool_surfaces_broker_mint_failures():
+    class _FailingBroker:
+        async def mint(self, **_kwargs):
+            raise ValueError("signing key unavailable")
+
+    registry = InMemoryFastMCPRegistry(credential_broker=_FailingBroker())
+    registry._servers[("local-dev", "weather")] = _weather_server()
+
+    with pytest.raises(DownstreamError, match="Failed to mint downstream credential"):
+        await registry.call_tool("weather", "get_current_weather", {})
+
+
+@pytest.mark.asyncio
 async def test_call_via_client_maps_timeout_to_downstream_timeout(monkeypatch):
     registry = InMemoryFastMCPRegistry()
     server = DownstreamServer(
@@ -144,7 +209,7 @@ async def test_call_via_client_maps_timeout_to_downstream_timeout(monkeypatch):
         async def call_tool(self, *_args, **_kwargs):
             raise TimeoutError("network timeout")
 
-    monkeypatch.setattr(registry, "_build_client", lambda _server: _TimeoutClient())
+    monkeypatch.setattr(registry, "_build_client", lambda _server, **_kwargs: _TimeoutClient())
     with pytest.raises(DownstreamTimeout):
         await registry._call_via_client(  # noqa: SLF001 - unit test helper
             server=server,
@@ -171,7 +236,9 @@ async def test_call_via_client_detects_wrapped_timeout_by_type(monkeypatch):
     wrapped = RuntimeError("downstream call failed")
     wrapped.__cause__ = httpx.ReadTimeout("read timed out")
 
-    monkeypatch.setattr(registry, "_build_client", lambda _s: _ScriptedClient(raises=wrapped))
+    monkeypatch.setattr(
+        registry, "_build_client", lambda _s, **_kwargs: _ScriptedClient(raises=wrapped)
+    )
     with pytest.raises(DownstreamTimeout):
         await registry._call_via_client(  # noqa: SLF001 - unit test helper
             server=_weather_server(),
@@ -189,7 +256,9 @@ async def test_call_via_client_non_timeout_with_timeout_word_is_not_a_timeout(mo
     monkeypatch.setattr(
         registry,
         "_build_client",
-        lambda _s: _ScriptedClient(raises=ValueError("config error: timeout must be positive")),
+        lambda _s, **_kwargs: _ScriptedClient(
+            raises=ValueError("config error: timeout must be positive")
+        ),
     )
     with pytest.raises(DownstreamError) as excinfo:
         await registry._call_via_client(  # noqa: SLF001 - unit test helper
@@ -205,7 +274,9 @@ async def test_call_via_client_non_timeout_with_timeout_word_is_not_a_timeout(mo
 async def test_call_via_client_validates_serializable_result(monkeypatch):
     registry = InMemoryFastMCPRegistry()
     result = _ResultObj(structured_content={"temp": 21, "unit": "C"})
-    monkeypatch.setattr(registry, "_build_client", lambda _s: _ScriptedClient(returns=result))
+    monkeypatch.setattr(
+        registry, "_build_client", lambda _s, **_kwargs: _ScriptedClient(returns=result)
+    )
     normalized = await registry._call_via_client(  # noqa: SLF001 - unit test helper
         server=_weather_server(),
         tool_name="get_current_weather",
@@ -220,7 +291,9 @@ async def test_call_via_client_rejects_unserializable_result(monkeypatch):
     registry = InMemoryFastMCPRegistry()
     # A set survives _to_jsonable unchanged and is not JSON-serializable.
     result = _ResultObj(structured_content={"tags": {"a", "b"}})
-    monkeypatch.setattr(registry, "_build_client", lambda _s: _ScriptedClient(returns=result))
+    monkeypatch.setattr(
+        registry, "_build_client", lambda _s, **_kwargs: _ScriptedClient(returns=result)
+    )
     with pytest.raises(DownstreamProtocolError):
         await registry._call_via_client(  # noqa: SLF001 - unit test helper
             server=_weather_server(),
@@ -294,7 +367,7 @@ async def test_pool_reuses_one_warm_client_across_calls(monkeypatch):
     registry = InMemoryFastMCPRegistry()
     registry._servers[("local-dev", "weather")] = _weather_server()
     client = _PoolableClient(returns=_ResultObj(structured_content={"ok": True}))
-    monkeypatch.setattr(registry, "_build_client", lambda _s: client)
+    monkeypatch.setattr(registry, "_build_client", lambda _s, **_kwargs: client)
 
     for _ in range(3):
         result = await registry.call_tool("weather", "get_current_weather", {})
@@ -307,11 +380,47 @@ async def test_pool_reuses_one_warm_client_across_calls(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pool_reconnects_when_credential_near_expiry(monkeypatch):
+    """When the stored JIT credential is within the refresh skew, the pool evicts
+    and reconnects with a freshly minted token instead of reusing the warm client."""
+
+    class _ExpiringBroker:
+        def __init__(self):
+            self.mint_calls = 0
+
+        async def mint(self, server_name, *, tenant_id, metadata=None):
+            self.mint_calls += 1
+            return _credential(f"tok-{self.mint_calls}")
+
+        def near_expiry(self, credential, now=None):
+            return True
+
+    broker = _ExpiringBroker()
+    registry = InMemoryFastMCPRegistry(credential_broker=broker)
+    registry._servers[("local-dev", "weather")] = _weather_server()
+    built_clients: list[_PoolableClient] = []
+
+    def _build(_server, **_kwargs):
+        client = _PoolableClient(returns=_ResultObj(structured_content={"ok": True}))
+        built_clients.append(client)
+        return client
+
+    monkeypatch.setattr(registry, "_build_client", _build)
+
+    for _ in range(3):
+        await registry.call_tool("weather", "get_current_weather", {})
+
+    # Every call sees a near-expiry credential, so each remints and reconnects.
+    assert broker.mint_calls == 3
+    assert len(built_clients) == 3
+
+
+@pytest.mark.asyncio
 async def test_pool_evicts_client_on_failure(monkeypatch):
     registry = InMemoryFastMCPRegistry()
     registry._servers[("local-dev", "weather")] = _weather_server()
     client = _PoolableClient(raises=RuntimeError("downstream blew up"))
-    monkeypatch.setattr(registry, "_build_client", lambda _s: client)
+    monkeypatch.setattr(registry, "_build_client", lambda _s, **_kwargs: client)
 
     with pytest.raises(DownstreamError):
         # call_tool retries; each attempt should evict and rebuild from the pool.
@@ -326,7 +435,7 @@ async def test_unmount_evicts_pooled_client(monkeypatch):
     registry = InMemoryFastMCPRegistry()
     registry._servers[("local-dev", "weather")] = _weather_server()
     client = _PoolableClient(returns=_ResultObj(structured_content={"ok": True}))
-    monkeypatch.setattr(registry, "_build_client", lambda _s: client)
+    monkeypatch.setattr(registry, "_build_client", lambda _s, **_kwargs: client)
 
     async def _noop_delete(*_a, **_k):
         return None
@@ -353,7 +462,7 @@ async def test_aclose_closes_all_pooled_clients(monkeypatch):
     registry = InMemoryFastMCPRegistry()
     registry._servers[("local-dev", "weather")] = _weather_server()
     client = _PoolableClient(returns=_ResultObj(structured_content={"ok": True}))
-    monkeypatch.setattr(registry, "_build_client", lambda _s: client)
+    monkeypatch.setattr(registry, "_build_client", lambda _s, **_kwargs: client)
 
     await registry.call_tool("weather", "get_current_weather", {})
     await registry.aclose()

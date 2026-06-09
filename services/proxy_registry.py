@@ -13,6 +13,11 @@ from fastmcp.client.transports import SSETransport, StdioTransport, StreamableHt
 
 from config.settings import get_settings
 from database.mongo import get_tenant_database
+from services.credential_broker import (
+    CallerIdentity,
+    MintedCredential,
+    get_credential_broker,
+)
 from services.embeddings import EmbeddingService, get_embedding_service
 from services.tracing import set_span_attribute, start_span
 
@@ -51,10 +56,21 @@ class DownstreamServer:
     metadata: dict[str, Any] | None = None
 
 
+@dataclass
+class PooledClient:
+    client: Client
+    credential: MintedCredential
+
+
 class InMemoryFastMCPRegistry:
-    def __init__(self, embedding_service: EmbeddingService | None = None) -> None:
+    def __init__(
+        self,
+        embedding_service: EmbeddingService | None = None,
+        credential_broker=None,
+    ) -> None:
         self.settings = get_settings()
         self.embedding_service = embedding_service or get_embedding_service(self.settings)
+        self.credential_broker = credential_broker or get_credential_broker()
         self._servers: dict[tuple[str, str], DownstreamServer] = {}
         self._lock = asyncio.Lock()
         # Warm, long-lived downstream clients keyed by (tenant, server). FastMCP's
@@ -62,7 +78,7 @@ class InMemoryFastMCPRegistry:
         # reuses it instead of paying a full connect/handshake per request. A
         # per-key lock serializes connect/evict so concurrent callers don't race
         # to open (or tear down) the same session.
-        self._clients: dict[tuple[str, str], Client] = {}
+        self._clients: dict[tuple[str, str], PooledClient] = {}
         self._client_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     def list_servers(self, tenant_id: str | None = None) -> list[str]:
@@ -187,6 +203,7 @@ class InMemoryFastMCPRegistry:
         arguments: dict[str, Any],
         *,
         tenant_id: str | None = None,
+        caller: CallerIdentity | None = None,
     ) -> dict[str, Any]:
         resolved_tenant = tenant_id or self.settings.default_tenant_id
         server = self.get_server(server_name, tenant_id=resolved_tenant)
@@ -200,6 +217,9 @@ class InMemoryFastMCPRegistry:
                 "mcp.server": server_name,
                 "mcp.tool": tool_name,
                 "mcp.tenant_id": resolved_tenant,
+                # Caller identity is recorded for audit/trace only; the downstream
+                # credential is a tenant-scoped workload identity, not this token.
+                "mcp.actor": caller.user_id if caller else "unknown-user",
                 "downstream.transport": server.transport,
                 "downstream.endpoint": server.endpoint,
                 "downstream.timeout_ms": self.settings.downstream_timeout_ms,
@@ -234,7 +254,16 @@ class InMemoryFastMCPRegistry:
         if server is None:
             return []
         try:
-            client = self._build_client(server)
+            credential = None
+            if self.settings.downstream_jwt_enabled:
+                # Discovery must also present a JIT credential so catalogs can be
+                # synced against JWT-protected downstreams.
+                credential = await self.credential_broker.mint(
+                    server_name=server.server,
+                    tenant_id=server.tenant_id,
+                    metadata=server.metadata,
+                )
+            client = self._build_client(server, credential=credential)
             async with client:
                 tools = await client.list_tools()
             return [self._normalize_tool_schema(tool) for tool in tools]
@@ -294,29 +323,53 @@ class InMemoryFastMCPRegistry:
 
         The base ``__aenter__`` is held open for the pooled client's lifetime so
         per-call ``async with`` blocks only bump the reentrant ref-counter. If a
-        cached client has lost its session (downstream restart, idle reap), it is
-        discarded and reconnected so callers never get a dead handle.
+        cached client has lost its session (downstream restart, idle reap) or its
+        just-in-time credential is within the refresh-skew window of expiry, it is
+        discarded and reconnected with a freshly minted token so callers never get
+        a dead handle or an expired credential.
+
+        The warm-hit path checks the *stored* credential's expiry rather than
+        re-minting on every call, so steady-state requests never contend on the
+        broker; a token is only minted when a (re)connect is actually required.
         """
         async with self._key_lock(key):
-            client = self._clients.get(key)
-            if client is not None and client.is_connected():
-                return client
-            if client is not None:
-                # Cached but no longer connected — drop it before reconnecting.
-                await self._close_client(client)
+            pooled = self._clients.get(key)
+            if (
+                pooled is not None
+                and pooled.client.is_connected()
+                and not self.credential_broker.near_expiry(pooled.credential)
+            ):
+                return pooled.client
+            if pooled is not None:
+                # Stale (disconnected) or near-expiry — drop it before reconnecting.
+                await self._close_client(pooled.client)
                 self._clients.pop(key, None)
 
-            client = self._build_client(server)
+            try:
+                credential = await self.credential_broker.mint(
+                    server_name=server.server,
+                    tenant_id=server.tenant_id,
+                    metadata=server.metadata,
+                )
+            except Exception as exc:
+                # A mint failure must surface as a protocol-safe downstream error,
+                # never crash the request path. Token contents are never logged.
+                target = self._target(server)
+                raise DownstreamError(
+                    f"Failed to mint downstream credential for '{target}': {exc}"
+                ) from exc
+
+            client = self._build_client(server, credential=credential)
             await client.__aenter__()
-            self._clients[key] = client
+            self._clients[key] = PooledClient(client=client, credential=credential)
             return client
 
     async def _evict_client(self, key: tuple[str, str]) -> None:
         """Remove and close the pooled client for ``key`` if present."""
         async with self._key_lock(key):
-            client = self._clients.pop(key, None)
-        if client is not None:
-            await self._close_client(client)
+            pooled = self._clients.pop(key, None)
+        if pooled is not None:
+            await self._close_client(pooled.client)
 
     @staticmethod
     async def _close_client(client: Client) -> None:
@@ -360,19 +413,25 @@ class InMemoryFastMCPRegistry:
             current = current.__cause__ or current.__context__
         return False
 
-    def _build_client(self, server: DownstreamServer) -> Client:
+    def _build_client(
+        self, server: DownstreamServer, credential: MintedCredential | None = None
+    ) -> Client:
+        headers = credential.headers if credential else None
         if server.transport == "streamable_http":
-            return Client(StreamableHttpTransport(url=str(server.endpoint)))
+            return Client(StreamableHttpTransport(url=str(server.endpoint), headers=headers))
         if server.transport == "sse":
-            return Client(SSETransport(url=str(server.endpoint)))
+            return Client(SSETransport(url=str(server.endpoint), headers=headers))
         if server.transport == "stdio":
             if not server.command:
                 raise ValueError(f"Server '{server.server}' stdio transport missing command.")
+            env = dict(server.env or {})
+            if credential:
+                env.update(credential.env)
             return Client(
                 StdioTransport(
                     command=server.command,
                     args=server.args or [],
-                    env=server.env,
+                    env=env or None,
                     cwd=server.cwd,
                 )
             )

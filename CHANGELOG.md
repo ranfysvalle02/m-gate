@@ -38,6 +38,12 @@
 ### Security and correctness
 - Added auth modes (`disabled`, `hs256`, `jwks`) with production safety validation.
 - Implemented JWKS-based token verification with local offline JWKS support.
+- Added dynamic downstream credential brokering (`services/credential_broker.py`):
+  downstream calls now present a short-lived RS256 JWT minted per `(tenant, server)`
+  — a tenant-scoped *workload identity*, not the end-user token — injected as a
+  transport credential (`Authorization` for HTTP/SSE, env var for stdio) instead of
+  relying on static long-lived downstream secrets. Tokens are never logged, and the
+  bundled dev signing key is rejected in `ENVIRONMENT=production`.
 - Enforced scope authorization in `tools/call` (not only discovery).
 - Isolated semantic cache entries by `tenant_id`.
 - Replaced toy guardrails with reusable injection + PII redaction service.
@@ -65,6 +71,16 @@
   result. Disable auto-provisioning where tenant ids are untrusted.
 
 ### Routing and resiliency
+- Fixed active-active registry-watcher scaling: each replica now persists its own
+  change-stream resume token (`routing_registry::<instance_id>`) so pods do not
+  overwrite each other's stream position.
+- Added TTL lifecycle management for watcher resume-state docs
+  (`WATCHER_RESUME_TTL_SECONDS`) with index-option conflict handling.
+- Integrated JWT rotation with downstream warm-client pooling: the warm-hit path
+  checks the stored credential's refresh-skew window (no broker contention in steady
+  state) and only evicts/reconnects with a freshly minted token when a (re)connect is
+  actually needed, so calls always use a fresh JIT credential without dropping pool
+  semantics. Catalog discovery presents the same credential.
 - Sliding-window rate limiter that weights the previous window into the current
   one, closing the 2x burst-at-the-boundary gap. Buckets live one extra window so
   the rolling calculation can read the prior window before TTL cleanup.
