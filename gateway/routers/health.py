@@ -6,6 +6,7 @@ from fastapi import APIRouter, Response, status
 
 from config.settings import get_settings
 from database.indexes import TEXT_INDEX_NAME, VECTOR_INDEX_NAME
+from database.encryption import qe_status
 from database.mongo import get_client, get_tenant_database
 from services.embeddings import get_embedding_service
 
@@ -24,8 +25,10 @@ async def health_ready(response: Response) -> dict:
         "mongo": False,
         "indexes": False,
         "embedding": False,
+        "encryption": True,
     }
     errors: dict[str, str] = {}
+    qe: dict | None = None
     settings = get_settings()
 
     try:
@@ -60,10 +63,26 @@ async def health_ready(response: Response) -> dict:
         errors["embedding"] = exc.__class__.__name__
         logger.warning("Readiness embedding check failed: %s", exc)
 
+    if settings.qe_enabled:
+        try:
+            qe = await qe_status(settings)
+            checks["encryption"] = bool(qe.get("ok"))
+            if not checks["encryption"]:
+                errors["encryption"] = str(qe.get("error") or "not_ready")
+        except Exception as exc:
+            checks["encryption"] = False
+            errors["encryption"] = exc.__class__.__name__
+            logger.warning("Readiness encryption check failed: %s", exc)
+
     healthy = all(checks.values())
     if not healthy:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return {"status": "ok" if healthy else "degraded", "checks": checks, "errors": errors}
+    return {
+        "status": "ok" if healthy else "degraded",
+        "checks": checks,
+        "errors": errors,
+        "qe": qe,
+    }
 
 
 @router.get("/health")

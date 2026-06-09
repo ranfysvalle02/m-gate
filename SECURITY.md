@@ -163,6 +163,20 @@ All references point at the code that implements the control.
 - Secrets are never written to logs or telemetry; auth failures are logged by *category*
   only, and downstream tokens are never logged.
 
+### Queryable Encryption (field-level, KMS-backed)
+
+- `routing_registry` secret-bearing fields (`env`, `command`, `args`, `metadata`)
+  can be protected with MongoDB Queryable Encryption (QE) using DEKs in
+  `encryption.__keyVault` (`database/encryption.py`).
+- DEKs are wrapped by a customer master key managed outside MongoDB:
+  - `KMS_PROVIDER=aws`: AWS KMS (or LocalStack KMS for local dev).
+  - `KMS_PROVIDER=local`: local 96-byte master key for no-external-KMS demos.
+- With QE enabled, these fields are encrypted client-side before writes and
+  transparently decrypted for authorized application reads. Raw DB reads return
+  ciphertext.
+- Current scope intentionally excludes `audit_telemetry` because it is a
+  time-series collection and QE does not support time-series collections.
+
 ### Fail-closed production safety
 
 When `ENVIRONMENT=production`, the gateway **refuses to start** unless
@@ -210,7 +224,8 @@ infrastructure/perimeter layer and are documented in
 - **Secret storage backend** — the gateway *consumes* secrets (env or file mounts); use
   a real secret manager (Kubernetes Secrets + KMS, Vault, cloud secret managers).
 - **Database hardening** — Atlas network access lists, encryption at rest, backups, and
-  user/role management are configured in Atlas.
+  user/role management are configured in Atlas. For field-level confidentiality
+  against privileged DB access, enable Queryable Encryption in the gateway.
 - **Downstream MCP server security** — each downstream is responsible for verifying the
   workload JWT the gateway presents and enforcing its own controls.
 
@@ -226,6 +241,7 @@ See [`PRODUCTION.md`](PRODUCTION.md) for the full, annotated checklist. The esse
 - [ ] Strong admin credentials and a stable `ADMIN_SESSION_SECRET` (or disable the UI).
 - [ ] A dedicated `DOWNSTREAM_JWT_PRIVATE_KEY(_FILE)` (not the bundled dev key).
 - [ ] A stable `EMBEDDING_SECRET` (key-encryption secret — see the caveat in PRODUCTION.md).
+- [ ] If `QE_ENABLED=true`: configure `KMS_PROVIDER` + key material (`AWS_KMS_KEY_ARN(_FILE)` or `QE_LOCAL_MASTER_KEY(_FILE)`), and back up `encryption.__keyVault`.
 - [ ] Secrets mounted as files / from a secret manager, never baked into images or ConfigMaps.
 - [ ] TLS terminated in front of the gateway; egress restricted (NetworkPolicy).
 - [ ] Atlas reached over TLS with auth and a locked-down network access list.

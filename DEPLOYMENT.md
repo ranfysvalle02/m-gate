@@ -54,7 +54,10 @@ Four moving parts:
 ## Path A — Docker Compose (fastest)
 
 This brings up MongoDB Atlas Local, the demo downstream servers, a one-shot
-bootstrap job (indexes + seed + catalog sync), and the gateway.
+bootstrap job (indexes + seed + catalog sync), and the gateway. It also starts
+LocalStack KMS + `kms-init` so Queryable Encryption can run out of the box, plus
+`secrets-init` to provision stable file-backed secrets for embedding key
+encryption and admin sessions.
 
 ```bash
 ollama pull nomic-embed-text     # default embedding model on your host
@@ -67,6 +70,24 @@ Then verify:
 curl http://localhost:8000/health
 open http://localhost:8000/ui    # login: demo@demo.com / demo
 ```
+
+Queryable Encryption defaults to `KMS_PROVIDER=aws` backed by LocalStack in this
+path. To run without LocalStack, switch `bootstrap` and `gateway` to
+`KMS_PROVIDER=local` and set `QE_LOCAL_MASTER_KEY_FILE` (base64-encoded 96-byte
+key). See [`docs/QUERYABLE-ENCRYPTION.md`](docs/QUERYABLE-ENCRYPTION.md).
+
+### Path A hardening map
+
+Use this sequence to move from local demo settings to production posture:
+
+1. Keep `*_FILE` secrets as the source of truth (`EMBEDDING_SECRET_FILE`,
+   `ADMIN_SESSION_SECRET_FILE`, provider keys).
+2. For external embedding providers, use HTTPS endpoints and mount
+   `EMBEDDING_API_KEY_FILE` from a secret file.
+3. Move auth from `AUTH_MODE=disabled` to `hs256`/`jwks`; set issuer/audience.
+4. Replace wildcard CORS with explicit origins and set `FORWARDED_ALLOW_IPS`.
+5. Before internet exposure, move to Path B/C/D and complete the
+   [Production hardening checklist](#production-hardening-checklist).
 
 The compose stack is **development-shaped** (`AUTH_MODE=disabled`, demo admin
 credentials, wildcard CORS). Do not ship it as-is — see the
@@ -255,6 +276,10 @@ Full list with defaults: [`.env.example`](.env.example). The essentials:
 | `ENVIRONMENT` | `production` turns on the boot-time safety checks below |
 | `MONGODB_URI` / `MONGODB_URI_FILE` | Atlas connection string (file-mountable) |
 | `MONGODB_DB_NAME` | Control-plane / default database name |
+| `QE_ENABLED` | Enables Queryable Encryption for `routing_registry` secret fields |
+| `KMS_PROVIDER` | `none` \| `local` \| `aws` |
+| `AWS_KMS_KEY_ARN(_FILE)` / `QE_LOCAL_MASTER_KEY(_FILE)` | KMS key material for QE |
+| `CRYPT_SHARED_LIB_PATH` | Path to `mongo_crypt_v1.so` (required when QE is enabled) |
 | `AUTH_MODE` | `disabled` \| `hs256` \| `jwks` |
 | `JWT_SECRET` / `JWT_ISSUER` / `JWT_AUDIENCE` / `JWKS_URI` | Auth config |
 | `CORS_ALLOW_ORIGINS` | Comma-separated allowed origins (no `*` in prod) |
@@ -286,6 +311,8 @@ When `ENVIRONMENT=production`, the gateway **fails to start** unless these hold
 - [ ] `CORS_ALLOW_ORIGINS` is **not** `*` — list explicit origins.
 - [ ] If the admin UI is enabled: `ADMIN_EMAIL` set, `ADMIN_PASSWORD` ≥12 chars
       (not weak), `ADMIN_SESSION_SECRET` ≥16 chars (not weak).
+- [ ] If `QE_ENABLED=true`: `KMS_PROVIDER` is `local` or `aws`, and required key
+      material is configured (`QE_LOCAL_MASTER_KEY(_FILE)` or `AWS_KMS_KEY_ARN(_FILE)`).
 
 Also recommended (not boot-enforced):
 
@@ -305,7 +332,7 @@ Also recommended (not boot-enforced):
 | Endpoint | Use |
 | --- | --- |
 | `GET /health/live` | Liveness — process is up |
-| `GET /health/ready` | Readiness — Mongo reachable + embedding probe ok |
+| `GET /health/ready` | Readiness — Mongo reachable + embedding probe ok + QE status when enabled |
 | `GET /health` | Combined human-readable health |
 | `GET /metrics` | Prometheus metrics (`ENABLE_METRICS=true`) |
 

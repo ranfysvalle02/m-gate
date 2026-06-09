@@ -86,6 +86,18 @@ Full list with defaults: [`.env.example`](.env.example). Production essentials:
 | `AUTO_BOOTSTRAP` | `true` to create indexes + seed + sync catalog on startup |
 | `AUTO_PROVISION_TENANTS` | `false` where tenant ids are untrusted |
 
+### Queryable Encryption (optional but recommended for registry secrets)
+
+| Variable | Notes |
+| --- | --- |
+| `QE_ENABLED` | `true` enables field-level encryption for `routing_registry` secret fields |
+| `KMS_PROVIDER` | `aws` (recommended in prod) or `local` (dev/demo only) |
+| `QE_KEY_VAULT_NAMESPACE` | Defaults to `encryption.__keyVault` |
+| `AWS_KMS_KEY_ARN(_FILE)` | Required for `KMS_PROVIDER=aws` |
+| `AWS_DEFAULT_REGION` / `AWS_KMS_ENDPOINT` | Region required; endpoint optional (LocalStack/dev) |
+| `QE_LOCAL_MASTER_KEY(_FILE)` | Base64 96-byte key for `KMS_PROVIDER=local` |
+| `CRYPT_SHARED_LIB_PATH` | Path to `mongo_crypt_v1.so` in the runtime container |
+
 ### Embeddings
 
 | Variable | Notes |
@@ -146,6 +158,9 @@ limiting.
   decrypted (they read as empty) and must be re-entered in the admin panel. Set it once
   per environment and store it like any other long-lived secret. If unset, it falls back
   to `ADMIN_SESSION_SECRET`, then `JWT_SECRET`.
+- **Treat QE key material as Tier-0 secrets.** Protect `AWS_KMS_KEY_ARN(_FILE)` and/or
+  `QE_LOCAL_MASTER_KEY(_FILE)`, and include `encryption.__keyVault` in your backup and
+  disaster-recovery scope.
 - **Rotation**: JWKS keys rotate at the IdP (the resolver picks them up out-of-band).
   Rotate the downstream signing key by publishing the new public key to downstreams first,
   then swapping the private key. Rotate `JWT_SECRET`/`ADMIN_SESSION_SECRET` during a
@@ -166,7 +181,8 @@ limiting.
 - **First boot**: run the bootstrap once (`AUTO_BOOTSTRAP=true`, the Compose `bootstrap`
   job, or `python -m scripts.bootstrap`) to create indexes, seed the control plane, and
   sync the downstream catalog with embeddings.
-- **Backups & encryption at rest**: configure in Atlas.
+- **Backups & encryption at rest**: configure in Atlas. If QE is enabled, include
+  `encryption.__keyVault` in backup/restore runbooks.
 
 ---
 

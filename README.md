@@ -126,12 +126,11 @@ fusion was computed:
 }
 ```
 
-> **Versions / notes.** `$rankFusion` is native to MongoDB 8.0+ and is a Preview
-> feature; `scoreDetails: true` requires the `featureFlagRankFusionFull` flag,
-> which the `mongodb/mongodb-atlas-local:preview` image used here enables — that's
-> why this repo runs on that tag. If you need score-based (not rank-based) fusion
-> with normalization, MongoDB also offers `$scoreFusion`. The gateway degrades to
-> the semantic arm if the fusion stage is unavailable, so search never hard-fails.
+> **Versions / notes.** `$rankFusion` is native to MongoDB 8.0+ and remains a
+> preview feature. This repo runs `mongodb/mongodb-atlas-local:8.0` in Compose.
+> If you need score-based (not rank-based) fusion with normalization, MongoDB
+> also offers `$scoreFusion`. The gateway degrades to the semantic arm if the
+> fusion stage is unavailable, so search never hard-fails.
 
 ---
 
@@ -144,7 +143,8 @@ fusion was computed:
 > **[SECURITY.md](SECURITY.md)** (security model & vulnerability reporting), and
 > **[NETWORK-SECURITY.md](NETWORK-SECURITY.md)** (trust boundaries & what's handled
 > at the perimeter), **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** (failure-mode
-> runbook), and **[docs/API.md](docs/API.md)** (REST + JSON-RPC reference).
+> runbook), **[docs/API.md](docs/API.md)** (REST + JSON-RPC reference), and
+> **[docs/QUERYABLE-ENCRYPTION.md](docs/QUERYABLE-ENCRYPTION.md)** (QE setup and operations).
 
 This repository now includes a working end-to-end MCP Gateway with:
 
@@ -157,6 +157,7 @@ This repository now includes a working end-to-end MCP Gateway with:
 - **Resiliency**: a hard downstream deadline (`DOWNSTREAM_TIMEOUT_MS`, default 2000ms) with protocol-safe JSON-RPC error frames
 - **Active-active-safe registry watching**: each gateway replica persists its own change-stream resume token (`routing_registry::<instance_id>`) so pods do not overwrite each other's stream position
 - **JIT downstream credentials**: every `tools/call` mints a short-lived RS256 bearer JWT (tenant-scoped workload identity) and rotates pooled downstream clients when a token nears expiry
+- **Queryable Encryption for downstream secrets**: `routing_registry.env` / `command` / `args` / `metadata` can be encrypted at rest with DEKs in `encryption.__keyVault`, backed by LocalStack AWS KMS (default Compose) or a local 96-byte master key
 - **Embedding resiliency**: retries + circuit breaker + lexical fallback when embedding providers are unavailable
 - **Pluggable, admin-configurable embeddings**: Ollama, OpenAI, Azure OpenAI, Voyage AI, and Google Gemini — switchable at runtime from the admin panel, with vector width auto-detected per provider (see [Embeddings](#embeddings))
 - **Layered guardrails**: regex floor + optional semantic injection classifier over a versioned `guardrail_signatures` vector corpus, plus optional Presidio NER redaction
@@ -188,6 +189,45 @@ python -m spacy download en_core_web_sm
 ```bash
 docker compose up --build
 ```
+
+By default, Compose now starts `localstack` + `kms-init` and runs the gateway
+with Queryable Encryption enabled for `routing_registry` secret-bearing fields.
+The KMS key ARN is written to a shared volume and loaded through
+`AWS_KMS_KEY_ARN_FILE=/kms-config/kms_key_id`.
+Compose also runs `secrets-init` once and writes stable file-backed secrets for
+`EMBEDDING_SECRET_FILE` and `ADMIN_SESSION_SECRET_FILE` into the
+`gateway_secrets` volume (instead of relying on fallback secrets).
+
+To use a local master key instead of LocalStack KMS:
+
+```bash
+# Generate a 96-byte QE local key (base64) and save it as a file.
+python - <<'PY'
+import base64, os
+print(base64.b64encode(os.urandom(96)).decode())
+PY
+```
+
+Set `KMS_PROVIDER=local` and `QE_LOCAL_MASTER_KEY_FILE=/kms-config/local-master-key.b64`
+for `bootstrap` and `gateway` (see `docker-compose.yml` comments).
+
+### Docker Compose hardening map (the "near-perfect" path)
+
+Use this progression to move from demo convenience toward production posture:
+
+1. **Keep file-backed secrets enabled** (default): `EMBEDDING_SECRET_FILE` and
+   `ADMIN_SESSION_SECRET_FILE` come from `gateway_secrets`.
+2. **Use cloud embedding providers over HTTPS** for real workloads:
+   - set `EMBEDDING_PROVIDER=openai|azure_openai|voyage|gemini`
+   - mount `EMBEDDING_API_KEY_FILE` (never hardcode the key in compose).
+3. **Turn on real auth**: switch from `AUTH_MODE=disabled` to `hs256` or
+   `jwks`, set issuer/audience, and disable wildcard CORS.
+4. **Pin explicit origins and proxy trust**:
+   - `CORS_ALLOW_ORIGINS=https://your-app.example.com`
+   - `FORWARDED_ALLOW_IPS=<your-ingress-cidr>`
+5. **Graduate to production deployment docs**:
+   [`DEPLOYMENT.md`](DEPLOYMENT.md) + [`PRODUCTION.md`](PRODUCTION.md) +
+   [`SECURITY.md`](SECURITY.md) for full hardening, key rotation, and network policy.
 
 The bootstrap service will:
 

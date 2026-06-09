@@ -4,6 +4,9 @@ defaults, and production safety guards.
 
 from __future__ import annotations
 
+import base64
+import os
+
 import pytest
 
 from config.settings import Settings
@@ -186,3 +189,77 @@ def test_prod_accepts_explicit_downstream_key():
         downstream_jwt_private_key="-----BEGIN PRIVATE KEY-----prod-----END PRIVATE KEY-----",
     )
     assert s.downstream_jwt_enabled is True
+
+
+def test_prod_qe_rejects_none_kms_provider():
+    with pytest.raises(ValueError, match="KMS_PROVIDER=local or KMS_PROVIDER=aws"):
+        Settings(
+            environment="production",
+            auth_mode="hs256",
+            jwt_secret="a-sufficiently-long-secret-value",
+            cors_allow_origins="https://app.example.com",
+            admin_ui_enabled=False,
+            downstream_jwt_enabled=False,
+            qe_enabled=True,
+            kms_provider="none",
+        )
+
+
+def test_prod_qe_local_rejects_invalid_base64_key():
+    with pytest.raises(ValueError, match="valid base64"):
+        Settings(
+            environment="production",
+            auth_mode="hs256",
+            jwt_secret="a-sufficiently-long-secret-value",
+            cors_allow_origins="https://app.example.com",
+            admin_ui_enabled=False,
+            downstream_jwt_enabled=False,
+            qe_enabled=True,
+            kms_provider="local",
+            qe_local_master_key="not-base64",
+        )
+
+
+def test_prod_qe_local_rejects_wrong_key_length():
+    bad_key = base64.b64encode(os.urandom(64)).decode("utf-8")
+    with pytest.raises(ValueError, match="exactly 96 bytes"):
+        Settings(
+            environment="production",
+            auth_mode="hs256",
+            jwt_secret="a-sufficiently-long-secret-value",
+            cors_allow_origins="https://app.example.com",
+            admin_ui_enabled=False,
+            downstream_jwt_enabled=False,
+            qe_enabled=True,
+            kms_provider="local",
+            qe_local_master_key=bad_key,
+        )
+
+
+def test_prod_qe_aws_requires_key_arn():
+    with pytest.raises(ValueError, match="AWS_KMS_KEY_ARN"):
+        Settings(
+            environment="production",
+            auth_mode="hs256",
+            jwt_secret="a-sufficiently-long-secret-value",
+            cors_allow_origins="https://app.example.com",
+            admin_ui_enabled=False,
+            downstream_jwt_enabled=False,
+            qe_enabled=True,
+            kms_provider="aws",
+        )
+
+
+def test_prod_qe_aws_with_key_arn_is_valid():
+    s = Settings(
+        environment="production",
+        auth_mode="hs256",
+        jwt_secret="a-sufficiently-long-secret-value",
+        cors_allow_origins="https://app.example.com",
+        admin_ui_enabled=False,
+        downstream_jwt_enabled=False,
+        qe_enabled=True,
+        kms_provider="aws",
+        aws_kms_key_arn="arn:aws:kms:us-east-1:000000:key/abc",
+    )
+    assert s.qe_enabled is True

@@ -243,11 +243,40 @@ guesses. Each section includes:
 - `HTTP 5xx Error Rate` and readiness if reprovision is long-running
 - Admin telemetry for embedding status transitions
 
+## 11) Queryable Encryption readiness is degraded
+
+**Symptom**
+
+- `/health/ready` returns `503` with `checks.encryption=false`.
+- The `qe` payload reports missing `crypt_shared` library or key-vault/KMS issues.
+
+**Why it happens**
+
+- QE is enabled (`QE_ENABLED=true`) but one prerequisite is missing:
+  - `mongo_crypt_v1.so` not found at `CRYPT_SHARED_LIB_PATH`,
+  - key material not loaded (`AWS_KMS_KEY_ARN(_FILE)` or `QE_LOCAL_MASTER_KEY(_FILE)`),
+  - KMS endpoint/credentials misconfigured (LocalStack or AWS),
+  - key-vault namespace unreadable.
+
+**How to fix**
+
+- Confirm `CRYPT_SHARED_LIB_PATH` exists in the container:
+  `ls /opt/mongodb/lib/mongo_crypt_v1.so`.
+- For `KMS_PROVIDER=aws`, verify `AWS_KMS_KEY_ARN_FILE` exists and LocalStack/AWS
+  is reachable.
+- For `KMS_PROVIDER=local`, confirm key file is valid base64 and decodes to 96 bytes.
+- Re-run bootstrap after KMS fixes so encrypted collection provisioning can succeed.
+
+**What to watch**
+
+- `/health/ready` `checks.encryption` and `qe.error`
+- `HTTP 5xx Error Rate` during rollout
+
 ## Quick triage sequence
 
 1. Check gateway process health (`/health/live`).
 2. Check readiness details (`/health/ready`) to isolate `mongo`, `indexes`,
-   `embedding`.
+   `embedding`, and `encryption` (when QE is enabled).
 3. Open Grafana dashboard:
    - error rate
    - latency quantiles

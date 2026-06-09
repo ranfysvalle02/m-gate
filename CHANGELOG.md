@@ -50,6 +50,12 @@
   The `OLLAMA_*` variables configure the default Ollama provider.
 
 ### Security and correctness
+- Added MongoDB Queryable Encryption support for `routing_registry` secret fields
+  (`env`, `command`, `args`, `metadata`) with KMS providers:
+  - `aws` (LocalStack in local Compose, real AWS KMS in production)
+  - `local` (base64-encoded 96-byte master key for no-KMS environments)
+  Provisioning now creates an encrypted `routing_registry` collection and key
+  vault metadata in `encryption.__keyVault`.
 - Added auth modes (`disabled`, `hs256`, `jwks`) with production safety validation.
 - Implemented JWKS-based token verification with local offline JWKS support.
 - Added dynamic downstream credential brokering (`services/credential_broker.py`):

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pymongo import AsyncMongoClient
 
 from config.settings import Settings, get_settings
+from database.encryption import build_auto_encryption_opts
 
 _client: AsyncMongoClient | None = None
 
@@ -29,6 +30,8 @@ async def connect_to_mongo(settings: Settings | None = None) -> AsyncMongoClient
             options["username"] = cfg.atlas_username
         if cfg.atlas_password:
             options["password"] = cfg.atlas_password
+        if cfg.qe_enabled:
+            options["auto_encryption_opts"] = build_auto_encryption_opts(cfg)
         _client = AsyncMongoClient(cfg.mongodb_uri, **options)
         await _client.admin.command("ping")
     return _client

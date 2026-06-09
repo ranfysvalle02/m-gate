@@ -1,6 +1,15 @@
 services:
+  secrets-init:
+    image: python:3.12-slim
+    container_name: mdb-gateway-secrets-init
+    entrypoint: ["python", "/secrets-init.py"]
+    volumes:
+      - ./deploy/secrets/secrets-init.py:/secrets-init.py:ro
+      - gateway_secrets:/gateway-secrets
+    restart: "no"
+
   mongodb:
-    image: mongodb/mongodb-atlas-local:preview
+    image: mongodb/mongodb-atlas-local:8.0
     container_name: mdb-gateway-mongodb
     ports:
       - "27017:27017"
@@ -9,9 +18,47 @@ services:
       interval: 10s
       timeout: 10s
       retries: 20
-      start_period: 20s
+      start_period: 30s
     volumes:
       - mongodb_data:/data/db
+
+  localstack:
+    image: localstack/localstack:latest
+    container_name: mdb-gateway-localstack
+    networks:
+      default:
+        aliases:
+          - localhost.localstack.cloud
+    environment:
+      SERVICES: kms
+      AWS_DEFAULT_REGION: us-east-1
+      DEBUG: 1
+    volumes:
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "awslocal", "kms", "list-keys"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  kms-init:
+    image: amazon/aws-cli:latest
+    container_name: mdb-gateway-kms-init
+    depends_on:
+      localstack:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command: ["/kms-init.sh"]
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://localstack:4566
+    volumes:
+      - ./deploy/kms/kms-init.sh:/kms-init.sh:ro
+      - kms_config:/kms-config
+    restart: "no"
 
   weather:
     build:
@@ -44,8 +91,14 @@ services:
       context: .
     command: ["python", "-m", "scripts.bootstrap"]
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
+      localstack:
+        condition: service_healthy
+      kms-init:
+        condition: service_completed_successfully
       weather:
         condition: service_started
       orders:
@@ -57,16 +110,34 @@ services:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: nomic-embed-text
       OLLAMA_DIMENSIONS: 768
+      # For cloud providers, prefer HTTPS base URLs and mount EMBEDDING_API_KEY_FILE.
+      # EMBEDDING_PROVIDER: openai
+      # EMBEDDING_API_KEY_FILE: /gateway-secrets/embedding_api_key
       INCLUDE_SCORE_DETAILS: "true"
       AUTH_MODE: "disabled"
       ADMIN_UI_ENABLED: "true"
       ADMIN_EMAIL: demo@demo.com
       ADMIN_PASSWORD: demo
-      ADMIN_SESSION_SECRET: demo-admin-session-secret
+      ADMIN_SESSION_SECRET_FILE: /gateway-secrets/admin_session_secret
+      EMBEDDING_SECRET_FILE: /gateway-secrets/embedding_secret
       TENANT_DB_PREFIX: tenant_
       FUSION_STRATEGY: rank_fusion
+      QE_ENABLED: "true"
+      KMS_PROVIDER: aws
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_KMS_ENDPOINT: localhost.localstack.cloud:4566
+      AWS_KMS_KEY_ARN_FILE: /kms-config/kms_key_id
+      CRYPT_SHARED_LIB_PATH: /opt/mongodb/lib/mongo_crypt_v1.so
+      # Optional local-key mode (instead of LocalStack):
+      # KMS_PROVIDER: local
+      # QE_LOCAL_MASTER_KEY_FILE: /kms-config/local-master-key.b64
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - kms_config:/kms-config:ro
+      - gateway_secrets:/gateway-secrets:ro
     restart: "no"
 
   gateway:
@@ -74,8 +145,14 @@ services:
       context: .
     command: ["uvicorn", "gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
+      localstack:
+        condition: service_healthy
+      kms-init:
+        condition: service_completed_successfully
       weather:
         condition: service_started
       orders:
@@ -89,6 +166,9 @@ services:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: nomic-embed-text
       OLLAMA_DIMENSIONS: 768
+      # For cloud providers, prefer HTTPS base URLs and mount EMBEDDING_API_KEY_FILE.
+      # EMBEDDING_PROVIDER: openai
+      # EMBEDDING_API_KEY_FILE: /gateway-secrets/embedding_api_key
       INCLUDE_SCORE_DETAILS: "true"
       AUTH_MODE: "disabled"
       TENANT_DB_PREFIX: tenant_
@@ -101,8 +181,25 @@ services:
       LOG_JSON: "true"
       REQUEST_MAX_BYTES: 262144
       CORS_ALLOW_ORIGINS: "*"
+      FORWARDED_ALLOW_IPS: 127.0.0.1
+      ADMIN_SESSION_SECRET_FILE: /gateway-secrets/admin_session_secret
+      EMBEDDING_SECRET_FILE: /gateway-secrets/embedding_secret
+      QE_ENABLED: "true"
+      KMS_PROVIDER: aws
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_KMS_ENDPOINT: localhost.localstack.cloud:4566
+      AWS_KMS_KEY_ARN_FILE: /kms-config/kms_key_id
+      CRYPT_SHARED_LIB_PATH: /opt/mongodb/lib/mongo_crypt_v1.so
+      # Optional local-key mode (instead of LocalStack):
+      # KMS_PROVIDER: local
+      # QE_LOCAL_MASTER_KEY_FILE: /kms-config/local-master-key.b64
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - kms_config:/kms-config:ro
+      - gateway_secrets:/gateway-secrets:ro
     ports:
       - "8000:8000"
 
@@ -145,5 +242,8 @@ services:
 
 volumes:
   mongodb_data:
+  localstack_data:
+  kms_config:
+  gateway_secrets:
   prometheus_data:
   grafana_data:

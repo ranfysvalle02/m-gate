@@ -133,6 +133,36 @@ def routing_registry_seed(tenant_id: str | None = None) -> list[dict]:
                 },
             ],
         },
+        {
+            "_id": "secure-stdio",
+            "tenant_id": resolved_tenant,
+            "server": "secure-stdio",
+            "transport": "stdio",
+            "command": "python",
+            "args": ["-m", "servers.weather.server"],
+            "env": {
+                "DOWNSTREAM_API_TOKEN": "demo-secret-token",
+                "DOWNSTREAM_ENV": "dev",
+            },
+            "enabled": True,
+            "metadata": {"domain": "secure", "purpose": "qe-demo"},
+            "tools": [
+                {
+                    "name": "secure_health_ping",
+                    "description": "Demo tool entry for Queryable Encryption payload testing.",
+                    "scopes": ["admin"],
+                    "metadata": {
+                        "cacheable": False,
+                        "cache_ttl_seconds": 0,
+                        "invalidates": [],
+                    },
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {},
+                    },
+                }
+            ],
+        },
     ]
 
 

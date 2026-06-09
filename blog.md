@@ -283,7 +283,32 @@ Collapse those four engines back into the one data model they always shared, and
 
 ---
 
-## 4. Resiliency: surviving a flaky downstream
+## 4. Confidential by default: Queryable Encryption for downstream secrets
+
+One subtle place gateways leak risk is not in the request path, but in their own
+registry documents. For stdio/HTTP downstreams, operators often store operational
+secrets in registry `env` payloads, command args, or metadata. Those values tend
+to end up plaintext-at-rest unless you add another secret service beside your
+control plane.
+
+This gateway keeps that concern on the same data platform by enabling MongoDB
+Queryable Encryption over `routing_registry` fields (`env`, `command`, `args`,
+`metadata`). The key hierarchy is deliberate:
+
+- **DEKs** live in `encryption.__keyVault`.
+- DEKs are wrapped by a **CMK** from either AWS KMS (LocalStack in local dev) or
+  a local 96-byte master key for no-KMS demos.
+- MongoDB stores ciphertext; the gateway encrypts/decrypts client-side via
+  `crypt_shared` + `libmongocrypt`.
+
+The practical implication is the same architectural throughline from Section 3:
+you don't bolt on a second secrets product to keep the control plane trustworthy.
+Registry, search, telemetry, and confidential fields stay on one engine with one
+operational model — just with key material held outside the database boundary.
+
+---
+
+## 5. Resiliency: surviving a flaky downstream
 
 Proxying introduces the cold, hard reality of the fallible network. If a downstream MCP server hangs, crashes, or returns corrupt payloads, the gateway cannot allow those failures to cascade and freeze the agent.
 
@@ -293,7 +318,7 @@ Proxying introduces the cold, hard reality of the fallible network. If a downstr
 
 ---
 
-## 5. Keeping the catalog fresh: the mutation lifecycle
+## 6. Keeping the catalog fresh: the mutation lifecycle
 
 If tool definitions change frequently, computing embeddings on the hot path is how you tank your latency. The fix: decouple mutation from serving entirely.
 
@@ -330,7 +355,7 @@ The throughline holds here too: because retrieval, configuration, secrets, and r
 
 ---
 
-## 6. Beyond retrieval: the levers that narrow failure further
+## 7. Beyond retrieval: the levers that narrow failure further
 
 Hybrid routing is the *floor* of this design, not the ceiling. It already turns a ~21,830-token firehose into a ~2,480-token shortlist — with every tool's text intact, and now with keyword precision layered onto semantic recall. But two failure modes survive that win: the model can still *pick the wrong tool* out of a noisy shortlist, and a caller can still *see a tool they shouldn't*.
 
@@ -357,7 +382,7 @@ Stacked, these turn *"probably the right tools"* into *"demonstrably the right t
 
 ---
 
-## 7. The wider toolkit: how the ecosystem is fighting bloat
+## 8. The wider toolkit: how the ecosystem is fighting bloat
 
 We arrived at "treat tool selection as retrieval" from our own token bill, but it's worth stepping back to see the whole field at once, because the fixes sort cleanly into the two halves of the bloat problem — *input* (schema) bloat, the catalog handed over before anything runs, and *output* (response) bloat, the raw payload dumped back after a tool runs. Here's the landscape, and where this gateway sits in it.
 

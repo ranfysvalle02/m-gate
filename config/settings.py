@@ -1,3 +1,5 @@
+import base64
+import binascii
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -27,6 +29,19 @@ class Settings(BaseSettings):
     mongodb_uri: str = Field(default="mongodb://mongodb:27017/?directConnection=true")
     mongodb_uri_file: str | None = None
     mongodb_db_name: str = "mcp_gateway"
+    qe_enabled: bool = False
+    kms_provider: Literal["none", "local", "aws"] = "none"
+    qe_key_vault_namespace: str = "encryption.__keyVault"
+    crypt_shared_lib_path: str | None = None
+    qe_local_master_key: str = ""
+    qe_local_master_key_file: str | None = None
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_secret_access_key_file: str | None = None
+    aws_default_region: str = "us-east-1"
+    aws_kms_endpoint: str | None = None
+    aws_kms_key_arn: str = ""
+    aws_kms_key_arn_file: str | None = None
 
     ollama_base_url: str = "http://host.docker.internal:11434"
     ollama_model: str = "nomic-embed-text"
@@ -161,6 +176,9 @@ class Settings(BaseSettings):
             ("embedding_api_key_file", "embedding_api_key"),
             ("embedding_secret_file", "embedding_secret"),
             ("downstream_jwt_private_key_file", "downstream_jwt_private_key"),
+            ("qe_local_master_key_file", "qe_local_master_key"),
+            ("aws_secret_access_key_file", "aws_secret_access_key"),
+            ("aws_kms_key_arn_file", "aws_kms_key_arn"),
         ]
         for file_field, value_field in file_backed_fields:
             file_path = getattr(self, file_field)
@@ -226,6 +244,22 @@ class Settings(BaseSettings):
                 "Configure a production DOWNSTREAM_JWT_PRIVATE_KEY(_FILE); the bundled "
                 "dev signing key must not be used in production."
             )
+        if self.qe_enabled:
+            if self.kms_provider == "none":
+                raise ValueError("Set KMS_PROVIDER=local or KMS_PROVIDER=aws when QE is enabled.")
+            if self.kms_provider == "local":
+                if not self.qe_local_master_key:
+                    raise ValueError(
+                        "QE local mode requires QE_LOCAL_MASTER_KEY or QE_LOCAL_MASTER_KEY_FILE."
+                    )
+                try:
+                    decoded = base64.b64decode(self.qe_local_master_key, validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    raise ValueError("QE_LOCAL_MASTER_KEY must be valid base64.") from exc
+                if len(decoded) != 96:
+                    raise ValueError("QE_LOCAL_MASTER_KEY must decode to exactly 96 bytes.")
+            if self.kms_provider == "aws" and not self.aws_kms_key_arn:
+                raise ValueError("AWS KMS mode requires AWS_KMS_KEY_ARN or AWS_KMS_KEY_ARN_FILE.")
         return self
 
 
