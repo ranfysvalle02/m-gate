@@ -13,6 +13,7 @@ from database.mongo import (
     tenant_db_name,
 )
 from services.cache_manager import semantic_cache_index_spec
+from services.embedding_config import active_embedding_identity
 from services.guardrails import guardrail_signature_index_spec
 
 
@@ -105,7 +106,6 @@ async def ensure_tenant_ready(
 
 async def ensure_control_plane_indexes() -> None:
     control_db = get_control_database()
-    settings = get_settings()
     await control_db["tenants"].create_index("tenant_id", unique=True)
     await control_db["watcher_state"].create_index("updated_at")
     await control_db["session_context"].create_index("expires_at", expireAfterSeconds=0)
@@ -116,9 +116,10 @@ async def ensure_control_plane_indexes() -> None:
         unique=True,
     )
     await control_db["guardrail_signatures"].create_index("category")
+    _model_id, dimensions, embedding_version = active_embedding_identity()
     guardrail_index_spec = guardrail_signature_index_spec(
-        embedding_version=f"{settings.ollama_model}:{settings.ollama_dimensions}",
-        dimensions=settings.ollama_dimensions,
+        embedding_version=embedding_version,
+        dimensions=dimensions,
     )
     await upsert_search_index(
         control_db["guardrail_signatures"],
@@ -139,7 +140,6 @@ async def provision_tenant(
         guard=_provision_locks_guard,
     )
     async with provision_lock:
-        settings = get_settings()
         now = datetime.now(UTC)
         await ensure_control_plane_indexes()
 
@@ -178,10 +178,10 @@ async def provision_tenant(
         await tenant_db["tool_catalog"].create_index([("server", 1), ("name", 1)], unique=True)
         await tenant_db["routing_registry"].create_index("server", unique=True)
         await tenant_db["semantic_cache"].create_index("expires_at", expireAfterSeconds=0)
-        embedding_version = f"{settings.ollama_model}:{settings.ollama_dimensions}"
+        _model_id, dimensions, embedding_version = active_embedding_identity()
         cache_index_spec = semantic_cache_index_spec(
             embedding_version=embedding_version,
-            dimensions=settings.ollama_dimensions,
+            dimensions=dimensions,
         )
 
         await upsert_search_index(
@@ -194,7 +194,7 @@ async def provision_tenant(
         await ensure_tool_catalog_indexes(
             collection=tenant_db["tool_catalog"],
             wait_for_queryable=wait_for_queryable_indexes,
-            dimensions=settings.ollama_dimensions,
+            dimensions=dimensions,
         )
         _ready_tenants.add(tenant_id)
         return tenant_db_name(tenant_id)

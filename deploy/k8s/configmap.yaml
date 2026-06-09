@@ -10,6 +10,10 @@ data:
   JWT_ISSUER: https://example-issuer
   JWT_AUDIENCE: mdb-mcp-gateway
   JWKS_URI: https://example-issuer/.well-known/jwks.json
+  EMBEDDING_PROVIDER: ollama
   OLLAMA_MODEL: nomic-embed-text
   OLLAMA_BASE_URL: http://ollama.default.svc.cluster.local:11434
+  AZURE_OPENAI_API_VERSION: "2023-05-15"
+  # Cloud-provider API keys belong in the Secret (EMBEDDING_API_KEY), not here.
+  # The active embedding config can also be managed at runtime from the admin UI.
   ENABLE_METRICS: "true"

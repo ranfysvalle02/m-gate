@@ -24,6 +24,7 @@ from gateway.routers.health import router as health_router
 from gateway.routers.metrics import router as metrics_router
 from gateway.routers.rpc import router as rpc_router
 from gateway.routers.ui import router as ui_router
+from services.embedding_config import refresh_active_embedding_config
 from services.embeddings import embedding_version_for, get_embedding_service
 from services.proxy_registry import get_proxy_registry
 from services.registry_watcher import start_registry_watcher, stop_registry_watcher
@@ -71,11 +72,23 @@ def configure_tracing(app: FastAPI) -> None:
 async def app_lifespan(_: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     logger.info("Starting %s in %s mode.", settings.app_name, settings.environment)
-    logger.info(
-        "Active embedding version: %s",
-        embedding_version_for(get_embedding_service(settings)),
-    )
     await connect_to_mongo(settings)
+    # Load the persisted (admin-managed) embedding config before any provisioning
+    # so index dimensions and embedding_version reflect the active provider.
+    try:
+        active = await refresh_active_embedding_config(settings)
+        logger.info(
+            "Active embedding provider: %s (model=%s, dimensions=%d)",
+            active.provider,
+            active.model,
+            active.dimensions,
+        )
+    except Exception as exc:  # never block startup on an embedding provider hiccup
+        logger.warning("Could not refresh embedding config at startup: %s", exc)
+        logger.info(
+            "Active embedding version (fallback): %s",
+            embedding_version_for(get_embedding_service(settings)),
+        )
     if settings.auto_bootstrap:
         await ensure_control_plane_indexes()
         await provision_tenant(settings.default_tenant_id, wait_for_queryable_indexes=False)

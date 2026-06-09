@@ -134,6 +134,26 @@ def test_prod_admin_ui_requires_credentials():
         )
 
 
+def test_embedding_provider_defaults_to_ollama():
+    s = Settings()
+    assert s.embedding_provider == "ollama"
+    assert s.embedding_model is None
+    assert s.azure_openai_api_version == "2023-05-15"
+
+
+def test_embedding_secret_defaults_to_session_secret():
+    s = Settings(jwt_secret="abc1234567890")
+    # Falls back through admin_session_secret -> jwt_secret when unset.
+    assert s.embedding_secret == "abc1234567890"
+
+
+def test_embedding_api_key_is_file_backed(tmp_path):
+    key_file = tmp_path / "embed.key"
+    key_file.write_text("sk-from-file")
+    s = Settings(embedding_api_key_file=str(key_file))
+    assert s.embedding_api_key == "sk-from-file"
+
+
 def test_prod_admin_ui_with_strong_credentials_passes():
     s = Settings(
         environment="production",

@@ -61,7 +61,12 @@ async def ensure_tool_catalog_indexes(
         if collection is not None
         else get_tenant_database(settings.default_tenant_id)["tool_catalog"]
     )
-    vector_dimensions = dimensions or settings.ollama_dimensions
+    if dimensions:
+        vector_dimensions = dimensions
+    else:
+        from services.embedding_config import active_embedding_identity
+
+        vector_dimensions = active_embedding_identity()[1]
 
     vector_definition = {
         "fields": [

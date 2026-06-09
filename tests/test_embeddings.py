@@ -1,5 +1,6 @@
-"""Tests for the Ollama embedding service: HTTP behavior, caching (TTL + LRU),
-retry, and circuit breaker. HTTP is mocked with respx so no Ollama is needed.
+"""Tests for the embedding services: HTTP behavior, caching (TTL + LRU), retry,
+circuit breaker, runtime dimension detection, and every supported provider's
+request/response shape. HTTP is mocked with respx so no provider is needed.
 """
 
 from __future__ import annotations
@@ -9,7 +10,16 @@ import pytest
 import respx
 
 from config.settings import Settings
-from services.embeddings import EmbeddingUnavailableError, OllamaEmbeddingService
+from services.embedding_config import EmbeddingConfig
+from services.embeddings import (
+    AzureOpenAIEmbeddingService,
+    EmbeddingUnavailableError,
+    GeminiEmbeddingService,
+    OllamaEmbeddingService,
+    OpenAIEmbeddingService,
+    VoyageEmbeddingService,
+    build_provider_service,
+)
 
 EMBED_URL = "http://ollama-test:11434/api/embed"
 
@@ -105,3 +115,131 @@ def test_embedding_service_reports_identity():
     svc = OllamaEmbeddingService(settings=_settings(ollama_model="foo", ollama_dimensions=42))
     assert svc.model_id == "foo"
     assert svc.dimensions == 42
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_detect_dimensions_measures_probe_vector():
+    respx.post(EMBED_URL).mock(
+        return_value=httpx.Response(200, json={"embeddings": [[0.1, 0.2, 0.3, 0.4, 0.5]]})
+    )
+    svc = OllamaEmbeddingService(settings=_settings(ollama_dimensions=0))
+    assert await svc.detect_dimensions() == 5
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_provider_parses_data_and_sends_bearer():
+    captured: dict = {}
+
+    def _responder(request):
+        captured["auth"] = request.headers.get("authorization")
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"index": 1, "embedding": [0.4, 0.5]},
+                    {"index": 0, "embedding": [0.1, 0.2]},
+                ]
+            },
+        )
+
+    route = respx.post("https://api.openai.com/v1/embeddings").mock(side_effect=_responder)
+    svc = OpenAIEmbeddingService(
+        settings=_settings(), model="text-embedding-3-small", api_key="sk-test"
+    )
+    vectors = await svc.embed_texts(["a", "b"])
+    # Results are reordered by the provider's `index` field.
+    assert vectors == [[0.1, 0.2], [0.4, 0.5]]
+    assert captured["auth"] == "Bearer sk-test"
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_openai_missing_key_raises_unavailable():
+    svc = OpenAIEmbeddingService(settings=_settings(), model="text-embedding-3-small", api_key="")
+    with pytest.raises(EmbeddingUnavailableError):
+        await svc.embed_text("x")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_azure_openai_uses_deployment_url_and_api_key_header():
+    captured: dict = {}
+
+    def _responder(request):
+        captured["url"] = str(request.url)
+        captured["api_key"] = request.headers.get("api-key")
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0, 2.0, 3.0]}]})
+
+    respx.post("https://my-res.openai.azure.com/openai/deployments/embed-dep/embeddings").mock(
+        side_effect=_responder
+    )
+    svc = AzureOpenAIEmbeddingService(
+        settings=_settings(),
+        deployment="embed-dep",
+        api_key="azure-key",
+        endpoint="https://my-res.openai.azure.com",
+        api_version="2023-05-15",
+    )
+    vector = await svc.embed_text("hello")
+    assert vector == [1.0, 2.0, 3.0]
+    assert "api-version=2023-05-15" in captured["url"]
+    assert captured["api_key"] == "azure-key"
+    assert svc.model_id == "azure/embed-dep"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_voyage_provider_parses_data():
+    respx.post("https://api.voyageai.com/v1/embeddings").mock(
+        return_value=httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.7, 0.8]}]})
+    )
+    svc = VoyageEmbeddingService(settings=_settings(), model="voyage-3", api_key="pa-test")
+    assert await svc.embed_text("hi") == [0.7, 0.8]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_gemini_provider_parses_values_and_uses_header_auth():
+    captured: dict = {}
+
+    def _responder(request):
+        captured["url"] = str(request.url)
+        captured["api_key_header"] = request.headers.get("x-goog-api-key")
+        return httpx.Response(200, json={"embeddings": [{"values": [0.1, 0.2, 0.3]}]})
+
+    respx.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents"
+    ).mock(side_effect=_responder)
+    svc = GeminiEmbeddingService(settings=_settings(), model="text-embedding-004", api_key="g-key")
+    assert await svc.embed_text("hello") == [0.1, 0.2, 0.3]
+    # The key must never appear in the URL (it would leak into error strings/logs).
+    assert "g-key" not in captured["url"]
+    assert captured["api_key_header"] == "g-key"
+
+
+def test_build_provider_service_selects_correct_class():
+    settings = _settings()
+    cases = {
+        "ollama": OllamaEmbeddingService,
+        "openai": OpenAIEmbeddingService,
+        "azure_openai": AzureOpenAIEmbeddingService,
+        "voyage": VoyageEmbeddingService,
+        "gemini": GeminiEmbeddingService,
+    }
+    for provider, cls in cases.items():
+        config = EmbeddingConfig(
+            provider=provider,
+            model="m",
+            api_key="k",
+            azure_endpoint="https://x.openai.azure.com",
+            azure_deployment="dep",
+            dimensions=4,
+        )
+        assert isinstance(build_provider_service(config, settings), cls)
+
+
+def test_build_provider_service_rejects_unknown_provider():
+    with pytest.raises(ValueError, match="Unsupported embedding provider"):
+        build_provider_service(EmbeddingConfig(provider="bogus", model="m"), _settings())

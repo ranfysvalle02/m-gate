@@ -3,13 +3,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import UTC, datetime
 
 from config.settings import get_settings
-from database.mongo import connect_to_mongo, disconnect_from_mongo, get_control_database
-from database.seed import guardrail_signatures_seed, routing_registry_seed, seed_bootstrap_data
-from services.embeddings import embedding_version_for, get_embedding_service
-from services.guardrails import guardrail_signature_lookup_filter
+from database.mongo import connect_to_mongo, disconnect_from_mongo
+from database.seed import routing_registry_seed, seed_bootstrap_data
+from services.embedding_config import refresh_active_embedding_config
+from services.guardrails import resync_guardrail_signatures
 from services.proxy_registry import get_proxy_registry
 from services.tenant_provisioner import ensure_control_plane_indexes, provision_tenant
 
@@ -39,35 +38,13 @@ async def _sync_catalog() -> None:
 
 
 async def _sync_guardrail_signatures() -> None:
-    settings = get_settings()
-    embedding_service = get_embedding_service(settings)
-    embedding_version = embedding_version_for(embedding_service)
-    collection = get_control_database()["guardrail_signatures"]
-    for signature in guardrail_signatures_seed():
-        text = str(signature["text"])
-        embedding = await embedding_service.embed_text(text)
-        now = datetime.now(UTC)
-        await collection.update_one(
-            {"_id": signature["_id"]},
-            {
-                "$set": {
-                    **signature,
-                    "embedding": embedding,
-                    "embedding_version": embedding_version,
-                    **guardrail_signature_lookup_filter(embedding_version=embedding_version),
-                    "updated_at": now,
-                },
-                "$setOnInsert": {"created_at": now},
-            },
-            upsert=True,
-        )
-    logger.info(
-        "Guardrail signature corpus synchronized (%d records).", len(guardrail_signatures_seed())
-    )
+    count = await resync_guardrail_signatures()
+    logger.info("Guardrail signature corpus synchronized (%d records).", count)
 
 
 async def main() -> None:
     await _wait_for_mongo()
+    await refresh_active_embedding_config()
     await ensure_control_plane_indexes()
     await provision_tenant(get_settings().default_tenant_id, wait_for_queryable_indexes=True)
     await seed_bootstrap_data()

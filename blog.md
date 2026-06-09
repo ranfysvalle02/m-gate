@@ -6,8 +6,10 @@
 > semantic cache, application-side RRF fallback, request ID + metrics
 > observability, paginated discovery (`initialize` + cursor-based
 > `tools/list`), layered guardrails (regex floor + semantic signature corpus +
-> optional NER), and semantic-cache embedding-version migration controls
-> (`status`/`purge`/`reembed`).
+> optional NER), semantic-cache embedding-version migration controls
+> (`status`/`purge`/`reembed`), and pluggable embedding providers (Ollama,
+> OpenAI, Azure OpenAI, Voyage AI, Gemini) configurable at runtime from the admin
+> panel with auto-detected vector dimensions and background reprovisioning.
 
 > **TL;DR:** Routing an agent to its tools by *meaning* — embed the catalog, hand back only the few tools a task needs — already cut the per-turn token bill ~8.8x in an earlier experiment of ours. But semantic-only retrieval has a blind spot: it fumbles the *exact* tokens agents constantly use — a tool name, an error code, an order ID. The upgrade is **hybrid search**: run a lexical (BM25) arm *and* a vector arm and fuse them with Reciprocal Rank Fusion, so keyword precision and semantic intent rank *together*. Here's why that's the centerpiece and not a footnote: built the usual way, hybrid search means standing up a vector database **and** a search engine **and** a sync pipeline to keep them honest — three systems for one question. **MongoDB Atlas does it in a single `$rankFusion` query over a single collection.** And everything else a real gateway needs — verified-identity scope, resiliency, catalog freshness, an audit trail that doubles as a labeled dataset — gets *simpler* because retrieval, metadata, and analytics are all just documents on that one engine.
 
@@ -312,6 +314,19 @@ The catalog uses a deployment-driven mutation lifecycle — changes flow through
 * **Differential Hashing:** The sync script introspects the available tools and generates a hash of their schemas. If the tool's name, description, and parameters haven't changed, the update is skipped entirely.
 * **Idempotent Bulk Upserts:** When a change *is* detected, the script calls the embedding API to generate a fresh vector for the updated description, packages the metadata, and executes an idempotent `bulkWrite()` upsert into MongoDB.
 * **Zero-Downtime Indexing:** Atlas Search and Vector Search index updates happen asynchronously in the background. The gateway continues serving the old schemas until the new documents land. Zero application downtime, zero hot-path overhead.
+
+### Swappable embedding providers (without re-architecting)
+
+Every vector in this design — the tool catalog, the semantic cache, the guardrail signature corpus — is produced by *one* embedding model. That model is a dependency you will eventually want to change: a local `nomic-embed-text` on Ollama is perfect for dev, but production may want OpenAI, Azure OpenAI, Voyage AI, or Gemini for quality, latency, or compliance reasons. The trap is hard-coding the provider (and its vector width) so deeply that swapping it becomes a migration project.
+
+The gateway treats the embedding backend as **runtime configuration**, not a deploy-time constant:
+
+* **Provider-agnostic, no SDK sprawl.** All five providers (Ollama, OpenAI, Azure OpenAI, Voyage AI, Gemini) are reached over plain HTTP behind one interface, sharing the same cache, retry, and circuit-breaker machinery. There's no vendor SDK to pin or upgrade.
+* **Dimensions are discovered, not declared.** Different models emit different vector widths (768, 1024, 1536, 3072…), and an Atlas vector index's `numDimensions` is fixed at creation. Rather than make an operator look that number up and risk a mismatch, the gateway embeds a one-word probe string when a config is applied and *measures* the width. The stored dimension is therefore always exactly what the provider returns — the index can't drift out of sync with the data.
+* **Configure it from the admin panel.** Provider, model, base URL, and API key are editable at `/ui` (platform-admin only). Keys are encrypted at rest in the control DB and masked in every API response; a dry-run "test" button validates reachability and reports the detected width before you commit.
+* **Switching providers is itself a catalog mutation — handled the same way.** Because changing the model invalidates *every* stored vector, applying a new config kicks off a background reprovision that re-embeds each tenant's catalog, drops and recreates the vector indexes with the new width, refreshes the semantic cache, and re-embeds the guardrail corpus — with progress tracked in a status document the UI polls. The same "mutate offline, serve continuously, degrade to lexical while indexes rebuild" discipline from this section applies; the embedding swap is just the largest mutation the lifecycle has to absorb.
+
+The throughline holds here too: because retrieval, configuration, secrets, and reprovision status are all just documents on the one engine, changing the model that underpins the whole vector layer is an operation you run from a web form — not a cross-system data migration.
 
 ---
 

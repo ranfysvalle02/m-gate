@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Embeddings
+- Added pluggable, admin-configurable embedding providers: Ollama (default),
+  OpenAI, Azure OpenAI, Voyage AI, and Google Gemini, implemented over `httpx`
+  behind a shared `BaseHttpEmbeddingService` (cache + retry + circuit breaker).
+- Vector width is now detected at runtime by embedding a probe string
+  (`EMBEDDING_PROBE_TEXT`) instead of being hand-configured; index dimensions and
+  `embedding_version` flow from the active provider via `active_embedding_identity()`.
+- Added a runtime, gateway-wide embedding configuration persisted in the control
+  DB (`gateway_config`) with API keys encrypted at rest (Fernet, keyed by
+  `EMBEDDING_SECRET`) and masked in all API responses. The active provider is
+  surfaced through a stable proxy so existing call sites follow config changes.
+- Added platform-admin embedding endpoints: `GET/PUT /admin/embedding`,
+  `POST /admin/embedding/test` (dry-run reachability + dimension detection), and
+  `GET /admin/embedding/status`, plus an **Embeddings** section in the admin UI.
+- Applying a config change auto-reprovisions the embedding space in the
+  background: re-embeds every tenant's `tool_catalog`, drops/recreates the
+  `hybrid-vector-search` indexes with the new `numDimensions`, refreshes the
+  semantic cache, and re-embeds the guardrail signature corpus. Progress is
+  tracked in `control_db.embedding_status` and polled by the UI.
+- Hardening: the stored dimension is always the width the provider actually
+  returns (detected on every apply), so a vector index can never drift out of
+  sync with its data; the manual dimension override was removed accordingly.
+- Hardening: Gemini authenticates via the `x-goog-api-key` header instead of a
+  `?key=` query param, so API keys never leak into URLs, `httpx` error strings,
+  logs, or status documents.
+- Hardening: embedding reprovision is single-flight — a config change is rejected
+  with `409` while a run is in progress, and a crashed/stale `running` job is
+  reclaimed after one hour so it can never lock out future runs.
+- New settings: `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_BASE_URL`,
+  `EMBEDDING_API_KEY(_FILE)`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`,
+  `AZURE_OPENAI_DEPLOYMENT`, `EMBEDDING_PROBE_TEXT`, and `EMBEDDING_SECRET(_FILE)`.
+  The legacy `OLLAMA_*` variables remain supported for the default provider.
+
 ### Security and correctness
 - Added auth modes (`disabled`, `hs256`, `jwks`) with production safety validation.
 - Implemented JWKS-based token verification with local offline JWKS support.

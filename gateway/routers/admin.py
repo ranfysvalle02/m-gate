@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -13,6 +14,10 @@ from models.admin import (
     CatalogItemResponse,
     CatalogListRequest,
     CatalogListResponse,
+    EmbeddingConfigResponse,
+    EmbeddingConfigUpdateRequest,
+    EmbeddingTestRequest,
+    EmbeddingTestResponse,
     ServerPatchRequest,
     ServerUpsertRequest,
     StatsResponse,
@@ -25,6 +30,25 @@ from models.admin import (
     WhoAmIResponse,
 )
 from services.cache_migration import SemanticCacheMigrationService
+from services.embedding_config import (
+    EmbeddingConfig,
+    default_model_for,
+    load_persisted_config,
+    refresh_active_embedding_config,
+    save_persisted_config,
+    validate_config,
+)
+from services.embedding_reprovision import (
+    ReprovisionInProgressError,
+    get_reprovision_status,
+    is_reprovision_running,
+    trigger_reprovision,
+)
+from services.embeddings import (
+    SUPPORTED_PROVIDERS,
+    build_provider_service,
+    embedding_version_for,
+)
 from services.hybrid_search import HybridSearchService
 from services.proxy_registry import get_proxy_registry
 from services.registry_watcher import get_catalog_version
@@ -39,6 +63,14 @@ hybrid_search_service = HybridSearchService()
 def _is_platform_admin(request: Request) -> bool:
     roles = set(getattr(request.state, "roles", []))
     return settings.platform_admin_role in roles
+
+
+def _require_platform_admin(request: Request) -> None:
+    if not _is_platform_admin(request):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Embedding configuration requires the platform-admin role.",
+        )
 
 
 def _resolve_target_tenant(request: Request, requested_tenant: str | None = None) -> str:
@@ -397,3 +429,167 @@ async def admin_search(request: Request, payload: AdminSearchRequest) -> dict[st
         mode=payload.mode,
     )
     return {"tenant_id": target_tenant, "mode": payload.mode, "items": items}
+
+
+def _merge_embedding_config(
+    current: EmbeddingConfig,
+    payload: EmbeddingConfigUpdateRequest | EmbeddingTestRequest,
+) -> EmbeddingConfig:
+    """Overlay a request onto the current config without losing the stored key.
+
+    - A ``None`` model on a provider switch resolves the new provider's default.
+    - ``api_key=None`` keeps the existing key; ``""`` clears it; otherwise replace.
+    """
+    if payload.model is not None:
+        model = payload.model
+    elif payload.provider != current.provider:
+        model = default_model_for(payload.provider, settings)
+    else:
+        model = current.model
+
+    api_key = current.api_key if payload.api_key is None else payload.api_key
+
+    base_url: str | None
+    if payload.base_url is not None:
+        base_url = payload.base_url
+    elif payload.provider == current.provider:
+        base_url = current.base_url
+    else:
+        base_url = None
+
+    return EmbeddingConfig(
+        provider=payload.provider,
+        model=model,
+        base_url=base_url,
+        dimensions=0,
+        api_key=api_key,
+        azure_endpoint=(
+            payload.azure_endpoint if payload.azure_endpoint is not None else current.azure_endpoint
+        ),
+        azure_api_version=payload.azure_api_version or current.azure_api_version,
+        azure_deployment=(
+            payload.azure_deployment
+            if payload.azure_deployment is not None
+            else current.azure_deployment
+        ),
+    )
+
+
+def _embedding_config_response(
+    config: EmbeddingConfig,
+    reprovision: dict[str, Any] | None = None,
+) -> EmbeddingConfigResponse:
+    service = build_provider_service(config, settings)
+    return EmbeddingConfigResponse(
+        provider=config.provider,  # type: ignore[arg-type]
+        model=config.model or (config.azure_deployment or ""),
+        base_url=config.base_url,
+        dimensions=config.dimensions,
+        embedding_version=embedding_version_for(service),
+        api_key_set=config.has_api_key,
+        api_key_hint=config.api_key_hint,
+        azure_endpoint=config.azure_endpoint,
+        azure_api_version=config.azure_api_version,
+        azure_deployment=config.azure_deployment,
+        supported_providers=list(SUPPORTED_PROVIDERS),
+        source=config.source,
+        updated_at=config.updated_at,
+        updated_by=config.updated_by,
+        reprovision=reprovision or {},
+    )
+
+
+@router.get("/embedding", response_model=EmbeddingConfigResponse)
+async def get_embedding_config(request: Request) -> EmbeddingConfigResponse:
+    _require_platform_admin(request)
+    config = await load_persisted_config(settings)
+    reprovision = await get_reprovision_status()
+    return _embedding_config_response(config, reprovision)
+
+
+@router.put("/embedding", response_model=EmbeddingConfigResponse)
+async def update_embedding_config(
+    request: Request,
+    payload: EmbeddingConfigUpdateRequest,
+) -> EmbeddingConfigResponse:
+    _require_platform_admin(request)
+    user_id = str(getattr(request.state, "user_id", "admin"))
+
+    # Refuse to mutate the active embedding config while a reprovision is running:
+    # the in-flight job reads the active provider, so swapping it mid-run would
+    # produce an inconsistent vector space across tenants.
+    if await is_reprovision_running():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An embedding reprovision is in progress; retry once it completes.",
+        )
+
+    current = await load_persisted_config(settings)
+    candidate = _merge_embedding_config(current, payload)
+
+    try:
+        validate_config(candidate)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Validate the provider for real and detect the actual vector width by probing
+    # it. This both rejects an unusable config before anything is persisted and
+    # guarantees the stored dimension always equals the provider's real output
+    # length (so Atlas vector indexes can never drift out of sync).
+    service = build_provider_service(candidate, settings)
+    try:
+        detected = await service.detect_dimensions()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Embedding provider validation failed: {exc}",
+        ) from exc
+    candidate = replace(candidate, dimensions=detected)
+
+    await save_persisted_config(candidate, settings, updated_by=user_id)
+    refreshed = await refresh_active_embedding_config(settings)
+
+    reprovision: dict[str, Any] = {}
+    if payload.reprovision:
+        try:
+            reprovision = await trigger_reprovision(started_by=user_id)
+        except ReprovisionInProgressError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return _embedding_config_response(refreshed, reprovision)
+
+
+@router.post("/embedding/test", response_model=EmbeddingTestResponse)
+async def test_embedding_config(
+    request: Request,
+    payload: EmbeddingTestRequest,
+) -> EmbeddingTestResponse:
+    _require_platform_admin(request)
+    current = await load_persisted_config(settings)
+    candidate = _merge_embedding_config(current, payload)
+    try:
+        validate_config(candidate)
+        service = build_provider_service(candidate, settings)
+        dims = await service.detect_dimensions()
+        version = f"{service.model_id}:{dims}"
+    except Exception as exc:
+        return EmbeddingTestResponse(
+            ok=False,
+            provider=candidate.provider,
+            model=candidate.model or (candidate.azure_deployment or ""),
+            message=str(exc),
+        )
+    return EmbeddingTestResponse(
+        ok=True,
+        provider=candidate.provider,
+        model=service.model_id,
+        dimensions=dims,
+        embedding_version=version,
+        message="Embedding provider reachable.",
+    )
+
+
+@router.get("/embedding/status")
+async def get_embedding_status(request: Request) -> dict[str, Any]:
+    _require_platform_admin(request)
+    return await get_reprovision_status()

@@ -137,6 +137,10 @@ fusion was computed:
 
 ## Quick Start (Implemented)
 
+> Deploying for real? See **[DEPLOYMENT.md](DEPLOYMENT.md)** for Docker Compose,
+> single-container, Kubernetes, and Helm paths, plus an embeddings setup and
+> production hardening checklist.
+
 This repository now includes a working end-to-end MCP Gateway with:
 
 - FastAPI + FastMCP gateway mounted at `http://localhost:8000/mcp`
@@ -147,12 +151,13 @@ This repository now includes a working end-to-end MCP Gateway with:
 - **GA-safe hybrid fallback**: application-side RRF keeps hybrid retrieval working when `$rankFusion` preview features are unavailable
 - **Resiliency**: a hard downstream deadline (`DOWNSTREAM_TIMEOUT_MS`, default 2000ms) with protocol-safe JSON-RPC error frames
 - **Embedding resiliency**: retries + circuit breaker + lexical fallback when embedding providers are unavailable
+- **Pluggable, admin-configurable embeddings**: Ollama, OpenAI, Azure OpenAI, Voyage AI, and Google Gemini — switchable at runtime from the admin panel, with vector width auto-detected per provider (see [Embeddings](#embeddings))
 - **Layered guardrails**: regex floor + optional semantic injection classifier over a versioned `guardrail_signatures` vector corpus, plus optional Presidio NER redaction
 - **Semantic cache model provenance**: cache entries are stamped with `embedding_model` / `embedding_dim` / `embedding_version`, with version-aware lookups and migration tooling
-- Ollama embeddings (`nomic-embed-text`) through `http://host.docker.internal:11434`
+- Default Ollama embeddings (`nomic-embed-text`) through `http://host.docker.internal:11434`
 - Demo downstream MCP servers: weather and orders
 - **Observability**: request IDs, JSON logs, Prometheus `/metrics`, OpenTelemetry tracing (`ENABLE_TRACING=true`) with spans around RPC handling and downstream hops, and health split (`/health/live`, `/health/ready`)
-- **Delivery artifacts**: k8s manifests, Helm chart, CI workflow (lint + format + types + 80% coverage gate), pre-commit, Ruff, and MyPy configuration
+- **Delivery artifacts**: k8s manifests, Helm chart, CI workflow (lint + format + types + 82% coverage gate), pre-commit, Ruff, and MyPy configuration
 
 ### Prerequisites
 
@@ -313,6 +318,65 @@ Disable the UI with:
 ADMIN_UI_ENABLED=false
 ```
 
+### Embeddings
+
+Embeddings power vector and hybrid search, the semantic cache, and the semantic
+guardrail classifier. The provider is **pluggable** and can be configured two
+ways, with the control DB taking precedence over the environment:
+
+1. **Environment** (boot-time default).
+2. **Admin panel** at `/ui` → **Embeddings** (runtime, persisted, recommended).
+
+Supported providers:
+
+| Provider | `EMBEDDING_PROVIDER` | Auth | Default model |
+| --- | --- | --- | --- |
+| Ollama (local) | `ollama` | none | `nomic-embed-text` |
+| OpenAI | `openai` | `EMBEDDING_API_KEY` | `text-embedding-3-small` |
+| Azure OpenAI | `azure_openai` | `EMBEDDING_API_KEY` + endpoint/deployment | (deployment) |
+| Voyage AI | `voyage` | `EMBEDDING_API_KEY` | `voyage-3` |
+| Google Gemini | `gemini` | `EMBEDDING_API_KEY` | `text-embedding-004` |
+
+Key behaviors:
+
+- **Dimensions are auto-detected** by embedding a short probe string when a
+  config is applied — you never hand-configure vector widths, and the stored
+  width is always exactly what the provider returns (so Atlas vector indexes
+  can't drift out of sync with the data).
+- **API keys are encrypted at rest** in the control DB (Fernet, keyed by
+  `EMBEDDING_SECRET`, falling back to `ADMIN_SESSION_SECRET` / `JWT_SECRET`) and
+  are always masked in API responses. Prefer a file mount via
+  `EMBEDDING_API_KEY_FILE` / `EMBEDDING_SECRET_FILE` in production.
+- **Changing the provider/model/dimensions auto-reprovisions** everything that
+  depends on the embedding space: it re-embeds every tenant's `tool_catalog`,
+  drops and recreates the `hybrid-vector-search` indexes with the new
+  `numDimensions`, refreshes the semantic cache, and re-embeds the control-plane
+  guardrail signature corpus. Progress is tracked in `control_db.embedding_status`
+  and surfaced live in the panel.
+- Configuration is **global** (gateway-wide), so all tenants stay on a single,
+  consistent embedding space.
+
+Admin endpoints (platform-admin only):
+
+```text
+GET    /admin/embedding          # current config (key masked) + reprovision status
+PUT    /admin/embedding          # validate, persist, reload, and reprovision
+POST   /admin/embedding/test     # dry-run: reachability + detected dimensions
+GET    /admin/embedding/status   # reprovision progress
+```
+
+Example: switch to OpenAI from the CLI-style API (the gateway detects the width):
+
+```bash
+curl -X PUT http://localhost:8000/admin/embedding \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"provider":"openai","model":"text-embedding-3-small","api_key":"sk-..."}'
+```
+
+> Switching providers is a heavy operation (re-embedding + index rebuilds). It runs
+> in the background and search degrades gracefully (lexical fallback) while indexes
+> rebuild.
+
 ### Standalone gateway container
 
 For single-container deployment, point the gateway at MongoDB and enable startup bootstrap:
@@ -338,7 +402,7 @@ change streams). A plain standalone `mongod` is not sufficient.
 
 The suite has two tiers.
 
-**Unit tier (132 tests, fully offline)** — an in-memory async MongoDB fake and a
+**Unit tier (fully offline)** — an in-memory async MongoDB fake and a
 deterministic embedding stub (`tests/fakes.py`) stand in for Atlas and Ollama,
 and downstream HTTP is mocked with `respx`. No external services required:
 
@@ -351,7 +415,7 @@ To reproduce the CI quality gate locally:
 
 ```bash
 ruff check . && ruff format --check . && mypy .
-pytest -q -m "not integration and not load" --cov --cov-report=term-missing --cov-fail-under=80
+pytest -q -m "not integration and not load" --cov --cov-report=term-missing --cov-fail-under=82
 ```
 
 **Integration tier (18 tests, real stack)** — runs the actual `$rankFusion` /

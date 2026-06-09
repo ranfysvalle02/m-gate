@@ -57,6 +57,22 @@ def test_ui_login_sets_session_cookie(monkeypatch, reset_settings):
     assert "Admin Console" in home.text
 
 
+def test_ui_home_includes_embeddings_section(monkeypatch, reset_settings):
+    monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
+    monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
+    client = TestClient(_build_ui_app())
+    client.post(
+        "/ui/login",
+        data={"email": "demo@demo.com", "password": "demo-password"},
+        follow_redirects=False,
+    )
+    home = client.get("/ui/")
+    assert home.status_code == 200
+    assert "Embeddings" in home.text
+    assert "Active Provider" in home.text
+
+
 def test_create_app_omits_ui_routes_when_disabled(monkeypatch, reset_settings):
     monkeypatch.setenv("ADMIN_UI_ENABLED", "false")
     from gateway.app import create_app

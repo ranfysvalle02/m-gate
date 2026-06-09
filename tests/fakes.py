@@ -180,6 +180,9 @@ class FakeCollection:
     async def update_search_index(self, name: str, definition: dict[str, Any]) -> None:
         self._search_indexes[name] = {"name": name, "definition": definition, "queryable": True}
 
+    async def drop_search_index(self, name: str) -> None:
+        self._search_indexes.pop(name, None)
+
     async def list_search_indexes(self, name: str | None = None) -> _FakeCursor:
         rows = list(self._search_indexes.values())
         if name is not None:
@@ -320,6 +323,10 @@ class FakeEmbeddingService:
 
     async def embed_texts(self, texts):
         return [await self.embed_text(t) for t in texts]
+
+    async def detect_dimensions(self) -> int:
+        vector = await self.embed_text("dimension probe")
+        return len(vector)
 
 
 _WORD_RE = re.compile(r"[a-z0-9]+")

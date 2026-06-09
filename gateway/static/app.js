@@ -9,6 +9,7 @@ window.adminConsole = function adminConsole(config) {
       { key: "catalog", label: "Tool Catalog" },
       { key: "telemetry", label: "Telemetry" },
       { key: "search", label: "Search Playground" },
+      { key: "embeddings", label: "Embeddings" },
       { key: "account", label: "Account" },
     ],
     activeSection: "dashboard",
@@ -26,7 +27,24 @@ window.adminConsole = function adminConsole(config) {
         mode: "hybrid",
         limit: 10,
       },
+      embedding: {
+        provider: "ollama",
+        model: "",
+        base_url: "",
+        api_key: "",
+        azure_endpoint: "",
+        azure_api_version: "",
+        azure_deployment: "",
+        reprovision: true,
+      },
     },
+    embeddingProviders: [
+      { value: "ollama", label: "Ollama (local)" },
+      { value: "openai", label: "OpenAI" },
+      { value: "azure_openai", label: "Azure OpenAI" },
+      { value: "voyage", label: "Voyage AI" },
+      { value: "gemini", label: "Google Gemini" },
+    ],
     state: {
       tenantId: config.defaultTenantId,
       tenantOptions: [config.defaultTenantId],
@@ -37,8 +55,13 @@ window.adminConsole = function adminConsole(config) {
       catalog: { items: [] },
       telemetry: { items: [] },
       searchResults: [],
+      embedding: null,
+      embeddingStatus: null,
+      embeddingTest: null,
+      embeddingSaving: false,
       errorMessage: "",
     },
+    _embeddingPoll: null,
 
     async init() {
       try {
@@ -129,6 +152,7 @@ window.adminConsole = function adminConsole(config) {
         if (this.activeSection === "servers") await this.loadServers();
         if (this.activeSection === "catalog") await this.loadCatalog();
         if (this.activeSection === "telemetry") await this.loadTelemetry();
+        if (this.activeSection === "embeddings") await this.loadEmbedding();
       } catch (error) {
         this.setError(error);
       }
@@ -298,6 +322,114 @@ window.adminConsole = function adminConsole(config) {
       } catch (error) {
         this.setError(error);
       }
+    },
+
+    embeddingNeedsApiKey() {
+      return ["openai", "azure_openai", "voyage", "gemini"].includes(
+        this.forms.embedding.provider,
+      );
+    },
+
+    embeddingIsAzure() {
+      return this.forms.embedding.provider === "azure_openai";
+    },
+
+    embeddingIsRunning() {
+      return this.state.embeddingStatus?.state === "running";
+    },
+
+    _embeddingPayload() {
+      const form = this.forms.embedding;
+      const payload = { provider: form.provider };
+      if (form.model) payload.model = form.model;
+      if (form.base_url) payload.base_url = form.base_url;
+      // Only send api_key when the operator typed one; blank preserves the stored key.
+      if (form.api_key) payload.api_key = form.api_key;
+      if (this.embeddingIsAzure()) {
+        if (form.azure_endpoint) payload.azure_endpoint = form.azure_endpoint;
+        if (form.azure_api_version) payload.azure_api_version = form.azure_api_version;
+        if (form.azure_deployment) payload.azure_deployment = form.azure_deployment;
+      }
+      return payload;
+    },
+
+    async loadEmbedding() {
+      this.clearError();
+      try {
+        this.state.embedding = await this.apiRequest("/admin/embedding", {
+          includeTenant: false,
+        });
+        this.state.embeddingStatus = this.state.embedding.reprovision || null;
+        const cfg = this.state.embedding;
+        this.forms.embedding.provider = cfg.provider || "ollama";
+        this.forms.embedding.model = cfg.model || "";
+        this.forms.embedding.base_url = cfg.base_url || "";
+        this.forms.embedding.azure_endpoint = cfg.azure_endpoint || "";
+        this.forms.embedding.azure_api_version = cfg.azure_api_version || "";
+        this.forms.embedding.azure_deployment = cfg.azure_deployment || "";
+        this.forms.embedding.api_key = "";
+        if (this.embeddingIsRunning()) this._startEmbeddingPoll();
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    async testEmbedding() {
+      this.clearError();
+      this.state.embeddingTest = null;
+      try {
+        this.state.embeddingTest = await this.apiRequest("/admin/embedding/test", {
+          method: "POST",
+          includeTenant: false,
+          body: this._embeddingPayload(),
+        });
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    async applyEmbedding() {
+      this.clearError();
+      this.state.embeddingTest = null;
+      this.state.embeddingSaving = true;
+      try {
+        const payload = this._embeddingPayload();
+        payload.reprovision = this.forms.embedding.reprovision;
+        this.state.embedding = await this.apiRequest("/admin/embedding", {
+          method: "PUT",
+          includeTenant: false,
+          body: payload,
+        });
+        this.state.embeddingStatus = this.state.embedding.reprovision || null;
+        this.forms.embedding.api_key = "";
+        if (this.embeddingIsRunning()) this._startEmbeddingPoll();
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.embeddingSaving = false;
+      }
+    },
+
+    async refreshEmbeddingStatus() {
+      try {
+        this.state.embeddingStatus = await this.apiRequest("/admin/embedding/status", {
+          includeTenant: false,
+        });
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    _startEmbeddingPoll() {
+      if (this._embeddingPoll) return;
+      this._embeddingPoll = setInterval(async () => {
+        await this.refreshEmbeddingStatus();
+        if (!this.embeddingIsRunning()) {
+          clearInterval(this._embeddingPoll);
+          this._embeddingPoll = null;
+          await this.loadEmbedding();
+        }
+      }, 3000);
     },
   };
 };

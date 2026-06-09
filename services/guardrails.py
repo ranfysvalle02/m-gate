@@ -5,10 +5,12 @@ import hashlib
 import re
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from config.settings import Settings, get_settings
 from database.mongo import get_control_database
+from database.seed import guardrail_signatures_seed
 from services.embeddings import EmbeddingService, embedding_version_for, get_embedding_service
 
 try:
@@ -78,6 +80,43 @@ def guardrail_signature_index_spec(*, embedding_version: str, dimensions: int) -
             ]
         },
     }
+
+
+async def resync_guardrail_signatures(
+    *,
+    embedding_service: EmbeddingService | None = None,
+    settings: Settings | None = None,
+) -> int:
+    """(Re-)embed the seed guardrail signature corpus with the active provider.
+
+    Used by both the bootstrap script and the embedding-reprovision orchestrator
+    so the control-plane guardrail vectors always match the active embedding
+    model/version. Returns the number of signatures written.
+    """
+    settings = settings or get_settings()
+    service = embedding_service or get_embedding_service(settings)
+    version = embedding_version_for(service)
+    collection = get_control_database()["guardrail_signatures"]
+    signatures = guardrail_signatures_seed()
+    for signature in signatures:
+        text = str(signature["text"])
+        embedding = await service.embed_text(text)
+        now = datetime.now(UTC)
+        await collection.update_one(
+            {"_id": signature["_id"]},
+            {
+                "$set": {
+                    **signature,
+                    "embedding": embedding,
+                    "embedding_version": version,
+                    **guardrail_signature_lookup_filter(embedding_version=version),
+                    "updated_at": now,
+                },
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
+    return len(signatures)
 
 
 def _luhn_checksum_is_valid(card_number: str) -> bool:

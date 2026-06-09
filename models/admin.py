@@ -125,3 +125,58 @@ class AdminSearchRequest(BaseModel):
     mode: Literal["hybrid", "vector", "text"] = "hybrid"
     vector_weight: float | None = None
     text_weight: float | None = None
+
+
+EmbeddingProvider = Literal["ollama", "openai", "azure_openai", "voyage", "gemini"]
+
+
+class EmbeddingConfigResponse(BaseModel):
+    provider: EmbeddingProvider
+    model: str
+    base_url: str | None = None
+    dimensions: int
+    embedding_version: str
+    api_key_set: bool = False
+    api_key_hint: str | None = None
+    azure_endpoint: str | None = None
+    azure_api_version: str | None = None
+    azure_deployment: str | None = None
+    supported_providers: list[str] = Field(default_factory=list)
+    source: str = "env"
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+    reprovision: dict[str, Any] = Field(default_factory=dict)
+
+
+class EmbeddingConfigUpdateRequest(BaseModel):
+    provider: EmbeddingProvider
+    # None means "leave unchanged"; for a provider switch the per-provider default
+    # model is applied automatically.
+    model: str | None = None
+    base_url: str | None = None
+    # None preserves the stored key; "" clears it; any other value replaces it.
+    api_key: str | None = None
+    azure_endpoint: str | None = None
+    azure_api_version: str | None = None
+    azure_deployment: str | None = None
+    # Whether to kick off the catalog/cache/guardrail reprovision after saving.
+    reprovision: bool = True
+
+
+class EmbeddingTestRequest(BaseModel):
+    provider: EmbeddingProvider
+    model: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    azure_endpoint: str | None = None
+    azure_api_version: str | None = None
+    azure_deployment: str | None = None
+
+
+class EmbeddingTestResponse(BaseModel):
+    ok: bool
+    provider: str
+    model: str
+    dimensions: int | None = None
+    embedding_version: str | None = None
+    message: str

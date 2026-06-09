@@ -24,10 +24,13 @@ def reset_settings():
     re-reads the environment instead of returning a stale lru_cache hit.
     """
     from config.settings import get_settings
+    from services.embedding_config import reset_active_embedding_config
 
     get_settings.cache_clear()
+    reset_active_embedding_config()
     yield
     get_settings.cache_clear()
+    reset_active_embedding_config()
 
 
 @pytest.fixture
@@ -76,15 +79,25 @@ def patch_mongo(monkeypatch, fake_db):
 
     tenant_provisioner.reset_ready_tenant_cache()
 
+    # The active embedding config/service is process-global; reset it so tests that
+    # exercise provisioning/identity start from the env defaults backed by the fake.
+    import services.embedding_config as embedding_config
+
+    embedding_config.reset_active_embedding_config()
+
     # Rebind the name in modules that imported get_database directly.
     for mod_name in [
         "services.authorization",
         "services.cache_manager",
+        "services.cache_migration",
         "services.proxy_registry",
         "services.hybrid_search",
         "services.telemetry_logger",
         "services.registry_watcher",
         "services.tenant_provisioner",
+        "services.embedding_config",
+        "services.embedding_reprovision",
+        "services.guardrails",
         "gateway.middleware.rbac",
         "gateway.middleware.ratelimit",
         "gateway.routers.health",

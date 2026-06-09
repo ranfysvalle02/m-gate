@@ -25,7 +25,31 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = "http://host.docker.internal:11434"
     ollama_model: str = "nomic-embed-text"
+    # Fallback/declared width for the Ollama default provider. With multi-provider
+    # support the active width is detected at runtime (by embedding a probe string),
+    # so this is only used as the Ollama default and as a last-resort fallback.
     ollama_dimensions: int = 768
+
+    # Embedding provider selection. Defaults preserve the historical Ollama-only
+    # behavior. The active configuration can also be overridden at runtime from the
+    # admin panel; that override is persisted in the control DB and takes precedence
+    # over these env defaults ("configure via env as well").
+    embedding_provider: Literal["ollama", "openai", "azure_openai", "voyage", "gemini"] = "ollama"
+    # When unset, each provider falls back to a sensible default model.
+    embedding_model: str | None = None
+    embedding_base_url: str | None = None
+    embedding_api_key: str = ""
+    embedding_api_key_file: str | None = None
+    azure_openai_endpoint: str | None = None
+    azure_openai_api_version: str = "2023-05-15"
+    azure_openai_deployment: str | None = None
+    # Short text embedded once to measure a provider's native vector width at
+    # config-apply/startup time, so `dimensions` never has to be hand-configured.
+    embedding_probe_text: str = "embedding dimension probe"
+    # Symmetric secret used to encrypt provider API keys at rest in the control DB.
+    # Falls back to admin_session_secret / jwt_secret when unset.
+    embedding_secret: str | None = None
+    embedding_secret_file: str | None = None
 
     # Keep backwards compatibility for callers still using REQUIRE_AUTH.
     require_auth: bool = False
@@ -131,6 +155,8 @@ class Settings(BaseSettings):
             ("atlas_password_file", "atlas_password"),
             ("admin_password_file", "admin_password"),
             ("admin_session_secret_file", "admin_session_secret"),
+            ("embedding_api_key_file", "embedding_api_key"),
+            ("embedding_secret_file", "embedding_secret"),
         ]
         for file_field, value_field in file_backed_fields:
             file_path = getattr(self, file_field)
@@ -152,6 +178,8 @@ class Settings(BaseSettings):
         self.admin_ui_path = normalized or "/"
         if not self.admin_session_secret:
             self.admin_session_secret = self.jwt_secret
+        if not self.embedding_secret:
+            self.embedding_secret = self.admin_session_secret or self.jwt_secret
         return self
 
     @model_validator(mode="after")
