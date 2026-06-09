@@ -30,10 +30,9 @@ class Settings(BaseSettings):
     # so this is only used as the Ollama default and as a last-resort fallback.
     ollama_dimensions: int = 768
 
-    # Embedding provider selection. Defaults preserve the historical Ollama-only
-    # behavior. The active configuration can also be overridden at runtime from the
-    # admin panel; that override is persisted in the control DB and takes precedence
-    # over these env defaults ("configure via env as well").
+    # Embedding provider selection. These env values are the boot-time default;
+    # the admin panel can persist an override in the control DB that takes
+    # precedence over them.
     embedding_provider: Literal["ollama", "openai", "azure_openai", "voyage", "gemini"] = "ollama"
     # When unset, each provider falls back to a sensible default model.
     embedding_model: str | None = None
@@ -51,8 +50,6 @@ class Settings(BaseSettings):
     embedding_secret: str | None = None
     embedding_secret_file: str | None = None
 
-    # Keep backwards compatibility for callers still using REQUIRE_AUTH.
-    require_auth: bool = False
     jwt_secret: str = "dev-secret"
     jwt_secret_file: str | None = None
     jwt_algorithm: str = "HS256"
@@ -138,13 +135,6 @@ class Settings(BaseSettings):
     atlas_username: str | None = None
     atlas_password: str | None = None
     atlas_password_file: str | None = None
-
-    @model_validator(mode="after")
-    def _apply_derived_auth_mode(self) -> "Settings":
-        # Back-compat: REQUIRE_AUTH=true maps to hs256 unless explicitly set.
-        if self.require_auth and self.auth_mode == "disabled":
-            self.auth_mode = "hs256"
-        return self
 
     @model_validator(mode="after")
     def _load_file_backed_values(self) -> "Settings":

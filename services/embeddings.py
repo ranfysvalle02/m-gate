@@ -211,9 +211,9 @@ class BaseHttpEmbeddingService:
 class OllamaEmbeddingService(BaseHttpEmbeddingService):
     """Local Ollama embeddings via ``POST /api/embed``.
 
-    The constructor keeps backwards compatibility: passing only ``settings`` reads
-    the legacy ``OLLAMA_*`` values, while the multi-provider factory passes the
-    resolved model/base_url/dimensions explicitly.
+    Unset constructor fields default to the ``OLLAMA_*`` settings, so the provider
+    factory can pass the resolved model/base_url/dimensions explicitly while
+    direct callers get the configured defaults for free.
     """
 
     def __init__(

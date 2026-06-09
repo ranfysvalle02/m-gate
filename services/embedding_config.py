@@ -1,18 +1,17 @@
 """Runtime-mutable, provider-agnostic embedding configuration.
 
-The gateway historically read a single Ollama embedding config from the
-environment. This module makes the embedding backend a first-class, runtime
-setting: a single **global** configuration document persisted in the control DB
-(API keys encrypted at rest), layered on top of the env defaults, and surfaced
-through a stable proxy so existing call sites keep working after a change.
+The embedding backend is a first-class, runtime setting: a single **global**
+configuration document persisted in the control DB (API keys encrypted at rest),
+layered on top of the env defaults, and surfaced through a stable proxy so call
+sites keep working after a change.
 
 Key ideas:
 - ``EmbeddingConfig`` is the resolved, in-memory shape (decrypted key included).
 - The persisted control-DB document stores the key *encrypted* and never returns
   it in plaintext to the admin API.
-- ``get_active_embedding_service()`` returns a process-wide proxy. All the
-  existing ``get_embedding_service()`` callers transparently follow config
-  changes because they hold the proxy, not a concrete provider instance.
+- ``get_active_embedding_service()`` returns a process-wide proxy. Every
+  ``get_embedding_service()`` caller transparently follows config changes because
+  it holds the proxy, not a concrete provider instance.
 - ``dimensions`` is detected at runtime (by embedding a probe string) whenever it
   is unknown, so operators never hand-configure vector widths.
 """
@@ -98,11 +97,10 @@ def encrypt_api_key(plaintext: str, settings: Settings | None = None) -> str:
 
 
 def decrypt_api_key(stored: str | None, settings: Settings | None = None) -> str:
-    if not stored:
+    # Keys are always written encrypted (``enc::``-prefixed); anything else is
+    # absent or corrupt and is treated as "no key" rather than trusted as-is.
+    if not stored or not stored.startswith(_ENC_PREFIX):
         return ""
-    if not stored.startswith(_ENC_PREFIX):
-        # Back-compat / hand-edited plaintext: pass through unchanged.
-        return stored
     settings = settings or get_settings()
     try:
         return _fernet(settings).decrypt(stored[len(_ENC_PREFIX) :].encode("utf-8")).decode("utf-8")
@@ -263,58 +261,44 @@ async def resolve_dimensions(
 
 
 # --------------------------------------------------------------------------- #
-# Process-global active config + proxy
+# Process-global active provider (the proxy's delegate)
 # --------------------------------------------------------------------------- #
-_active_config: EmbeddingConfig | None = None
 _active_service: BaseHttpEmbeddingService | None = None
 _lock = Lock()
 
 
-def _set_active(config: EmbeddingConfig, service: BaseHttpEmbeddingService) -> None:
-    global _active_config, _active_service
+def _set_active(service: BaseHttpEmbeddingService) -> None:
+    global _active_service
     with _lock:
-        _active_config = config
         _active_service = service
 
 
 def _resolve_active_service() -> BaseHttpEmbeddingService:
-    global _active_config, _active_service
+    global _active_service
     if _active_service is not None:
         return _active_service
     with _lock:
         if _active_service is None:
             settings = get_settings()
-            config = default_config_from_settings(settings)
-            _active_config = config
-            _active_service = build_provider_service(config, settings)
+            _active_service = build_provider_service(
+                default_config_from_settings(settings), settings
+            )
         return _active_service
 
 
 def reset_active_embedding_config() -> None:
-    """Drop the cached active config/service (used by tests and after a wipe)."""
-    global _active_config, _active_service
+    """Drop the cached active provider (used by tests and after a wipe)."""
+    global _active_service
     with _lock:
-        _active_config = None
         _active_service = None
 
 
 async def refresh_active_embedding_config(settings: Settings | None = None) -> EmbeddingConfig:
     """Reload the active config from the control DB (env fallback) and rebuild it."""
     settings = settings or get_settings()
-    config = await load_persisted_config(settings)
-    config = await resolve_dimensions(config, settings)
-    service = build_provider_service(config, settings)
-    _set_active(config, service)
+    config = await resolve_dimensions(await load_persisted_config(settings), settings)
+    _set_active(build_provider_service(config, settings))
     return config
-
-
-def active_embedding_config() -> EmbeddingConfig:
-    if _active_config is not None:
-        return _active_config
-    config = default_config_from_settings(get_settings())
-    # Prime the cache so identity reads are stable within a process.
-    _resolve_active_service()
-    return _active_config or config
 
 
 def active_embedding_identity() -> tuple[str, int, str]:
@@ -366,7 +350,6 @@ __all__ = [
     "resolve_dimensions",
     "refresh_active_embedding_config",
     "reset_active_embedding_config",
-    "active_embedding_config",
     "active_embedding_identity",
     "get_active_embedding_service",
 ]

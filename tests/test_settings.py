@@ -1,5 +1,5 @@
-"""Tests for config.settings validators: REQUIRE_AUTH back-compat, file-backed
-secrets, and production safety guards.
+"""Tests for config.settings validators: file-backed secrets, embedding
+defaults, and production safety guards.
 """
 
 from __future__ import annotations
@@ -7,16 +7,6 @@ from __future__ import annotations
 import pytest
 
 from config.settings import Settings
-
-
-def test_require_auth_backcompat_maps_to_hs256():
-    s = Settings(require_auth=True)
-    assert s.auth_mode == "hs256"
-
-
-def test_explicit_auth_mode_not_overridden_by_require_auth():
-    s = Settings(require_auth=True, auth_mode="jwks", jwks_uri="https://x/jwks")
-    assert s.auth_mode == "jwks"
 
 
 def test_file_backed_secret_is_loaded(tmp_path):

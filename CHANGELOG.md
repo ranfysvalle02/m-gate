@@ -23,7 +23,7 @@
   tracked in `control_db.embedding_status` and polled by the UI.
 - Hardening: the stored dimension is always the width the provider actually
   returns (detected on every apply), so a vector index can never drift out of
-  sync with its data; the manual dimension override was removed accordingly.
+  sync with its data.
 - Hardening: Gemini authenticates via the `x-goog-api-key` header instead of a
   `?key=` query param, so API keys never leak into URLs, `httpx` error strings,
   logs, or status documents.
@@ -33,7 +33,7 @@
 - New settings: `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_BASE_URL`,
   `EMBEDDING_API_KEY(_FILE)`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`,
   `AZURE_OPENAI_DEPLOYMENT`, `EMBEDDING_PROBE_TEXT`, and `EMBEDDING_SECRET(_FILE)`.
-  The legacy `OLLAMA_*` variables remain supported for the default provider.
+  The `OLLAMA_*` variables configure the default Ollama provider.
 
 ### Security and correctness
 - Added auth modes (`disabled`, `hs256`, `jwks`) with production safety validation.

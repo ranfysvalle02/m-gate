@@ -513,8 +513,8 @@ in the code, so the post and the implementation stay honest with each other.
 
 > Okta JWT verification (Section 2 of the post) is documented as the production
 > wiring; locally the gateway accepts a verified-claim stand-in via `X-MCP-Scopes`
-> (or real JWT claims when `REQUIRE_AUTH=true`), so the scope-to-retrieval mapping
-> is fully exercisable without a tenant.
+> (or real JWT claims when `AUTH_MODE=hs256`/`jwks`), so the scope-to-retrieval
+> mapping is fully exercisable without a tenant.
 
 # Architectural Blueprint: Building a High-Throughput, Reactive MCP Gateway with FastAPI and MongoDB Async
 

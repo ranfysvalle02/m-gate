@@ -38,9 +38,9 @@ def test_encrypt_decrypt_round_trip_and_marker():
     assert decrypt_api_key(token, settings) == "sk-super-secret"
 
 
-def test_decrypt_passthrough_for_plaintext():
-    # Hand-edited / legacy plaintext keys are returned unchanged.
-    assert decrypt_api_key("plain-key", _settings()) == "plain-key"
+def test_decrypt_treats_non_encrypted_values_as_absent():
+    # Keys are always written encrypted; a missing/plaintext value is "no key".
+    assert decrypt_api_key("plain-key", _settings()) == ""
     assert decrypt_api_key(None, _settings()) == ""
 
 

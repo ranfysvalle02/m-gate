@@ -67,6 +67,5 @@ async def health_ready(response: Response) -> dict:
 
 
 @router.get("/health")
-async def health_legacy() -> dict:
-    # Backward-compatible route used by existing scripts.
+async def health() -> dict:
     return await health_live()

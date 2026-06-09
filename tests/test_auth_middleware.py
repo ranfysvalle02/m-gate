@@ -7,7 +7,8 @@ from gateway.middleware.auth import AuthMiddleware
 
 @pytest.mark.asyncio
 async def test_auth_middleware_rejects_missing_token_when_required(monkeypatch):
-    monkeypatch.setenv("REQUIRE_AUTH", "true")
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
     get_settings.cache_clear()
 
     async def ok_app(scope, receive, send):
@@ -42,7 +43,6 @@ async def test_auth_middleware_rejects_missing_token_when_required(monkeypatch):
     status = next(msg["status"] for msg in sent if msg["type"] == "http.response.start")
     assert status == 401
 
-    monkeypatch.setenv("REQUIRE_AUTH", "false")
     get_settings.cache_clear()
 
 

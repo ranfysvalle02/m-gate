@@ -9,7 +9,6 @@ from fakes import FakeEmbeddingService
 
 from database.mongo import get_control_database, get_tenant_database
 from services import embedding_config
-from services.embedding_config import EmbeddingConfig
 from services.embedding_reprovision import (
     ReprovisionInProgressError,
     get_reprovision_status,
@@ -20,10 +19,7 @@ from services.embedding_reprovision import (
 
 def _activate_fake(dimensions: int = 8) -> FakeEmbeddingService:
     fake = FakeEmbeddingService(dimensions=dimensions, model_id="probe-model")
-    embedding_config._set_active(
-        EmbeddingConfig(provider="ollama", model="probe-model", dimensions=dimensions),
-        fake,
-    )
+    embedding_config._set_active(fake)
     return fake
 
 

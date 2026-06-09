@@ -19,10 +19,10 @@ async def test_health_live_always_ok():
 
 
 @pytest.mark.asyncio
-async def test_health_legacy_delegates_to_live():
-    from gateway.routers.health import health_legacy
+async def test_health_delegates_to_live():
+    from gateway.routers.health import health
 
-    assert await health_legacy() == {"status": "ok"}
+    assert await health() == {"status": "ok"}
 
 
 @pytest.mark.asyncio
