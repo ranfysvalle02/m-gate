@@ -1,0 +1,82 @@
+groups:
+  - name: mdb-mcp-gateway-alerts
+    rules:
+      - alert: GatewayTargetDown
+        expr: up{job="mdb-mcp-gateway"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: mdb-mcp-gateway
+        annotations:
+          summary: Gateway target is down
+          description: Prometheus cannot scrape mdb-mcp-gateway /metrics for 2 minutes.
+
+      - alert: HighHttp5xxRate
+        expr: 100 * sum(rate(gateway_http_requests_total{status=~"5.."}[10m])) / clamp_min(sum(rate(gateway_http_requests_total[10m])), 1) > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: mdb-mcp-gateway
+        annotations:
+          summary: Elevated HTTP 5xx rate
+          description: HTTP 5xx responses exceed 5% for 10 minutes.
+
+      - alert: HighRequestLatencyP99
+        expr: histogram_quantile(0.99, sum by (le) (rate(gateway_http_request_duration_seconds_bucket[10m]))) > 1.5
+        for: 10m
+        labels:
+          severity: warning
+          service: mdb-mcp-gateway
+        annotations:
+          summary: High request latency p99
+          description: Gateway request latency p99 is above 1.5 seconds for 10 minutes.
+
+      - alert: DownstreamTimeoutSpike
+        expr: sum(rate(gateway_downstream_errors_total{type="timeout"}[5m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          service: mdb-mcp-gateway
+        annotations:
+          summary: Downstream timeout spike
+          description: Downstream timeout errors are elevated for 10 minutes.
+
+      - alert: DownstreamErrorSpike
+        expr: sum(rate(gateway_downstream_errors_total[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          service: mdb-mcp-gateway
+        annotations:
+          summary: Downstream error spike
+          description: Total downstream error rate is elevated for 10 minutes.
+
+      - alert: AuthFailureSurge
+        expr: sum(rate(gateway_auth_failures_total{reason!="jwks_unavailable"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: mdb-mcp-gateway
+        annotations:
+          summary: Auth failures surged
+          description: Client-side auth failures are above baseline for 10 minutes.
+
+      - alert: JWKSUnavailable
+        expr: sum(rate(gateway_auth_failures_total{reason="jwks_unavailable"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: mdb-mcp-gateway
+        annotations:
+          summary: JWKS unavailable
+          description: The gateway cannot verify tokens because JWKS is unavailable.
+
+      - alert: GuardrailBlockSpike
+        expr: sum(rate(gateway_guardrail_events_total{decision="blocked"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: mdb-mcp-gateway
+        annotations:
+          summary: Guardrail blocks spiking
+          description: Guardrail blocked decisions are elevated for 10 minutes.

@@ -312,6 +312,12 @@ Also recommended (not boot-enforced):
 Set `ENABLE_TRACING=true` for OpenTelemetry spans around RPC handling and
 downstream hops. `LOG_JSON=true` emits structured logs with request IDs.
 
+The compose demo now includes a full observability stack:
+
+- Grafana: `http://localhost:3000` (pre-provisioned dashboard)
+- Prometheus: `http://localhost:9090` (gateway scrape + alert rules)
+- Alert rules live at [`deploy/prometheus/alerts.yaml`](deploy/prometheus/alerts.yaml)
+
 ---
 
 ## Bootstrapping and provisioning
@@ -341,18 +347,15 @@ downstream hops. `LOG_JSON=true` emits structured logs with request IDs.
 
 ## Troubleshooting
 
-| Symptom | Likely cause / fix |
-| --- | --- |
-| `tools/search` returns empty or errors about `$rankFusion` | Atlas version/feature gap. The gateway falls back to application-side RRF; confirm Search + Vector Search are enabled (MongoDB 8.0+ for `$rankFusion`). |
-| Startup error about `auth_mode`, CORS, or admin password | A production safety check failed — see the [hardening checklist](#production-hardening-checklist). |
-| `Embedding provider validation failed` on save | The provider/model/key is wrong or unreachable. Use **Test** to see the exact error; nothing is persisted until validation passes. |
-| Stored embedding key reads as empty after a change | `EMBEDDING_SECRET` changed — re-enter the key in the panel and keep the secret stable thereafter. |
-| `409 reprovision in progress` on a config change | A reprovision is running; wait for `GET /admin/embedding/status` to leave `running`, then retry. |
-| Search stale right after switching providers | The reprovision is still rebuilding indexes; search uses lexical fallback until it completes. |
-| Change-stream / registry watcher errors | The deployment is not replica-set capable — use Atlas Local or an Atlas cluster, not a standalone `mongod`. |
+Use the dedicated runbook: **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)**.
+
+It covers concrete failure modes keyed to code paths and observability signals,
+including Atlas capability mismatches, `$rankFusion` fallback behavior, JWKS
+outages, embedding startup hiccups, and index-queryable timing.
 
 ---
 
-See the [README](README.md) for the full feature tour and local development
-workflow, and [`deploy/README.md`](deploy/README.md) for Atlas connection
-security details.
+See the [README](README.md) for the full feature tour, [docs/API.md](docs/API.md)
+for REST + JSON-RPC contract details, [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+for the operational runbook, and [`deploy/README.md`](deploy/README.md) for
+Atlas connection security details.

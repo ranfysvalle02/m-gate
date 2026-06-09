@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "mdb-mcp-gateway"
+    app_version: str = "0.2.0"
     environment: str = "development"
     host: str = "0.0.0.0"
     port: int = 8000

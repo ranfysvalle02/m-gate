@@ -143,7 +143,8 @@ fusion was computed:
 > **[PRODUCTION.md](PRODUCTION.md)** (operations & hardening),
 > **[SECURITY.md](SECURITY.md)** (security model & vulnerability reporting), and
 > **[NETWORK-SECURITY.md](NETWORK-SECURITY.md)** (trust boundaries & what's handled
-> at the perimeter).
+> at the perimeter), **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** (failure-mode
+> runbook), and **[docs/API.md](docs/API.md)** (REST + JSON-RPC reference).
 
 This repository now includes a working end-to-end MCP Gateway with:
 
@@ -162,7 +163,7 @@ This repository now includes a working end-to-end MCP Gateway with:
 - **Semantic cache model provenance**: cache entries are stamped with `embedding_model` / `embedding_dim` / `embedding_version`, with version-aware lookups and migration tooling
 - Default Ollama embeddings (`nomic-embed-text`) through `http://host.docker.internal:11434`
 - Demo downstream MCP servers: weather and orders
-- **Observability**: request IDs, JSON logs, Prometheus `/metrics`, OpenTelemetry tracing (`ENABLE_TRACING=true`) with spans around RPC handling and downstream hops, and health split (`/health/live`, `/health/ready`)
+- **Observability**: request IDs, JSON logs, Prometheus `/metrics`, prebuilt Prometheus alert rules, a provisioned Grafana dashboard (`http://localhost:3000`), OpenTelemetry tracing (`ENABLE_TRACING=true`) with spans around RPC handling and downstream hops, and health split (`/health/live`, `/health/ready`)
 - **Delivery artifacts**: k8s manifests, Helm chart, CI workflow (lint + format + types + 82% coverage gate), pre-commit, Ruff, and MyPy configuration
 
 ### Prerequisites
@@ -201,6 +202,13 @@ The bootstrap service will:
 
 ```bash
 curl http://localhost:8000/health
+```
+
+- Dashboards and alerts:
+
+```bash
+open http://localhost:3000   # Grafana (admin/admin)
+open http://localhost:9090   # Prometheus + alert rules
 ```
 
 - JSON-RPC hybrid search (default `mode` is `hybrid`):

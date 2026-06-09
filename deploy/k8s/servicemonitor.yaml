@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mdb-mcp-gateway
+  namespace: mdb-mcp-gateway
+  labels:
+    app: mdb-mcp-gateway
+spec:
+  selector:
+    matchLabels:
+      app: mdb-mcp-gateway
+  namespaceSelector:
+    matchNames:
+      - mdb-mcp-gateway
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

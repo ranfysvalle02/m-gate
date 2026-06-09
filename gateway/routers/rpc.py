@@ -218,7 +218,10 @@ async def _handle_initialize(context: RpcContext) -> JsonRpcResponse:
                     "pagination": True,
                 }
             },
-            "serverInfo": {"name": context.settings.app_name, "version": "0.2.0"},
+            "serverInfo": {
+                "name": context.settings.app_name,
+                "version": context.settings.app_version,
+            },
             "catalog_version": get_catalog_version(),
         },
     )

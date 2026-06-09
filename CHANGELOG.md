@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Observability and docs
+- Added a turnkey observability stack for local demos: Prometheus scrape config,
+  Prometheus alert rules, Grafana provisioning, and a prebuilt gateway dashboard
+  wired into `docker-compose.yml`.
+- Added `docs/API.md` to document the combined REST/admin and JSON-RPC (`/rpc`)
+  surfaces, plus protocol error codes and request examples.
+- Added `TROUBLESHOOTING.md` as a dedicated runbook for concrete failure modes
+  implemented in code (Atlas capability gaps, `$rankFusion` fallback, JWKS
+  outages, embedding startup failures, index-queryable timing, and more).
+- Enriched FastAPI OpenAPI metadata with `version`, `description`, and route tags
+  so `/docs` and `/redoc` are useful operational references.
+- Added optional Kubernetes `ServiceMonitor` manifest (`deploy/k8s/servicemonitor.yaml`)
+  and updated deployment docs to point to the observability stack and runbook.
+
 ### Embeddings
 - Added pluggable, admin-configurable embedding providers: Ollama (default),
   OpenAI, Azure OpenAI, Voyage AI, and Google Gemini, implemented over `httpx`

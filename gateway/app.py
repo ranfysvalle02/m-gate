@@ -32,6 +32,23 @@ from services.tenant_provisioner import ensure_control_plane_indexes, provision_
 
 logger = logging.getLogger(__name__)
 
+_OPENAPI_DESCRIPTION = (
+    "Production-ready MCP gateway surface for health, observability, JSON-RPC routing, "
+    "and admin operations.\n\n"
+    "- JSON-RPC gateway endpoint: `/rpc`\n"
+    "- Mounted FastMCP app: `/mcp` (not represented in OpenAPI)\n"
+    "- Health and metrics: `/health`, `/health/live`, `/health/ready`, `/metrics`\n\n"
+    "See `docs/API.md` for the full REST + JSON-RPC contract."
+)
+
+_OPENAPI_TAGS = [
+    {"name": "health", "description": "Liveness and readiness probes."},
+    {"name": "metrics", "description": "Prometheus scrape endpoint."},
+    {"name": "rpc", "description": "Gateway JSON-RPC methods under `/rpc`."},
+    {"name": "admin", "description": "Control plane and operational admin APIs."},
+    {"name": "ui", "description": "Admin UI and login routes."},
+]
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -110,6 +127,9 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=settings.app_name,
+        version=settings.app_version,
+        description=_OPENAPI_DESCRIPTION,
+        openapi_tags=_OPENAPI_TAGS,
         lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan),
     )
     app.add_middleware(
