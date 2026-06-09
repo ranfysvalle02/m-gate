@@ -24,7 +24,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 @pytest.fixture
 def qe_settings(atlas_uri, monkeypatch):
     pytest.importorskip("pymongocrypt")
-    crypt_shared = Path(os.environ.get("CRYPT_SHARED_LIB_PATH", "/opt/mongodb/lib/mongo_crypt_v1.so"))
+    crypt_shared = Path(
+        os.environ.get("CRYPT_SHARED_LIB_PATH", "/opt/mongodb/lib/mongo_crypt_v1.so")
+    )
     if not crypt_shared.exists():
         pytest.skip(
             f"Queryable Encryption integration test requires crypt_shared at {crypt_shared}.",
@@ -87,9 +89,9 @@ async def test_qe_encrypts_routing_registry_and_auto_decrypts_reads(qe_settings)
             qe_settings.mongodb_uri, serverSelectionTimeoutMS=3000, directConnection=True
         )
         try:
-            raw_view = raw_client[tenant_db_name(qe_settings.default_tenant_id)]["routing_registry"].find_one(
-                {"_id": "qe-itest"}
-            )
+            raw_view = raw_client[tenant_db_name(qe_settings.default_tenant_id)][
+                "routing_registry"
+            ].find_one({"_id": "qe-itest"})
         finally:
             raw_client.close()
 

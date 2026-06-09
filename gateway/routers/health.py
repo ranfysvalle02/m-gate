@@ -5,8 +5,8 @@ import logging
 from fastapi import APIRouter, Response, status
 
 from config.settings import get_settings
-from database.indexes import TEXT_INDEX_NAME, VECTOR_INDEX_NAME
 from database.encryption import qe_status
+from database.indexes import TEXT_INDEX_NAME, VECTOR_INDEX_NAME
 from database.mongo import get_client, get_tenant_database
 from services.embeddings import get_embedding_service
 

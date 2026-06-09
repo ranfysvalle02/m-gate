@@ -108,10 +108,12 @@ def _key_vault_client(settings: Settings) -> AsyncMongoClient:
     return AsyncMongoClient(settings.mongodb_uri, **_atlas_client_options(settings))
 
 
-def get_client_encryption(settings: Settings | None = None) -> tuple[AsyncMongoClient, AsyncClientEncryption]:
+def get_client_encryption(
+    settings: Settings | None = None,
+) -> tuple[AsyncMongoClient, AsyncClientEncryption]:
     settings = settings or get_settings()
     client = _key_vault_client(settings)
-    client_encryption = AsyncClientEncryption(
+    client_encryption: AsyncClientEncryption = AsyncClientEncryption(
         kms_providers(settings),
         settings.qe_key_vault_namespace,
         client,
@@ -164,7 +166,8 @@ async def qe_status(settings: Settings | None = None) -> dict[str, Any]:
         "enabled": settings.qe_enabled,
         "kms_provider": settings.kms_provider,
         "key_vault_namespace": settings.qe_key_vault_namespace,
-        "crypt_shared_lib_path": settings.crypt_shared_lib_path or "/opt/mongodb/lib/mongo_crypt_v1.so",
+        "crypt_shared_lib_path": settings.crypt_shared_lib_path
+        or "/opt/mongodb/lib/mongo_crypt_v1.so",
     }
     if not settings.qe_enabled:
         status["ok"] = True
@@ -187,4 +190,3 @@ async def qe_status(settings: Settings | None = None) -> dict[str, Any]:
         if close_result is not None:
             await close_result
     return status
-
