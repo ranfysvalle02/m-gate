@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gateway Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body class="bg-slate-100 text-slate-900">
+    <div
+      class="min-h-screen flex"
+      x-data='adminConsole({
+        uiPath: "{{ ui_path }}",
+        defaultTenantId: "{{ default_tenant_id }}",
+        csrfCookieName: "{{ csrf_cookie_name }}",
+        loggedInEmail: "{{ logged_in_email }}"
+      })'
+      x-init="init()"
+    >
+      <aside class="w-64 bg-slate-900 text-slate-200 flex flex-col">
+        <div class="px-4 py-5 border-b border-slate-700">
+          <div class="text-xs uppercase tracking-wide text-slate-400">mdb-mcp-gateway</div>
+          <div class="text-lg font-semibold">Admin Console</div>
+        </div>
+        <nav class="flex-1 px-2 py-4 space-y-1">
+          <template x-for="item in navItems" :key="item.key">
+            <button
+              type="button"
+              class="w-full text-left px-3 py-2 rounded-md text-sm transition"
+              :class="activeSection === item.key ? 'bg-sky-500 text-white' : 'hover:bg-slate-800'"
+              @click="switchSection(item.key)"
+              x-text="item.label"
+            ></button>
+          </template>
+        </nav>
+      </aside>
+      <main class="flex-1 p-6 md:p-8">
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 p-4 flex items-center justify-between gap-4">
+          <div>
+            <div class="text-sm text-slate-500">Signed in as</div>
+            <div class="font-medium" x-text="state.whoami?.user_id || loggedInEmail"></div>
+          </div>
+          <div class="flex items-center gap-3">
+            <label class="text-sm text-slate-600" for="tenant-picker">Tenant</label>
+            <select
+              id="tenant-picker"
+              class="border border-slate-300 rounded-md px-3 py-2 text-sm"
+              x-model="state.tenantId"
+              @change="refreshActiveSection()"
+            >
+              <option x-for="tenant in state.tenantOptions" :key="tenant" :value="tenant" x-text="tenant"></option>
+            </select>
+            <form :action="`${uiPath}/logout`" method="post">
+              <button
+                type="submit"
+                class="rounded-md px-3 py-2 text-sm font-medium bg-slate-900 text-white hover:bg-slate-800"
+              >
+                Logout
+              </button>
+            </form>
+          </div>
+        </div>
+        <template x-if="state.errorMessage">
+          <div class="mb-4 rounded-md border border-rose-300 bg-rose-50 text-rose-700 px-4 py-3 text-sm" x-text="state.errorMessage"></div>
+        </template>
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+    <script defer src="/static/app.js"></script>
+  </body>
+</html>

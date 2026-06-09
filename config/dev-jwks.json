@@ -1,0 +1,11 @@
+{
+  "keys": [
+    {
+      "kty": "RSA",
+      "key_ops": ["verify"],
+      "n": "4KdfG1fYEwaQwoKLImW_dcPttZTrQg8DH5mKvpH5_55qc8FICwM3mG74CsCUP5wxTjsgCZ8ETsJ2GujQfZ6KyXkQVoOEGceykfLuEoUH7u0z1m1jdb7s5_BC80tI0-YrzsZjCNuoMUYy5hWQjxNkz9F3FKddUue7UidVbzHHXtjtb2DWMc2LCzhUxAnY2g9e6r9rTF65CtiEZI4I-2YZ8TWAKm518nxliInfCBq1d175wnMkVdME-8-eIC0DITfsZg8whsvC1n_y_O7Q_SKMgIRA8E0sJXQhySSqiraYDG-Gi-tKhONyzy1D1FEGdcDFInEpHKH4xwqT4ALACUzWBQ",
+      "e": "AQAB",
+      "kid": "dev-local-key-1"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mdb-mcp-gateway-config
+  namespace: mdb-mcp-gateway
+data:
+  APP_NAME: mdb-mcp-gateway
+  ENVIRONMENT: production
+  AUTH_MODE: jwks
+  JWT_ISSUER: https://example-issuer
+  JWT_AUDIENCE: mdb-mcp-gateway
+  JWKS_URI: https://example-issuer/.well-known/jwks.json
+  OLLAMA_MODEL: nomic-embed-text
+  OLLAMA_BASE_URL: http://ollama.default.svc.cluster.local:11434
+  ENABLE_METRICS: "true"

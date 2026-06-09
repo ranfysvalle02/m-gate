@@ -1,0 +1,84 @@
+.card {
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.75rem;
+  background: white;
+  padding: 1rem;
+}
+
+.card-label {
+  color: rgb(71 85 105);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.card-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: rgb(15 23 42);
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+  color: rgb(51 65 85);
+}
+
+.field-input {
+  width: 100%;
+  border: 1px solid rgb(203 213 225);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: white;
+}
+
+.btn-primary {
+  border-radius: 0.5rem;
+  background: rgb(14 165 233);
+  color: white;
+  font-weight: 600;
+  padding: 0.5rem 0.9rem;
+}
+
+.btn-secondary {
+  border-radius: 0.5rem;
+  border: 1px solid rgb(203 213 225);
+  background: white;
+  color: rgb(15 23 42);
+  padding: 0.5rem 0.9rem;
+}
+
+.link-btn {
+  color: rgb(2 132 199);
+  font-size: 0.875rem;
+}
+
+.table-wrap {
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.75rem;
+  background: white;
+  overflow: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 700px;
+}
+
+.table th {
+  text-align: left;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgb(71 85 105);
+  background: rgb(248 250 252);
+  padding: 0.75rem 1rem;
+}
+
+.table td {
+  border-top: 1px solid rgb(241 245 249);
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+}

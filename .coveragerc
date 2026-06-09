@@ -1,0 +1,15 @@
+[run]
+branch = True
+source =
+    gateway
+    services
+    database
+    models
+
+[report]
+show_missing = True
+skip_covered = False
+exclude_also =
+    if __name__ == .__main__.:
+    raise NotImplementedError
+    pragma: no cover

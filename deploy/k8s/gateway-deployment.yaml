@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mdb-mcp-gateway
+  namespace: mdb-mcp-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mdb-mcp-gateway
+  template:
+    metadata:
+      labels:
+        app: mdb-mcp-gateway
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: mdb-mcp-gateway:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          envFrom:
+            - configMapRef:
+                name: mdb-mcp-gateway-config
+            - secretRef:
+                name: mdb-mcp-gateway-secrets
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000

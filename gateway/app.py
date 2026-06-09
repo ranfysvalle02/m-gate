@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastmcp.utilities.lifespan import combine_lifespans
+from starlette.middleware.cors import CORSMiddleware
+
+from config.settings import get_settings
+from database.mongo import connect_to_mongo, disconnect_from_mongo
+from gateway.mcp_server import get_mcp_server
+from gateway.middleware.auth import AuthMiddleware
+from gateway.middleware.guardrails import GuardrailsMiddleware
+from gateway.middleware.metrics import MetricsMiddleware
+from gateway.middleware.ratelimit import RateLimitMiddleware
+from gateway.middleware.rbac import RbacMiddleware
+from gateway.middleware.request_context import RequestContextMiddleware
+from gateway.routers.admin import router as admin_router
+from gateway.routers.health import router as health_router
+from gateway.routers.metrics import router as metrics_router
+from gateway.routers.rpc import router as rpc_router
+from gateway.routers.ui import router as ui_router
+from services.embeddings import embedding_version_for, get_embedding_service
+from services.proxy_registry import get_proxy_registry
+from services.registry_watcher import start_registry_watcher, stop_registry_watcher
+from services.tenant_provisioner import ensure_control_plane_indexes, provision_tenant
+
+logger = logging.getLogger(__name__)
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+        }
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(payload, separators=(",", ":"))
+
+
+def configure_logging() -> None:
+    settings = get_settings()
+    if not settings.log_json:
+        return
+    root = logging.getLogger()
+    formatter = JsonFormatter()
+    for handler in root.handlers:
+        handler.setFormatter(formatter)
+
+
+def configure_tracing(app: FastAPI) -> None:
+    settings = get_settings()
+    if not settings.enable_tracing:
+        return
+    try:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    except Exception:
+        logger.warning("Tracing is enabled but OpenTelemetry dependencies are missing.")
+        return
+    FastAPIInstrumentor.instrument_app(app)
+
+
+@asynccontextmanager
+async def app_lifespan(_: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
+    logger.info("Starting %s in %s mode.", settings.app_name, settings.environment)
+    logger.info(
+        "Active embedding version: %s",
+        embedding_version_for(get_embedding_service(settings)),
+    )
+    await connect_to_mongo(settings)
+    if settings.auto_bootstrap:
+        await ensure_control_plane_indexes()
+        await provision_tenant(settings.default_tenant_id, wait_for_queryable_indexes=False)
+    await start_registry_watcher()
+    try:
+        yield
+    finally:
+        await stop_registry_watcher()
+        await get_proxy_registry().aclose()
+        await disconnect_from_mongo()
+        logger.info("Application shutdown complete.")
+
+
+def create_app() -> FastAPI:
+    configure_logging()
+    settings = get_settings()
+    mcp = get_mcp_server()
+    mcp_app = mcp.http_app(path="/")
+
+    app = FastAPI(
+        title=settings.app_name,
+        lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan),
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            origin.strip() for origin in settings.cors_allow_origins.split(",") if origin.strip()
+        ],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.add_middleware(RequestContextMiddleware)
+    if settings.enable_metrics:
+        app.add_middleware(MetricsMiddleware)
+    app.add_middleware(GuardrailsMiddleware)
+    app.add_middleware(RbacMiddleware)
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(AuthMiddleware)
+    app.include_router(health_router)
+    app.include_router(metrics_router)
+    app.include_router(rpc_router)
+    app.include_router(admin_router)
+    if settings.admin_ui_enabled:
+        app.mount("/static", StaticFiles(directory="gateway/static"), name="static")
+        app.include_router(ui_router, prefix=settings.admin_ui_path)
+    app.mount("/mcp", mcp_app)
+    configure_tracing(app)
+    return app
+
+
+app = create_app()

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gateway Admin Login</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+    <div class="w-full max-w-md rounded-xl border border-slate-800 bg-slate-900/90 shadow-2xl p-8">
+      <div class="mb-6 text-center">
+        <div class="text-xs uppercase tracking-wider text-sky-300">mdb-mcp-gateway</div>
+        <h1 class="mt-2 text-2xl font-semibold">Admin Login</h1>
+      </div>
+      {% if error %}
+        <div class="mb-4 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{{ error }}</div>
+      {% endif %}
+      <form method="post" action="{{ ui_path }}/login" class="space-y-4">
+        <div>
+          <label class="block text-sm mb-1" for="email">Email</label>
+          <input id="email" name="email" type="email" required class="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2" placeholder="demo@demo.com" />
+        </div>
+        <div>
+          <label class="block text-sm mb-1" for="password">Password</label>
+          <input id="password" name="password" type="password" required class="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2" />
+        </div>
+        <button type="submit" class="w-full rounded-md bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold py-2">Sign in</button>
+      </form>
+    </div>
+  </body>
+</html>

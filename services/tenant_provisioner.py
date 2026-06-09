@@ -1,0 +1,200 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime
+
+from pymongo.errors import OperationFailure
+
+from config.settings import Settings, get_settings
+from database.indexes import ensure_tool_catalog_indexes, upsert_search_index
+from database.mongo import (
+    get_control_database,
+    get_tenant_database,
+    tenant_db_name,
+)
+from services.cache_manager import semantic_cache_index_spec
+from services.guardrails import guardrail_signature_index_spec
+
+
+class UnknownTenantError(Exception):
+    """A request referenced a tenant that is not provisioned and auto-provisioning
+    is disabled. Surfacing this explicitly prevents the silent empty-result failures
+    that happen when a query runs against a tenant database that was never created.
+    """
+
+    def __init__(self, tenant_id: str) -> None:
+        self.tenant_id = tenant_id
+        super().__init__(
+            f"Tenant '{tenant_id}' is not provisioned. Provision it via "
+            "`POST /admin/tenants` (or scripts/admin.py) or enable "
+            "AUTO_PROVISION_TENANTS."
+        )
+
+
+# Tenants confirmed ready in this process. Provisioning is idempotent, so this is
+# purely a hot-path optimization to avoid a control-plane round-trip per request.
+_ready_tenants: set[str] = set()
+_ready_locks: dict[str, asyncio.Lock] = {}
+_ready_locks_guard = asyncio.Lock()
+_provision_locks: dict[str, asyncio.Lock] = {}
+_provision_locks_guard = asyncio.Lock()
+
+
+def reset_ready_tenant_cache() -> None:
+    """Clear the in-process provisioning cache (used by tests and after a wipe)."""
+    _ready_tenants.clear()
+    _ready_locks.clear()
+    _provision_locks.clear()
+
+
+async def _tenant_lock_for(
+    tenant_id: str,
+    *,
+    lock_map: dict[str, asyncio.Lock],
+    guard: asyncio.Lock,
+) -> asyncio.Lock:
+    async with guard:
+        lock = lock_map.get(tenant_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            lock_map[tenant_id] = lock
+        return lock
+
+
+async def ensure_tenant_ready(
+    tenant_id: str,
+    *,
+    settings: Settings | None = None,
+) -> bool:
+    """Guarantee a tenant's database + indexes exist before tenant-scoped queries.
+
+    Resolution order, cached per process:
+      1. Already confirmed ready -> return immediately.
+      2. A `tenants` control-plane document exists -> mark ready.
+      3. Otherwise auto-provision (when enabled) or raise ``UnknownTenantError`` so
+         the caller can return a clear error instead of a silent empty result.
+    """
+    settings = settings or get_settings()
+    if tenant_id in _ready_tenants:
+        return True
+
+    ready_lock = await _tenant_lock_for(
+        tenant_id,
+        lock_map=_ready_locks,
+        guard=_ready_locks_guard,
+    )
+    async with ready_lock:
+        if tenant_id in _ready_tenants:
+            return True
+
+        control_db = get_control_database()
+        existing = await control_db["tenants"].find_one({"tenant_id": tenant_id})
+        if existing is not None:
+            _ready_tenants.add(tenant_id)
+            return True
+
+        if not settings.auto_provision_tenants:
+            raise UnknownTenantError(tenant_id)
+
+        # Provision lazily without blocking on index build completion: the request
+        # path should not wait for Atlas to finish materializing vector indexes.
+        await provision_tenant(tenant_id, wait_for_queryable_indexes=False)
+        _ready_tenants.add(tenant_id)
+        return True
+
+
+async def ensure_control_plane_indexes() -> None:
+    control_db = get_control_database()
+    settings = get_settings()
+    await control_db["tenants"].create_index("tenant_id", unique=True)
+    await control_db["watcher_state"].create_index("updated_at")
+    await control_db["session_context"].create_index("expires_at", expireAfterSeconds=0)
+    await control_db["session_context"].create_index([("tenant_id", 1), ("user_id", 1)])
+    await control_db["rate_limit_buckets"].create_index("expires_at", expireAfterSeconds=0)
+    await control_db["rate_limit_buckets"].create_index(
+        [("tenant_id", 1), ("client_ip", 1), ("window_epoch", 1)],
+        unique=True,
+    )
+    await control_db["guardrail_signatures"].create_index("category")
+    guardrail_index_spec = guardrail_signature_index_spec(
+        embedding_version=f"{settings.ollama_model}:{settings.ollama_dimensions}",
+        dimensions=settings.ollama_dimensions,
+    )
+    await upsert_search_index(
+        control_db["guardrail_signatures"],
+        name=guardrail_index_spec["name"],
+        definition=guardrail_index_spec["definition"],
+        index_type="vectorSearch",
+    )
+
+
+async def provision_tenant(
+    tenant_id: str,
+    *,
+    wait_for_queryable_indexes: bool = True,
+) -> str:
+    provision_lock = await _tenant_lock_for(
+        tenant_id,
+        lock_map=_provision_locks,
+        guard=_provision_locks_guard,
+    )
+    async with provision_lock:
+        settings = get_settings()
+        now = datetime.now(UTC)
+        await ensure_control_plane_indexes()
+
+        control_db = get_control_database()
+        await control_db["tenants"].update_one(
+            {"tenant_id": tenant_id},
+            {
+                "$set": {
+                    "tenant_id": tenant_id,
+                    "db_name": tenant_db_name(tenant_id),
+                    "updated_at": now,
+                },
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
+
+        tenant_db = get_tenant_database(tenant_id)
+        collections = set(await tenant_db.list_collection_names())
+        if "audit_telemetry" not in collections:
+            try:
+                await tenant_db.command(
+                    {
+                        "create": "audit_telemetry",
+                        "timeseries": {
+                            "timeField": "timestamp",
+                            "metaField": "tenant_id",
+                            "granularity": "seconds",
+                        },
+                    }
+                )
+            except OperationFailure:
+                # Collection exists race between concurrent provisioners.
+                pass
+
+        await tenant_db["tool_catalog"].create_index([("server", 1), ("name", 1)], unique=True)
+        await tenant_db["routing_registry"].create_index("server", unique=True)
+        await tenant_db["semantic_cache"].create_index("expires_at", expireAfterSeconds=0)
+        embedding_version = f"{settings.ollama_model}:{settings.ollama_dimensions}"
+        cache_index_spec = semantic_cache_index_spec(
+            embedding_version=embedding_version,
+            dimensions=settings.ollama_dimensions,
+        )
+
+        await upsert_search_index(
+            tenant_db["semantic_cache"],
+            name=cache_index_spec["name"],
+            index_type="vectorSearch",
+            definition=cache_index_spec["definition"],
+        )
+
+        await ensure_tool_catalog_indexes(
+            collection=tenant_db["tool_catalog"],
+            wait_for_queryable=wait_for_queryable_indexes,
+            dimensions=settings.ollama_dimensions,
+        )
+        _ready_tenants.add(tenant_id)
+        return tenant_db_name(tenant_id)
