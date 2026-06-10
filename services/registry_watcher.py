@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import socket
 from datetime import UTC, datetime
@@ -9,6 +10,7 @@ from typing import Any
 from pymongo.errors import OperationFailure
 
 from config.settings import get_settings
+from database.encryption import build_watcher_client
 from database.mongo import (
     get_client,
     get_control_database,
@@ -143,60 +145,86 @@ def _is_non_resumable_error(exc: OperationFailure) -> bool:
     return False
 
 
+def _build_watch_client() -> tuple[Any, bool]:
+    """Return ``(client, owns_client)`` for the change-stream watcher.
+
+    Under QE the shared app client auto-encrypts and cannot run the cluster-wide
+    change stream, so use a dedicated ``bypass_auto_encryption`` client (which we
+    own and must close). Otherwise reuse the shared client (which we must NOT
+    close — it is owned by the connection manager).
+    """
+    if get_settings().qe_enabled:
+        return build_watcher_client(), True
+    return get_client(), False
+
+
+async def _close_owned_client(client: Any) -> None:
+    close_result = client.close()
+    if inspect.isawaitable(close_result):
+        await close_result
+
+
 async def _watch_loop() -> None:
     control_db = get_control_database()
     state_collection = control_db[_RESUME_STATE_COLLECTION]
-    client = get_client()
     registry = get_proxy_registry()
     instance_id = _watcher_instance_id()
     resume_doc_id = _resume_doc_id(instance_id)
-    resume_token = await _load_resume_token(state_collection, resume_doc_id=resume_doc_id)
-    if resume_token is None:
-        await _initial_sync_all_tenants(registry)
+    client, owns_client = _build_watch_client()
 
-    while True:
-        try:
-            watch_kwargs: dict[str, Any] = {
-                "pipeline": [{"$match": {"ns.coll": "routing_registry"}}],
-                "full_document": "updateLookup",
-            }
-            if resume_token is not None:
-                watch_kwargs["resume_after"] = resume_token
-            # AsyncCollection.watch() is a coroutine that resolves to the change
-            # stream (an async context manager) — it must be awaited first.
-            async with await client.watch(**watch_kwargs) as stream:
-                async for change in stream:
-                    try:
-                        await _apply_change(change, registry)
-                    except Exception as exc:
-                        logger.warning(
-                            "Skipping bad registry change event '%s': %s", change.get("_id"), exc
-                        )
+    try:
+        resume_token = await _load_resume_token(state_collection, resume_doc_id=resume_doc_id)
+        if resume_token is None:
+            await _initial_sync_all_tenants(registry)
 
-                    # Persist the latest stream position even if this specific
-                    # event failed so a poisoned event does not replay forever.
-                    resume_token = stream.resume_token or change.get("_id")
-                    if resume_token is not None:
-                        await _save_resume_token(
-                            state_collection,
-                            resume_token,
-                            resume_doc_id=resume_doc_id,
-                            instance_id=instance_id,
-                        )
-        except asyncio.CancelledError:
-            raise
-        except OperationFailure as exc:
-            if _is_non_resumable_error(exc):
-                logger.warning("Resume token unusable; clearing and full-resync: %s", exc)
-                resume_token = None
-                await _clear_resume_token(state_collection, resume_doc_id=resume_doc_id)
-                await _initial_sync_all_tenants(registry)
-                continue
-            logger.warning("Registry watcher failed, retrying in 3s: %s", exc)
-            await asyncio.sleep(3)
-        except Exception as exc:
-            logger.warning("Registry watcher failed, retrying in 3s: %s", exc)
-            await asyncio.sleep(3)
+        while True:
+            try:
+                watch_kwargs: dict[str, Any] = {
+                    "pipeline": [{"$match": {"ns.coll": "routing_registry"}}],
+                    "full_document": "updateLookup",
+                }
+                if resume_token is not None:
+                    watch_kwargs["resume_after"] = resume_token
+                # AsyncCollection.watch() is a coroutine that resolves to the change
+                # stream (an async context manager) — it must be awaited first.
+                async with await client.watch(**watch_kwargs) as stream:
+                    async for change in stream:
+                        try:
+                            await _apply_change(change, registry)
+                        except Exception as exc:
+                            logger.warning(
+                                "Skipping bad registry change event '%s': %s",
+                                change.get("_id"),
+                                exc,
+                            )
+
+                        # Persist the latest stream position even if this specific
+                        # event failed so a poisoned event does not replay forever.
+                        resume_token = stream.resume_token or change.get("_id")
+                        if resume_token is not None:
+                            await _save_resume_token(
+                                state_collection,
+                                resume_token,
+                                resume_doc_id=resume_doc_id,
+                                instance_id=instance_id,
+                            )
+            except asyncio.CancelledError:
+                raise
+            except OperationFailure as exc:
+                if _is_non_resumable_error(exc):
+                    logger.warning("Resume token unusable; clearing and full-resync: %s", exc)
+                    resume_token = None
+                    await _clear_resume_token(state_collection, resume_doc_id=resume_doc_id)
+                    await _initial_sync_all_tenants(registry)
+                    continue
+                logger.warning("Registry watcher failed, retrying in 3s: %s", exc)
+                await asyncio.sleep(3)
+            except Exception as exc:
+                logger.warning("Registry watcher failed, retrying in 3s: %s", exc)
+                await asyncio.sleep(3)
+    finally:
+        if owns_client:
+            await _close_owned_client(client)
 
 
 async def start_registry_watcher() -> None:

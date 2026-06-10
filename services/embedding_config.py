@@ -359,6 +359,33 @@ async def save_tenant_config(
     invalidate_tenant_embedding(resolved_tenant_id)
 
 
+async def delete_tenant_config(
+    tenant_id: str,
+    settings: Settings | None = None,
+) -> bool:
+    """Drop a tenant's embedding override so it reverts to the platform default.
+
+    Returns ``True`` if an override existed and was removed. After deletion the
+    tenant transparently inherits the global config again (``source`` becomes
+    ``"platform-default"``).
+    """
+    settings = settings or get_settings()
+    resolved_tenant_id = tenant_id or settings.default_tenant_id
+    try:
+        result = await get_tenant_database(resolved_tenant_id)[
+            EMBEDDING_CONFIG_COLLECTION
+        ].delete_one({"_id": EMBEDDING_CONFIG_ID})
+    except Exception as exc:  # tenant db unavailable -> nothing to remove
+        logger.warning(
+            "Could not delete tenant embedding config for %s: %s",
+            resolved_tenant_id,
+            exc,
+        )
+        return False
+    invalidate_tenant_embedding(resolved_tenant_id)
+    return bool(getattr(result, "deleted_count", 0))
+
+
 # --------------------------------------------------------------------------- #
 # Dimension detection
 # --------------------------------------------------------------------------- #
@@ -514,6 +541,7 @@ __all__ = [
     "save_persisted_config",
     "load_tenant_config",
     "save_tenant_config",
+    "delete_tenant_config",
     "resolve_dimensions",
     "refresh_active_embedding_config",
     "reset_active_embedding_config",

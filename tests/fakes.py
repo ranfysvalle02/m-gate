@@ -150,6 +150,16 @@ class FakeCollection:
         self._apply_update(matched, update)
         return dict(matched)
 
+    async def delete_one(self, query: dict[str, Any]) -> Any:
+        index = next((i for i, d in enumerate(self.docs) if _matches(d, query)), None)
+        if index is not None:
+            self.docs.pop(index)
+
+        class _Result:
+            deleted_count = 0 if index is None else 1
+
+        return _Result()
+
     async def delete_many(self, query: dict[str, Any]) -> Any:
         before = len(self.docs)
         self.docs = [d for d in self.docs if not _matches(d, query)]

@@ -70,6 +70,14 @@ services:
     environment:
       MONGODB_URI: mongodb://mongodb:27017/?directConnection=true
       MONGODB_DB_NAME: mcp_gateway
+    # The base image HEALTHCHECK probes :8000; this server listens on :8101, so
+    # override it with a port-listen check to avoid a false "unhealthy" status.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8101), 2).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     ports:
       - "8101:8101"
 
@@ -83,6 +91,12 @@ services:
     environment:
       MONGODB_URI: mongodb://mongodb:27017/?directConnection=true
       MONGODB_DB_NAME: mcp_gateway
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8102), 2).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     ports:
       - "8102:8102"
 
@@ -179,6 +193,13 @@ services:
       # EMBEDDING_API_KEY_FILE: /gateway-secrets/embedding_api_key
       INCLUDE_SCORE_DETAILS: "true"
       AUTH_MODE: "disabled"
+      # The admin console is served at http://localhost:8000/ui. Even with
+      # AUTH_MODE=disabled, /admin and /ui require an admin session, so the
+      # gateway needs these credentials to allow login. Local-dev defaults only —
+      # never ship these to production.
+      ADMIN_UI_ENABLED: "true"
+      ADMIN_EMAIL: demo@demo.com
+      ADMIN_PASSWORD: demo
       TENANT_DB_PREFIX: tenant_
       JWT_ISSUER: http://localhost:8000
       JWT_AUDIENCE: mdb-mcp-gateway
@@ -227,8 +248,10 @@ services:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./deploy/prometheus/alerts.yaml:/etc/prometheus/alerts.yaml:ro
       - prometheus_data:/prometheus
+    # Host port is overridable to avoid collisions with other local stacks, e.g.
+    # `PROMETHEUS_HOST_PORT=9091 docker compose up`.
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_HOST_PORT:-9090}:9090"
 
   grafana:
     image: grafana/grafana:11.4.0
@@ -247,8 +270,9 @@ services:
       - ./deploy/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
       - ./deploy/grafana/dashboard.json:/var/lib/grafana/dashboards/dashboard.json:ro
       - grafana_data:/var/lib/grafana
+    # Host port is overridable to avoid collisions, e.g. `GRAFANA_HOST_PORT=3001`.
     ports:
-      - "3000:3000"
+      - "${GRAFANA_HOST_PORT:-3000}:3000"
 
 volumes:
   mongodb_data:

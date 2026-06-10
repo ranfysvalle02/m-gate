@@ -91,6 +91,27 @@ def test_ui_home_includes_tenant_embeddings_section(monkeypatch, reset_settings)
     assert "tenantEmbeddings" in home.text
 
 
+def test_ui_home_distinguishes_platform_and_tenant_embeddings(monkeypatch, reset_settings):
+    monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
+    monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
+    client = TestClient(_build_ui_app())
+    client.post(
+        "/ui/login",
+        data={"email": "demo@demo.com", "password": "demo-password"},
+        follow_redirects=False,
+    )
+    home = client.get("/ui/")
+    assert home.status_code == 200
+    # The global panel is framed as the platform-wide default...
+    assert "Platform Embeddings" in home.text
+    assert "Default for all tenants" in home.text
+    # ...and the tenant panel exposes the inherit/override model + reset affordance.
+    assert "Inheriting platform default" in home.text
+    assert "Override active" in home.text
+    assert "Reset to platform default" in home.text
+
+
 def test_create_app_omits_ui_routes_when_disabled(monkeypatch, reset_settings):
     monkeypatch.setenv("ADMIN_UI_ENABLED", "false")
     from gateway.app import create_app

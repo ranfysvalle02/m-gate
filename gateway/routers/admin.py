@@ -33,6 +33,7 @@ from services.cache_migration import SemanticCacheMigrationService
 from services.embedding_config import (
     EmbeddingConfig,
     default_model_for,
+    delete_tenant_config,
     load_persisted_config,
     load_tenant_config,
     refresh_active_embedding_config,
@@ -652,6 +653,39 @@ async def update_tenant_embedding_config(
         except ReprovisionInProgressError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return _embedding_config_response(refreshed, reprovision)
+
+
+@router.delete("/tenants/{tenant_id}/embedding", response_model=EmbeddingConfigResponse)
+async def reset_tenant_embedding_config(
+    request: Request,
+    tenant_id: str,
+    reprovision: bool = False,
+) -> EmbeddingConfigResponse:
+    """Remove a tenant's override so it inherits the platform default again.
+
+    Optionally re-embeds the tenant (``?reprovision=true``) so its stored vectors
+    realign with the inherited platform provider.
+    """
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    user_id = str(getattr(request.state, "user_id", "admin"))
+    if await is_tenant_reprovision_running(target_tenant):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An embedding reprovision is in progress for tenant '{target_tenant}'.",
+        )
+
+    deleted = await delete_tenant_config(target_tenant, settings)
+    refreshed = await load_tenant_config(target_tenant, settings)
+    repro: dict[str, Any] = {}
+    if reprovision and deleted:
+        try:
+            repro = await trigger_tenant_reprovision(
+                tenant_id=target_tenant,
+                started_by=user_id,
+            )
+        except ReprovisionInProgressError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return _embedding_config_response(refreshed, repro)
 
 
 @router.post("/tenants/{tenant_id}/embedding/test", response_model=EmbeddingTestResponse)

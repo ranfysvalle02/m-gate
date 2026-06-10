@@ -9,8 +9,8 @@ window.adminConsole = function adminConsole(config) {
       { key: "catalog", label: "Tool Catalog" },
       { key: "telemetry", label: "Telemetry" },
       { key: "search", label: "Search Playground" },
-      { key: "embeddings", label: "Embeddings" },
-      { key: "tenantEmbeddings", label: "Tenant Embeddings" },
+      { key: "embeddings", label: "Embeddings · Platform" },
+      { key: "tenantEmbeddings", label: "Embeddings · Tenant" },
       { key: "account", label: "Account" },
     ],
     activeSection: "dashboard",
@@ -471,6 +471,12 @@ window.adminConsole = function adminConsole(config) {
       return this.state.tenantEmbeddingStatus?.state === "running";
     },
 
+    // True when this tenant has its own override; false when it inherits the
+    // platform default (source === "platform-default" / "env").
+    tenantEmbeddingIsOverride() {
+      return this.state.tenantEmbedding?.source === "tenant-db";
+    },
+
     _tenantEmbeddingBasePath() {
       return `/admin/tenants/${encodeURIComponent(this.state.tenantId)}/embedding`;
     },
@@ -529,6 +535,34 @@ window.adminConsole = function adminConsole(config) {
         this.state.tenantEmbeddingStatus = this.state.tenantEmbedding.reprovision || null;
         this.forms.tenantEmbedding.api_key = "";
         if (this.tenantEmbeddingIsRunning()) this._startTenantEmbeddingPoll();
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.tenantEmbeddingSaving = false;
+      }
+    },
+
+    async resetTenantEmbedding() {
+      if (
+        !window.confirm(
+          `Reset '${this.state.tenantId}' to the platform default? ` +
+            "This deletes its embedding override.",
+        )
+      ) {
+        return;
+      }
+      this.clearError();
+      this.state.tenantEmbeddingTest = null;
+      this.state.tenantEmbeddingSaving = true;
+      try {
+        const reprovision = this.forms.tenantEmbedding.reprovision ? "true" : "false";
+        await this.apiRequest(
+          `${this._tenantEmbeddingBasePath()}?reprovision=${reprovision}`,
+          { method: "DELETE", includeTenant: false },
+        );
+        // Reload so the cards, badge, and form fields reflect the now-inherited
+        // platform default, and pick up any reprovision that was kicked off.
+        await this.loadTenantEmbedding();
       } catch (error) {
         this.setError(error);
       } finally {

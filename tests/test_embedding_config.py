@@ -16,6 +16,7 @@ from services.embedding_config import (
     active_embedding_identity,
     decrypt_api_key,
     default_config_from_settings,
+    delete_tenant_config,
     encrypt_api_key,
     get_embedding_service_for,
     invalidate_tenant_embedding,
@@ -220,6 +221,60 @@ async def test_save_and_load_tenant_round_trip_encrypts_key(patch_mongo):
     assert loaded.api_key == "sk-tenant-secret-123456"
     assert loaded.updated_by == "tenant-admin@example.com"
     assert loaded.source == "tenant-db"
+
+
+@pytest.mark.asyncio
+async def test_delete_tenant_config_reverts_to_platform_default(patch_mongo):
+    platform = EmbeddingConfig(
+        provider="voyage",
+        model="voyage-3",
+        api_key="platform-key",
+        dimensions=1024,
+    )
+    await save_persisted_config(platform)
+    await save_tenant_config(
+        "tenant-a",
+        EmbeddingConfig(
+            provider="openai", model="text-embedding-3-small", api_key="k", dimensions=8
+        ),
+    )
+    assert (await load_tenant_config("tenant-a")).source == "tenant-db"
+
+    deleted = await delete_tenant_config("tenant-a")
+    assert deleted is True
+
+    reverted = await load_tenant_config("tenant-a")
+    assert reverted.source == "platform-default"
+    assert reverted.provider == "voyage"
+
+    # Deleting again is a harmless no-op that reports nothing was removed.
+    assert await delete_tenant_config("tenant-a") is False
+
+
+@pytest.mark.asyncio
+async def test_delete_tenant_config_invalidates_cached_service(patch_mongo, monkeypatch):
+    from fakes import FakeEmbeddingService
+
+    import services.embedding_config as ec
+
+    await save_tenant_config(
+        "tenant-a",
+        EmbeddingConfig(provider="ollama", model="tenant-model", dimensions=8),
+    )
+    monkeypatch.setattr(
+        ec,
+        "build_provider_service",
+        lambda config, settings=None: FakeEmbeddingService(
+            dimensions=config.dimensions or 8, model_id=config.model or "x"
+        ),
+    )
+    cached = await get_embedding_service_for("tenant-a")
+    assert cached.model_id == "tenant-model"
+
+    await delete_tenant_config("tenant-a")
+    # Cache was dropped, so the tenant now resolves to the platform proxy.
+    after = await get_embedding_service_for("tenant-a")
+    assert after is not cached
 
 
 @pytest.mark.asyncio

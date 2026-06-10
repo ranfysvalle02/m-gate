@@ -225,6 +225,79 @@ async def test_put_tenant_embedding_detects_and_triggers_tenant_reprovision(
 
 
 @pytest.mark.asyncio
+async def test_delete_tenant_embedding_reverts_to_platform_default(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    _stub_provider_build(monkeypatch, admin, dims=384)
+
+    # Create a tenant override first.
+    create = EmbeddingConfigUpdateRequest(
+        provider="openai",
+        model="text-embedding-3-small",
+        api_key="sk-tenant-key",
+        reprovision=False,
+    )
+    created = await admin.update_tenant_embedding_config(_Req(roles=[]), "local-dev", create)
+    assert created.source == "tenant-db"
+    assert created.api_key_set is True
+
+    # Resetting removes the override; the tenant inherits the platform default.
+    reset = await admin.reset_tenant_embedding_config(
+        _Req(roles=[]), "local-dev", reprovision=False
+    )
+    assert reset.source in {"platform-default", "env", "db"}
+    assert reset.source != "tenant-db"
+    assert reset.reprovision == {}
+
+    # And a subsequent GET confirms the override is gone.
+    fetched = await admin.get_tenant_embedding_config(_Req(roles=[]), "local-dev")
+    assert fetched.source != "tenant-db"
+
+
+@pytest.mark.asyncio
+async def test_delete_tenant_embedding_triggers_reprovision_when_requested(
+    patch_mongo, monkeypatch
+):
+    import gateway.routers.admin as admin
+
+    _stub_provider_build(monkeypatch, admin, dims=384)
+    started: dict = {}
+
+    async def fake_trigger(*, tenant_id: str, started_by=None):
+        started["tenant"] = tenant_id
+        return {"state": "running", "tenant_id": tenant_id}
+
+    monkeypatch.setattr(admin, "trigger_tenant_reprovision", fake_trigger)
+
+    # Need an existing override so the delete reports deleted=True and reprovisions.
+    create = EmbeddingConfigUpdateRequest(
+        provider="ollama", model="nomic-embed-text", reprovision=False
+    )
+    await admin.update_tenant_embedding_config(_Req(roles=[]), "local-dev", create)
+
+    reset = await admin.reset_tenant_embedding_config(_Req(roles=[]), "local-dev", reprovision=True)
+    assert reset.reprovision["state"] == "running"
+    assert started["tenant"] == "local-dev"
+
+
+@pytest.mark.asyncio
+async def test_delete_tenant_embedding_noop_skips_reprovision(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    _stub_provider_build(monkeypatch, admin, dims=8)
+
+    async def fail_trigger(*, tenant_id: str, started_by=None):  # pragma: no cover - must not run
+        raise AssertionError("reprovision must not run when there was no override to delete")
+
+    monkeypatch.setattr(admin, "trigger_tenant_reprovision", fail_trigger)
+
+    # No override exists, so reprovision is skipped even when requested.
+    reset = await admin.reset_tenant_embedding_config(_Req(roles=[]), "local-dev", reprovision=True)
+    assert reset.reprovision == {}
+    assert reset.source != "tenant-db"
+
+
+@pytest.mark.asyncio
 async def test_tenant_status_endpoint_returns_tenant_status(patch_mongo, monkeypatch):
     import gateway.routers.admin as admin
 

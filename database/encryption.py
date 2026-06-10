@@ -107,6 +107,30 @@ def build_auto_encryption_opts(settings: Settings | None = None) -> AutoEncrypti
     )
 
 
+def build_watcher_client(settings: Settings | None = None) -> AsyncMongoClient:
+    """Client for the registry change-stream watcher under Queryable Encryption.
+
+    The shared app client auto-encrypts, and libmongocrypt forbids the
+    cluster-wide ``aggregate``/``$changeStream`` such a watcher needs ("non-collection
+    command not supported for auto encryption: aggregate"). ``bypass_auto_encryption``
+    skips the command analysis that imposes that restriction, so the cluster-wide
+    change stream is allowed — while automatic *decryption* of the encrypted
+    ``routing_registry`` fields in each change event still happens. Decryption uses
+    the embedded libmongocrypt, so no crypt_shared/mongocryptd is required here.
+    """
+    settings = settings or get_settings()
+    opts = AutoEncryptionOpts(
+        kms_providers(settings),
+        settings.qe_key_vault_namespace,
+        bypass_auto_encryption=True,
+    )
+    return AsyncMongoClient(
+        settings.mongodb_uri,
+        auto_encryption_opts=opts,
+        **_atlas_client_options(settings),
+    )
+
+
 def _key_vault_client(settings: Settings) -> AsyncMongoClient:
     return AsyncMongoClient(settings.mongodb_uri, **_atlas_client_options(settings))
 

@@ -153,12 +153,19 @@
   </section>
 
   <section x-show="activeSection === 'embeddings'" class="space-y-4">
-    <h2 class="text-2xl font-semibold">Embeddings</h2>
+    <div class="flex items-center gap-3 flex-wrap">
+      <h2 class="text-2xl font-semibold">Platform Embeddings</h2>
+      <span class="inline-flex items-center rounded-full border border-sky-300 bg-sky-50 px-2.5 py-0.5 text-xs font-medium text-sky-700">
+        Default for all tenants
+      </span>
+    </div>
     <p class="text-sm text-slate-600 max-w-3xl">
-      Choose the embedding provider that powers vector and hybrid search. Vector
-      width is detected automatically by embedding a probe string. Saving a change
-      re-embeds the tool catalog, semantic cache, and guardrail signatures across
-      all tenants and rebuilds the vector indexes.
+      The platform-wide default embedding provider. <span class="font-medium">Every tenant
+      inherits this</span> unless it defines its own override under
+      <span class="font-medium">Embeddings&nbsp;·&nbsp;Tenant</span>. Vector width is detected
+      automatically by embedding a probe string. Saving a change re-embeds the tool
+      catalog, semantic cache, and guardrail signatures across <span class="font-medium">all
+      inheriting tenants</span> and rebuilds the vector indexes.
     </p>
 
     <div class="grid gap-4 md:grid-cols-3">
@@ -271,15 +278,57 @@
   </section>
 
   <section x-show="activeSection === 'tenantEmbeddings'" class="space-y-4">
-    <h2 class="text-2xl font-semibold">Tenant Embeddings</h2>
+    <div class="flex items-center gap-3 flex-wrap">
+      <h2 class="text-2xl font-semibold">Tenant Embeddings</h2>
+      <span
+        class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium"
+        :class="tenantEmbeddingIsOverride()
+          ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+          : 'border-slate-300 bg-slate-50 text-slate-600'"
+        x-text="tenantEmbeddingIsOverride() ? 'Override active' : 'Inheriting platform default'"
+      ></span>
+      <span class="text-sm text-slate-500">
+        Tenant: <span class="font-medium text-slate-700" x-text="state.tenantId"></span>
+      </span>
+    </div>
     <p class="text-sm text-slate-600 max-w-3xl">
-      Bring-your-own embeddings per tenant. This panel targets the tenant selected
-      in the top bar (<span class="font-medium" x-text="state.tenantId"></span>).
-      A tenant without its own configuration transparently inherits the platform
-      default. The API key is encrypted at rest with a per-tenant Queryable
-      Encryption key when encryption is enabled. Saving a change re-embeds this
-      tenant's catalog and cache and rebuilds its vector index.
+      Bring-your-own embeddings for the tenant selected in the top bar. A tenant with
+      <span class="font-medium">no override inherits the Platform Embeddings default</span>
+      and automatically follows platform changes. Saving below creates a tenant-specific
+      override (which stops following the platform), encrypting the API key at rest with a
+      per-tenant Queryable Encryption key when encryption is enabled.
     </p>
+
+    <div
+      class="max-w-3xl rounded-md border px-4 py-3 text-sm flex items-start justify-between gap-4"
+      :class="tenantEmbeddingIsOverride()
+        ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+        : 'border-slate-300 bg-slate-50 text-slate-700'"
+    >
+      <div>
+        <template x-if="tenantEmbeddingIsOverride()">
+          <span>
+            <span class="font-medium">Override active.</span>
+            This tenant uses its own embeddings and will not follow Platform Embeddings changes.
+          </span>
+        </template>
+        <template x-if="!tenantEmbeddingIsOverride()">
+          <span>
+            <span class="font-medium">Inheriting the platform default.</span>
+            The form below is prefilled from the platform config; saving it creates an override.
+          </span>
+        </template>
+      </div>
+      <button
+        type="button"
+        class="btn-secondary whitespace-nowrap"
+        x-show="tenantEmbeddingIsOverride()"
+        :disabled="state.tenantEmbeddingSaving || tenantEmbeddingIsRunning()"
+        @click="resetTenantEmbedding()"
+      >
+        Reset to platform default
+      </button>
+    </div>
 
     <div class="grid gap-4 md:grid-cols-4">
       <div class="card">
@@ -388,7 +437,7 @@
       </label>
 
       <div class="md:col-span-2 flex items-center gap-2">
-        <button type="submit" class="btn-primary" :disabled="state.tenantEmbeddingSaving || tenantEmbeddingIsRunning()" x-text="state.tenantEmbeddingSaving ? 'Saving…' : 'Save & Apply'"></button>
+        <button type="submit" class="btn-primary" :disabled="state.tenantEmbeddingSaving || tenantEmbeddingIsRunning()" x-text="state.tenantEmbeddingSaving ? 'Saving…' : (tenantEmbeddingIsOverride() ? 'Update override' : 'Create tenant override')"></button>
         <button type="button" class="btn-secondary" @click="testTenantEmbedding()">Test connection</button>
         <button type="button" class="btn-secondary" @click="loadTenantEmbedding()">Refresh</button>
       </div>

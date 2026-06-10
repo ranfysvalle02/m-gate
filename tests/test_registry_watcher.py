@@ -192,6 +192,55 @@ async def test_non_resumable_error_clears_token_and_resyncs(patch_mongo, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_watch_loop_uses_bypass_client_under_qe_and_closes_it(patch_mongo, monkeypatch):
+    import services.registry_watcher as rw
+
+    settings = rw.get_settings()
+    object.__setattr__(settings, "gateway_instance_id", "watcher-qe")
+    object.__setattr__(settings, "qe_enabled", True)
+
+    control_db = get_control_database()
+    await control_db["tenants"].insert_one({"tenant_id": "local-dev"})
+
+    class _Reg:
+        async def mount_or_update(self, doc):
+            return None
+
+        async def unmount(self, server_name, tenant_id=None):
+            return None
+
+    monkeypatch.setattr(rw, "get_proxy_registry", lambda: _Reg())
+
+    class _BypassClient:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def watch(self, **kwargs):
+            # Cluster-wide stream is allowed on the bypass client; exit the loop.
+            raise asyncio.CancelledError()
+
+        async def close(self):
+            self.closed = True
+
+    bypass = _BypassClient()
+    monkeypatch.setattr(rw, "build_watcher_client", lambda settings=None: bypass)
+
+    def _no_shared_client():
+        raise AssertionError("watcher must not use the auto-encrypting shared client under QE")
+
+    monkeypatch.setattr(rw, "get_client", _no_shared_client)
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await rw._watch_loop()
+    finally:
+        # Avoid leaking QE state into the shared cached settings used by other tests.
+        object.__setattr__(settings, "qe_enabled", False)
+
+    assert bypass.closed is True
+
+
+@pytest.mark.asyncio
 async def test_resume_tokens_are_isolated_per_instance(patch_mongo):
     import services.registry_watcher as rw
 
