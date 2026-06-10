@@ -20,12 +20,20 @@ from services.authorization import AuthorizationService, get_authorization_servi
 from services.cache_manager import SemanticCacheManager
 from services.credential_broker import CallerIdentity
 from services.hybrid_search import HybridSearchService
-from services.metrics import observe_cache_event, observe_downstream_error
+from services.metrics import (
+    observe_cache_event,
+    observe_downstream_error,
+    observe_quota_block,
+    observe_usage,
+)
+from services.pending_actions import consume_approved_action, create_pending_action
 from services.proxy_registry import DownstreamTimeout, get_proxy_registry
 from services.registry_watcher import get_catalog_version
 from services.telemetry_logger import TelemetryLogger, get_telemetry_logger
 from services.tenant_provisioner import UnknownTenantError, ensure_tenant_ready
+from services.tenant_status import TenantSuspendedError, assert_tenant_active
 from services.tracing import set_span_attribute, start_span
+from services.usage_metering import check_quota, emit_billing_event, record_usage
 
 router = APIRouter(tags=["rpc"])
 
@@ -165,6 +173,9 @@ async def _dispatch(context: RpcContext) -> JsonRpcResponse:
             # Make the tenant boundary explicit: provision-on-first-use (or fail
             # loudly) so tenant-scoped queries never run against a missing database.
             await ensure_tenant_ready(context.tenant_id, settings=context.settings)
+            # Abuse kill-switch: a suspended tenant cannot run tools or consume
+            # resources until an operator resumes it.
+            await assert_tenant_active(context.tenant_id, settings=context.settings)
         return await handler(context)
     except ValidationError as exc:
         return make_error_response(
@@ -191,6 +202,23 @@ async def _dispatch(context: RpcContext) -> JsonRpcResponse:
             code=JsonRpcErrorCode.INVALID_REQUEST,
             message=str(exc),
             data={"tenant_id": exc.tenant_id, "reason": "tenant_not_provisioned"},
+        )
+    except TenantSuspendedError as exc:
+        observe_downstream_error("tenant_suspended")
+        _telemetry(
+            context,
+            status="tenant_suspended",
+            metadata={"tenant_id": exc.tenant_id, "reason": exc.reason},
+        )
+        return make_error_response(
+            request_id=request.id,
+            code=JsonRpcErrorCode.FORBIDDEN,
+            message="Tenant access is suspended.",
+            data={
+                "tenant_id": exc.tenant_id,
+                "reason": "tenant_suspended",
+                "detail": exc.reason,
+            },
         )
     except Exception as exc:
         observe_downstream_error("gateway_error")
@@ -272,7 +300,159 @@ async def _handle_tools_call(context: RpcContext) -> JsonRpcResponse:
             },
         )
 
+    quota_allowed, quota_reason, usage, quota = await check_quota(
+        context.tenant_id,
+        settings=context.settings,
+    )
+    if not quota_allowed:
+        observe_quota_block()
+        _telemetry(
+            context,
+            status="quota_exceeded",
+            metadata={
+                "server": call_params.server,
+                "tool": call_params.name,
+                "reason": quota_reason,
+                "period": usage.get("period"),
+                "usage": usage,
+                "quota": quota,
+            },
+        )
+        return make_error_response(
+            request_id=request.id,
+            code=JsonRpcErrorCode.RATE_LIMITED,
+            message="Tenant usage quota exceeded.",
+            data={
+                "server": call_params.server,
+                "tool": call_params.name,
+                "reason": "quota_exceeded",
+                "quota_reason": quota_reason,
+                "period": usage.get("period"),
+                "usage": usage,
+                "quota": quota,
+            },
+        )
+
     tool_metadata = (authz.tool or {}).get("metadata", {})
+
+    # Code-backed tools are authored and stored in Phase 2 but only executed by
+    # the Phase 3 sandbox. Until the feature flag is on, refuse the call with a
+    # clear, protocol-safe error instead of attempting a downstream proxy hop.
+    is_code_tool = tool_metadata.get("transport") == "code"
+    if is_code_tool and not context.settings.code_tool_execution_enabled:
+        _telemetry(
+            context,
+            status="code_execution_disabled",
+            metadata={"server": call_params.server, "tool": call_params.name},
+        )
+        return make_error_response(
+            request_id=request.id,
+            code=JsonRpcErrorCode.SERVER_ERROR,
+            message="Code tool execution is not yet enabled.",
+            data={
+                "server": call_params.server,
+                "tool": call_params.name,
+                "reason": "code_execution_not_enabled",
+            },
+        )
+
+    requires_confirmation = bool(tool_metadata.get("requires_confirmation"))
+    action_type = str(tool_metadata.get("action_type", "destructive"))
+    if requires_confirmation and call_params.confirmation_id:
+        consume_status, action_doc = await consume_approved_action(
+            tenant_id=context.tenant_id,
+            action_id=call_params.confirmation_id,
+            user_id=context.user_id,
+            server=call_params.server,
+            tool=call_params.name,
+            arguments=call_params.arguments,
+        )
+        if consume_status == "ok":
+            set_span_attribute(context.span, "mcp.confirmation", "consumed")
+            _telemetry(
+                context,
+                status="confirmation_consumed",
+                metadata={
+                    "server": call_params.server,
+                    "tool": call_params.name,
+                    "action_id": call_params.confirmation_id,
+                },
+            )
+        elif consume_status == "mismatch":
+            set_span_attribute(context.span, "mcp.confirmation", "invalid")
+            _telemetry(
+                context,
+                status="confirmation_invalid",
+                metadata={
+                    "server": call_params.server,
+                    "tool": call_params.name,
+                    "action_id": call_params.confirmation_id,
+                    "reason": consume_status,
+                },
+            )
+            return make_error_response(
+                request_id=request.id,
+                code=JsonRpcErrorCode.FORBIDDEN,
+                message="Confirmation token does not match this request.",
+                data={
+                    "server": call_params.server,
+                    "tool": call_params.name,
+                    "reason": consume_status,
+                },
+            )
+        else:
+            set_span_attribute(context.span, "mcp.confirmation", "required")
+            _telemetry(
+                context,
+                status="confirmation_invalid",
+                metadata={
+                    "server": call_params.server,
+                    "tool": call_params.name,
+                    "action_id": call_params.confirmation_id,
+                    "reason": consume_status,
+                },
+            )
+            return _confirmation_required_response(
+                request_id=request.id,
+                server=call_params.server,
+                tool=call_params.name,
+                action_type=action_type,
+                action_id=call_params.confirmation_id,
+                expires_at=action_doc.get("expires_at") if action_doc else None,
+                reason=consume_status,
+            )
+    elif requires_confirmation:
+        pending_action = await create_pending_action(
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            server=call_params.server,
+            tool=call_params.name,
+            arguments=call_params.arguments,
+            action_type=action_type,
+            ttl_seconds=context.settings.confirmation_ttl_seconds,
+        )
+        action_id = str(pending_action.get("_id", ""))
+        set_span_attribute(context.span, "mcp.confirmation", "required")
+        _telemetry(
+            context,
+            status="confirmation_pending",
+            metadata={
+                "server": call_params.server,
+                "tool": call_params.name,
+                "action_id": action_id,
+                "action_type": action_type,
+            },
+        )
+        return _confirmation_required_response(
+            request_id=request.id,
+            server=call_params.server,
+            tool=call_params.name,
+            action_type=action_type,
+            action_id=action_id,
+            expires_at=pending_action.get("expires_at"),
+            reason="pending",
+        )
+
     cacheable = bool(tool_metadata.get("cacheable", False))
     cache_ttl_seconds = int(tool_metadata.get("cache_ttl_seconds", 24 * 3600) or 0)
     invalidates = [name for name in tool_metadata.get("invalidates", []) if isinstance(name, str)]
@@ -318,6 +498,7 @@ async def _handle_tools_call(context: RpcContext) -> JsonRpcResponse:
     if invalidates:
         await context.cache_manager.invalidate(tenant_id=context.tenant_id, tool_names=invalidates)
 
+    await _record_billable_call(context, call_params, source="live_execution")
     _telemetry(
         context,
         status="live_execution_success",
@@ -358,7 +539,29 @@ async def _try_cache_lookup(
         status="cache_hit",
         metadata={"server": call_params.server, "tool": call_params.name},
     )
+    await _record_billable_call(context, call_params, source="cache_hit")
     return JsonRpcResponse(id=context.request.id, result=cached)
+
+
+async def _record_billable_call(
+    context: RpcContext,
+    call_params: ToolCallParams,
+    *,
+    source: str,
+) -> None:
+    usage = await record_usage(context.tenant_id, calls=1)
+    await emit_billing_event(
+        context.tenant_id,
+        kind="calls",
+        amount=1,
+        period=str(usage.get("period", "")) or None,
+        metadata={
+            "server": call_params.server,
+            "tool": call_params.name,
+            "source": source,
+        },
+    )
+    observe_usage("calls", 1)
 
 
 async def _execute_downstream(context: RpcContext, call_params: ToolCallParams) -> dict[str, Any]:
@@ -474,6 +677,33 @@ def _telemetry(context: RpcContext, *, status: str, metadata: dict[str, Any]) ->
         status=status,
         latency_ms=(perf_counter() - context.started) * 1000,
         metadata=metadata,
+    )
+
+
+def _confirmation_required_response(
+    *,
+    request_id: str | int | None,
+    server: str,
+    tool: str,
+    action_type: str,
+    action_id: str,
+    expires_at: Any,
+    reason: str,
+) -> JsonRpcResponse:
+    return JsonRpcResponse(
+        id=request_id,
+        result={
+            "status": "confirmation_required",
+            "reason": reason,
+            "confirmation": {
+                "action_id": action_id,
+                "server": server,
+                "tool": tool,
+                "action_type": action_type,
+                "expires_at": expires_at,
+                "message": "This action requires approval before it can run.",
+            },
+        },
     )
 
 

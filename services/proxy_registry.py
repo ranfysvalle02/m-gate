@@ -13,13 +13,27 @@ from fastmcp.client.transports import SSETransport, StdioTransport, StreamableHt
 
 from config.settings import get_settings
 from database.mongo import get_tenant_database
+from services.code_tools import decrypt_raw_code
 from services.credential_broker import (
     CallerIdentity,
     MintedCredential,
     get_credential_broker,
 )
+from services.egress_policy import EgressNotAllowed
+from services.egress_transport import make_egress_client_factory
 from services.embeddings import EmbeddingService, get_embedding_service
+from services.metrics import observe_usage
+from services.sandbox_executor import (
+    ExecRequest,
+    Executor,
+    SandboxError,
+    SandboxProtocolError,
+    SandboxTimeoutError,
+    get_executor,
+)
+from services.server_guard import assert_mountable
 from services.tracing import set_span_attribute, start_span
+from services.usage_metering import emit_billing_event, record_usage
 
 # Timeout types we recognize without resorting to message-substring sniffing.
 # asyncio.TimeoutError aliases builtins.TimeoutError on 3.11+, listed for clarity.
@@ -47,6 +61,7 @@ class DownstreamServer:
     tenant_id: str
     server: str
     transport: str
+    origin: str = "platform"
     endpoint: str | None = None
     command: str | None = None
     args: list[str] | None = None
@@ -67,10 +82,12 @@ class InMemoryFastMCPRegistry:
         self,
         embedding_service: EmbeddingService | None = None,
         credential_broker=None,
+        executor: Executor | None = None,
     ) -> None:
         self.settings = get_settings()
         self.embedding_service = embedding_service or get_embedding_service(self.settings)
         self.credential_broker = credential_broker or get_credential_broker()
+        self.executor = executor or get_executor()
         self._servers: dict[tuple[str, str], DownstreamServer] = {}
         self._lock = asyncio.Lock()
         # Warm, long-lived downstream clients keyed by (tenant, server). FastMCP's
@@ -92,8 +109,10 @@ class InMemoryFastMCPRegistry:
         return self._servers.get((resolved_tenant, server))
 
     async def mount_or_update(self, server_doc: dict[str, Any]) -> None:
+        assert_mountable(server_doc)
         tenant_id = str(server_doc.get("tenant_id") or self.settings.default_tenant_id)
         server_name = server_doc["server"]
+        origin = str(server_doc.get("origin") or "platform")
         transport = str(server_doc.get("transport") or "streamable_http")
         endpoint = server_doc.get("endpoint")
         command = server_doc.get("command")
@@ -113,6 +132,7 @@ class InMemoryFastMCPRegistry:
         async with self._lock:
             self._servers[(tenant_id, server_name)] = DownstreamServer(
                 tenant_id=tenant_id,
+                origin=origin,
                 server=server_name,
                 transport=transport,
                 endpoint=endpoint,
@@ -144,6 +164,9 @@ class InMemoryFastMCPRegistry:
     async def sync_tool_catalog(self, server_doc: dict[str, Any]) -> None:
         tenant_id = str(server_doc.get("tenant_id") or self.settings.default_tenant_id)
         server_name = server_doc["server"]
+        # Code tools are authored, not discovered; their definitions are always
+        # supplied on the document and never fetched from a downstream session.
+        server_transport = str(server_doc.get("transport") or "")
         tools = server_doc.get("tools") or await self.discover_tools(
             server_name=server_name,
             tenant_id=tenant_id,
@@ -158,6 +181,12 @@ class InMemoryFastMCPRegistry:
                 continue
             description = tool.get("description", "")
             scopes = tool.get("scopes") or server_scopes
+            # Surface the transport on the searchable catalog doc (never raw_code)
+            # so the call path can gate code-tool execution from catalog metadata
+            # alone, without re-reading the encrypted routing registry.
+            tool_metadata = dict(tool.get("metadata") or {})
+            if server_transport == "code":
+                tool_metadata["transport"] = "code"
             text_for_embedding = f"{server_name}\n{name}\n{description}".strip()
             schema_hash = self._schema_hash(
                 server_name=server_name,
@@ -187,7 +216,7 @@ class InMemoryFastMCPRegistry:
                         "description": description,
                         "input_schema": tool.get("input_schema", {}),
                         "scopes": scopes,
-                        "metadata": tool.get("metadata", {}),
+                        "metadata": tool_metadata,
                         "embedding": embedding,
                         "schema_hash": schema_hash,
                         "updated_at": now,
@@ -209,6 +238,14 @@ class InMemoryFastMCPRegistry:
         server = self.get_server(server_name, tenant_id=resolved_tenant)
         if server is None:
             raise KeyError(f"Server '{server_name}' is not mounted for tenant '{resolved_tenant}'.")
+        if server.transport == "code":
+            # Code-backed tools are executed by the local sandbox runtime rather
+            # than a downstream MCP transport session.
+            return await self._execute_code_tool(
+                server=server,
+                tool_name=tool_name,
+                arguments=arguments,
+            )
         attempts = 3
         timeout_seconds = self.settings.downstream_timeout_ms / 1000
         with start_span(
@@ -246,6 +283,94 @@ class InMemoryFastMCPRegistry:
                         raise
                     await asyncio.sleep(0.25 * attempt)
         return {}
+
+    async def _execute_code_tool(
+        self,
+        *,
+        server: DownstreamServer,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.settings.code_tool_execution_enabled:
+            raise DownstreamProtocolError("Code tool execution is disabled.")
+
+        routing_doc = await get_tenant_database(server.tenant_id)["routing_registry"].find_one(
+            {"_id": server.server}
+        )
+        if not routing_doc:
+            raise KeyError(
+                f"Server '{server.server}' is not present in routing_registry for "
+                f"tenant '{server.tenant_id}'."
+            )
+
+        tool_doc: dict[str, Any] | None = None
+        for candidate in routing_doc.get("tools") or []:
+            if candidate.get("name") == tool_name:
+                tool_doc = candidate
+                break
+        if tool_doc is None:
+            raise KeyError(f"Tool '{tool_name}' is not defined on code server '{server.server}'.")
+
+        raw_code = await decrypt_raw_code(server.tenant_id, tool_doc.get("raw_code"))
+        if not raw_code.strip():
+            raise DownstreamProtocolError(
+                f"Code tool '{server.server}/{tool_name}' has no decryptable source."
+            )
+
+        requirements = [
+            str(req) for req in (tool_doc.get("requirements") or []) if isinstance(req, str)
+        ]
+        secrets = await self._read_sandbox_secrets(server.tenant_id)
+        request = ExecRequest(
+            tenant_id=server.tenant_id,
+            server=server.server,
+            tool=tool_name,
+            raw_code=raw_code,
+            requirements=requirements,
+            arguments=arguments,
+            secrets=secrets,
+        )
+        timeout_seconds = self.settings.sandbox_wall_timeout_ms / 1000
+        try:
+            result = await asyncio.wait_for(self.executor.run(request), timeout=timeout_seconds)
+        except TimeoutError as exc:
+            raise DownstreamTimeout(
+                f"Code tool '{server.server}/{tool_name}' timed out after "
+                f"{self.settings.sandbox_wall_timeout_ms}ms"
+            ) from exc
+        except SandboxTimeoutError as exc:
+            raise DownstreamTimeout(str(exc)) from exc
+        except SandboxProtocolError as exc:
+            raise DownstreamProtocolError(str(exc)) from exc
+        except SandboxError as exc:
+            raise DownstreamError(str(exc)) from exc
+
+        await record_usage(
+            server.tenant_id,
+            sandbox_ms=max(0, int(result.elapsed_ms)),
+        )
+        await emit_billing_event(
+            server.tenant_id,
+            kind="sandbox_ms",
+            amount=max(0, int(result.elapsed_ms)),
+            metadata={"server": server.server, "tool": tool_name},
+        )
+        observe_usage("sandbox_ms", max(0, int(result.elapsed_ms)))
+        return self._validate_result(result.payload)
+
+    async def _read_sandbox_secrets(self, tenant_id: str) -> dict[str, str]:
+        doc = await get_tenant_database(tenant_id)["sandbox_secrets"].find_one({"_id": "sandbox"})
+        encrypted = doc.get("values", {}) if isinstance(doc, dict) else {}
+        if not isinstance(encrypted, dict):
+            return {}
+        plaintext: dict[str, str] = {}
+        for key, value in encrypted.items():
+            if not isinstance(key, str):
+                continue
+            decrypted = await decrypt_raw_code(tenant_id, value if isinstance(value, str) else None)
+            if decrypted:
+                plaintext[key] = decrypted
+        return plaintext
 
     async def discover_tools(
         self, server_name: str, tenant_id: str | None = None
@@ -304,6 +429,14 @@ class InMemoryFastMCPRegistry:
             raise self._timeout_error(server, timeout_seconds, exc) from exc
         except Exception as exc:
             await self._evict_client(key)
+            if self._contains_egress_block(exc):
+                # The connect-time egress gate (already metered in the transport)
+                # rejected this connection; surface a protocol-safe, retry-stable
+                # downstream error rather than a generic transport failure.
+                target = self._target(server)
+                raise DownstreamError(
+                    f"Downstream '{target}' blocked by egress allowlist."
+                ) from exc
             if self._is_timeout_error(exc):
                 raise self._timeout_error(server, timeout_seconds, exc) from exc
             target = self._target(server)
@@ -413,14 +546,66 @@ class InMemoryFastMCPRegistry:
             current = current.__cause__ or current.__context__
         return False
 
+    @staticmethod
+    def _contains_egress_block(exc: BaseException) -> bool:
+        """Detect an :class:`EgressNotAllowed` anywhere in an exception tree.
+
+        The async MCP transport wraps connect-time failures (and may bundle them
+        in an ``ExceptionGroup`` via anyio task groups), so we walk both the
+        cause/context chain and any exception-group members.
+        """
+        seen: set[int] = set()
+        stack: list[BaseException] = [exc]
+        while stack:
+            current = stack.pop()
+            if current is None or id(current) in seen:
+                continue
+            seen.add(id(current))
+            if isinstance(current, EgressNotAllowed):
+                return True
+            members = getattr(current, "exceptions", None)
+            if members:
+                stack.extend(member for member in members if isinstance(member, BaseException))
+            if current.__cause__ is not None:
+                stack.append(current.__cause__)
+            if current.__context__ is not None:
+                stack.append(current.__context__)
+        return False
+
+    def _egress_factory(self, server: DownstreamServer):
+        """Return a pinning httpx client factory, or None when egress is disabled.
+
+        The factory resolves the effective policy (global ceiling intersected with
+        the tenant allowlist) lazily on each connect, so the per-tenant allowlist
+        read only happens on a real outbound connection. When the allowlist
+        feature is disabled the stock client is used unchanged.
+        """
+        if not self.settings.egress_allowlist_enabled:
+            return None
+        return make_egress_client_factory(settings=self.settings, tenant_id=server.tenant_id)
+
     def _build_client(
-        self, server: DownstreamServer, credential: MintedCredential | None = None
+        self,
+        server: DownstreamServer,
+        credential: MintedCredential | None = None,
     ) -> Client:
         headers = credential.headers if credential else None
         if server.transport == "streamable_http":
-            return Client(StreamableHttpTransport(url=str(server.endpoint), headers=headers))
+            return Client(
+                StreamableHttpTransport(
+                    url=str(server.endpoint),
+                    headers=headers,
+                    httpx_client_factory=self._egress_factory(server),
+                )
+            )
         if server.transport == "sse":
-            return Client(SSETransport(url=str(server.endpoint), headers=headers))
+            return Client(
+                SSETransport(
+                    url=str(server.endpoint),
+                    headers=headers,
+                    httpx_client_factory=self._egress_factory(server),
+                )
+            )
         if server.transport == "stdio":
             if not server.command:
                 raise ValueError(f"Server '{server.server}' stdio transport missing command.")

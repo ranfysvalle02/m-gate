@@ -28,6 +28,7 @@ from services.embedding_config import refresh_active_embedding_config
 from services.embeddings import embedding_version_for, get_embedding_service
 from services.proxy_registry import get_proxy_registry
 from services.registry_watcher import start_registry_watcher, stop_registry_watcher
+from services.sandbox_executor import prewarm_executor, shutdown_executor
 from services.tenant_provisioner import ensure_control_plane_indexes, provision_tenant
 
 logger = logging.getLogger(__name__)
@@ -110,11 +111,24 @@ async def app_lifespan(_: FastAPI) -> AsyncIterator[None]:
         await ensure_control_plane_indexes()
         await provision_tenant(settings.default_tenant_id, wait_for_queryable_indexes=False)
     await start_registry_watcher()
+    # Prewarm the sandbox worker pool so the first code-tool call skips the
+    # subprocess-spawn + wasm-compile cold start. Never block startup on it.
+    if (
+        settings.code_tool_execution_enabled
+        and settings.code_executor != "disabled"
+        and settings.sandbox_pool_size > 0
+    ):
+        try:
+            await prewarm_executor()
+            logger.info("Prewarmed sandbox worker pool (size=%d).", settings.sandbox_pool_size)
+        except Exception as exc:  # never fail startup on a sandbox warmup hiccup
+            logger.warning("Sandbox pool prewarm failed: %s", exc)
     try:
         yield
     finally:
         await stop_registry_watcher()
         await get_proxy_registry().aclose()
+        await shutdown_executor()
         await disconnect_from_mongo()
         logger.info("Application shutdown complete.")
 

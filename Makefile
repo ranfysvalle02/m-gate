@@ -30,7 +30,7 @@ INTEGRATION_MARKERS := integration or load
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-dev lint format format-check typecheck \
+.PHONY: help install install-dev fetch-wasm lint format format-check typecheck \
         test test-cov test-integration test-integration-strict test-load \
         check quality ci precommit precommit-install clean
 
@@ -47,6 +47,9 @@ install: ## Install runtime dependencies
 install-dev: ## Install dev + runtime dependencies (lint, types, test tooling)
 	$(PIP) install --upgrade pip
 	$(PIP) install -r requirements-dev.txt
+
+fetch-wasm: ## Download and verify pinned python.wasm runtime
+	$(PYTHON) scripts/fetch_python_wasm.py
 
 ## ---- quality gate (mirrors CI `quality` job) -----------------------------
 

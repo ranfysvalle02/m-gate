@@ -113,6 +113,10 @@ async def ensure_control_plane_indexes() -> None:
     settings = get_settings()
     control_db = get_control_database()
     await control_db["tenants"].create_index("tenant_id", unique=True)
+    # Email is the sole login identifier (the login form has no tenant field), so
+    # it must resolve to exactly one account globally.
+    await control_db["users"].create_index("email", unique=True)
+    await control_db["users"].create_index("tenant_id")
     await _ensure_watcher_state_ttl_index(
         control_db=control_db,
         ttl_seconds=settings.watcher_resume_ttl_seconds,
@@ -124,6 +128,8 @@ async def ensure_control_plane_indexes() -> None:
         [("tenant_id", 1), ("client_ip", 1), ("window_epoch", 1)],
         unique=True,
     )
+    await control_db["usage_counters"].create_index([("tenant_id", 1), ("period", 1)], unique=True)
+    await control_db["usage_events"].create_index([("tenant_id", 1), ("ts", -1)])
     await control_db["guardrail_signatures"].create_index("category")
     _model_id, dimensions, embedding_version = active_embedding_identity()
     guardrail_index_spec = guardrail_signature_index_spec(
@@ -188,7 +194,7 @@ async def provision_tenant(
                     "db_name": tenant_db_name(tenant_id),
                     "updated_at": now,
                 },
-                "$setOnInsert": {"created_at": now},
+                "$setOnInsert": {"created_at": now, "status": "active"},
             },
             upsert=True,
         )
@@ -218,6 +224,8 @@ async def provision_tenant(
         await tenant_db["tool_catalog"].create_index([("server", 1), ("name", 1)], unique=True)
         await tenant_db["routing_registry"].create_index("server", unique=True)
         await tenant_db["semantic_cache"].create_index("expires_at", expireAfterSeconds=0)
+        await tenant_db["pending_actions"].create_index("expires_at", expireAfterSeconds=0)
+        await tenant_db["pending_actions"].create_index([("status", 1), ("created_at", -1)])
         _model_id, dimensions, embedding_version = await tenant_embedding_identity(
             tenant_id, settings=settings
         )

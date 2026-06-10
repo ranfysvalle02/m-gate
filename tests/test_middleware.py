@@ -368,3 +368,86 @@ async def test_rbac_denies_without_invoke_role(patch_mongo, monkeypatch):
     sink = _Sink()
     await mw(scope, sink.receive, sink.send)
     assert sink.status == 403
+
+
+@pytest.mark.asyncio
+async def test_rbac_blocks_suspended_user(patch_mongo, monkeypatch):
+    from config.settings import get_settings
+    from database.mongo import get_control_database
+    from gateway.middleware.rbac import RbacMiddleware
+
+    mw = RbacMiddleware(_ok_app)
+    mw.settings = get_settings()
+    object.__setattr__(mw.settings, "auth_mode", "hs256")
+
+    # A disabled account is cut off even though session_context would grant the
+    # invoke role, and even with no roles seeded on the token.
+    await get_control_database()["session_context"].insert_one(
+        {"tenant_id": "t1", "user_id": "u1", "roles": ["tool:invoke"], "status": "disabled"}
+    )
+    scope = _scope()
+    scope["state"] = {"roles": [], "tenant_id": "t1", "user_id": "u1"}
+    sink = _Sink()
+    await mw(scope, sink.receive, sink.send)
+    assert sink.status == 403
+
+
+@pytest.mark.asyncio
+async def test_rbac_allows_active_user_from_session_context(patch_mongo, monkeypatch):
+    from config.settings import get_settings
+    from database.mongo import get_control_database
+    from gateway.middleware.rbac import RbacMiddleware
+
+    mw = RbacMiddleware(_ok_app)
+    mw.settings = get_settings()
+    object.__setattr__(mw.settings, "auth_mode", "hs256")
+
+    # An active account with the invoke role hydrated from session_context passes.
+    await get_control_database()["session_context"].insert_one(
+        {"tenant_id": "t1", "user_id": "u1", "roles": ["tool:invoke"], "status": "active"}
+    )
+    scope = _scope()
+    scope["state"] = {"roles": [], "tenant_id": "t1", "user_id": "u1"}
+    sink = _Sink()
+    await mw(scope, sink.receive, sink.send)
+    assert sink.status == 200
+
+
+@pytest.mark.asyncio
+async def test_rbac_no_session_context_is_fail_open(patch_mongo, monkeypatch):
+    from config.settings import get_settings
+    from gateway.middleware.rbac import RbacMiddleware
+
+    mw = RbacMiddleware(_ok_app)
+    mw.settings = get_settings()
+    object.__setattr__(mw.settings, "auth_mode", "hs256")
+
+    # No session_context doc (e.g. a workload token): the status gate must not
+    # fire, so a token that already carries the invoke role passes.
+    scope = _scope()
+    scope["state"] = {"roles": ["tool:invoke"], "tenant_id": "t1", "user_id": "workload"}
+    sink = _Sink()
+    await mw(scope, sink.receive, sink.send)
+    assert sink.status == 200
+
+
+@pytest.mark.asyncio
+async def test_rbac_legacy_session_without_status_treated_active(patch_mongo, monkeypatch):
+    from config.settings import get_settings
+    from database.mongo import get_control_database
+    from gateway.middleware.rbac import RbacMiddleware
+
+    mw = RbacMiddleware(_ok_app)
+    mw.settings = get_settings()
+    object.__setattr__(mw.settings, "auth_mode", "hs256")
+
+    # A pre-existing session_context doc written before status mirroring lacks the
+    # field; it must be treated as active rather than failing closed.
+    await get_control_database()["session_context"].insert_one(
+        {"tenant_id": "t1", "user_id": "u1", "roles": ["tool:invoke"]}
+    )
+    scope = _scope()
+    scope["state"] = {"roles": [], "tenant_id": "t1", "user_id": "u1"}
+    sink = _Sink()
+    await mw(scope, sink.receive, sink.send)
+    assert sink.status == 200

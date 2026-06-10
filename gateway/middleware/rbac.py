@@ -46,6 +46,16 @@ class RbacMiddleware:
             session = await get_control_database()["session_context"].find_one(
                 {"tenant_id": tenant_id, "user_id": user_id}
             )
+            # User-level kill-switch: a managed user whose mirrored status is not
+            # active is cut off immediately, before any role hydration, so a standing
+            # token stops working the moment an admin disables the account. Principals
+            # with no session_context doc (e.g. workload tokens) are left untouched.
+            if session is not None and str(session.get("status", "active")) != "active":
+                response = JSONResponse(
+                    status_code=403,
+                    content={"detail": "Account suspended."},
+                )
+                return await response(scope, request.receive, send)
             if session and isinstance(session.get("roles"), list):
                 roles.update(session["roles"])
             request.state.roles = sorted(roles)

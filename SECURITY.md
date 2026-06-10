@@ -94,10 +94,21 @@ All references point at the code that implements the control.
   emitted as a metric label + structured log only.
 - **Admin sessions** (`services/admin_session.py`): HS256-signed session token in an
   **HttpOnly** cookie, `Secure` when served over HTTPS, `SameSite=Lax`, default 8h TTL.
-  Credential and CSRF comparisons use constant-time `hmac.compare_digest`.
+  The token embeds the principal's `tenant_id` + `roles`, which the auth middleware
+  hydrates into `request.state`; only admin-tier roles become admin principals.
+  CSRF comparisons use constant-time `hmac.compare_digest`.
+- **User store** (`services/users.py`): control-DB `users` collection backs admin-console
+  logins. Passwords are hashed with PBKDF2-HMAC-SHA256 (`services/passwords.py`); plaintext
+  is never stored and the hash is never returned by the API. Login resolves against this
+  store first; the env `ADMIN_EMAIL`/`ADMIN_PASSWORD` pair survives only as a bootstrap
+  superuser fallback.
 
 ### Authorization
 
+- **Role hierarchy**: `platform-admin` → `tenant-admin` (role `admin`) → `user`. Only a
+  platform-admin may grant the `platform-admin` role, manage a platform-admin account, or
+  manage users/servers across tenants; a tenant-admin is confined to its own tenant via
+  `gateway/routers/admin.py::_resolve_target_tenant`.
 - **Coarse RBAC** (`gateway/middleware/rbac.py`): `/rpc` requires the `admin` or
   `tool:invoke` role; `/admin` and the admin `/ui` require an admin principal.
 - **Per-tool scope enforcement** (`services/authorization.py`): `tools/call` checks the
@@ -116,6 +127,102 @@ All references point at the code that implements the control.
   lookups are gated by `tenant_id` so one tenant can never read another's cached results.
 - `AUTO_PROVISION_TENANTS=false` makes tenant creation an explicit operator step where
   tenant ids come from untrusted callers.
+- Server registration now carries an `origin` marker (`platform` or `tenant`):
+  tenant-origin registrations are forbidden from using `stdio` / host commands and must
+  use publicly routable HTTP/SSE endpoints. This blocks tenant-triggered host process
+  execution and private-network SSRF at registration time.
+
+### Network egress controls (per-tenant allowlists)
+
+The gateway's only outbound surface is its proxy to registered downstream MCP servers
+(`streamable_http`/`sse`); the code sandbox has no network at all. Outbound egress to
+those downstreams is governed by a **two-gate allowlist** so an operator can restrict,
+per tenant, exactly which hosts/networks the gateway may reach:
+
+- **Global ceiling** (`EGRESS_GLOBAL_ALLOWLIST`, `config/settings.py`): a deployment-wide
+  set of allowed host globs (`*.corp.example`), exact hosts, IP literals, and CIDRs.
+- **Per-tenant allowlist** (`services/tenant_egress.py`): stored on the tenant control
+  doc and managed via `PUT /admin/tenants/{tenant_id}/egress-allowlist`. When both are
+  set, an endpoint must satisfy **both** (the tenant list can only narrow within the
+  global ceiling). `EGRESS_DEFAULT_DENY=true` flips to a fully locked "deny unless listed"
+  posture.
+- **Gate 1 — registration** (`gateway/routers/admin.py::_apply_server_policy`): saving a
+  server whose endpoint is not permitted fails fast with `422`, so operators get a clear
+  error instead of a runtime failure.
+- **Gate 2 — connect (authoritative, rebinding-proof)**
+  (`services/egress_transport.py`): on **every** outbound connect the policy is
+  re-resolved, the host is re-resolved via DNS, each resolved IP is screened against the
+  SSRF denylist **and** the allowlist, and the connection is **pinned to the validated
+  IP** (the request URL host is rewritten to that IP while the original `Host` header and
+  TLS SNI are preserved). This closes the DNS-rebinding / TOCTOU window where a name that
+  passed validation later resolves to an internal address.
+- The SSRF denylist (loopback, link-local, private, reserved, unspecified, CGNAT) is a
+  single shared definition (`services/server_guard.py::ip_is_disallowed`) used by both
+  gates, so they can never drift. Blocked connections are surfaced as protocol-safe
+  downstream errors and counted via `gateway_egress_blocks_total{stage}`
+  (`register`/`connect`).
+
+### Code-backed tool sandbox execution
+
+- Users may author Python functions as tools (`transport="code"`). Execution remains
+  gated behind `CODE_TOOL_EXECUTION_ENABLED` (default off). When enabled, code tools
+  run through the WebAssembly executor (`CODE_EXECUTOR=wasm`) in a **fresh worker
+  subprocess per call**; they are not proxied to downstream HTTP/SSE/stdio sessions.
+- **Encrypted at rest:** authored `raw_code` is encrypted before persistence using the
+  same tenant-secret cipher as embedding API keys (`services/code_tools.py` →
+  `services/embedding_config` → `database/encryption.py`): a per-tenant Queryable
+  Encryption DEK when QE is enabled, a deployment-wide Fernet key otherwise. Source is
+  redacted from list responses (a `has_raw_code` flag) and is **never copied into the
+  searchable tool catalog** — only the description is embedded.
+- **Authoring-time lint** (`lint_code_tool`) is a defense-in-depth gate, *not* a security
+  boundary (the sandbox is): it caps source size, AST-rejects dangerous imports
+  (`os`, `sys`, `subprocess`, `socket`, `ctypes`, …), `eval`/`exec`/`compile`/`open`, and
+  classic dunder escape chains, and requires pinned PyPI specs (`name==version`),
+  rejecting URL/VCS/file/local/range specifiers.
+- **Runtime isolation controls:** the sandbox worker sets WASI deny-by-default
+  capabilities (no inherited env, no host network sockets, only a preopened job dir),
+  plus per-call fuel (CPU), linear-memory cap (`store.set_limits`), wall-clock deadline
+  (epoch interruption + a parent-side kill), output-size cap, POSIX rlimits backstop, and
+  both per-tenant **and** a process-wide concurrency semaphore
+  (`SANDBOX_MAX_GLOBAL_CONCURRENCY`) so many tenants cannot collectively exhaust the host.
+  Each call tears down (or, for a warm worker, recycles) on timeout/error.
+- **Bounded result frames (no memory-DoS):** the guest's stdout/stderr are read
+  back capped at the output limit, and the *entire* emitted result frame is hard-capped
+  (`services/sandbox_errors.frame_budget_bytes`). An over-budget result fails **closed**
+  with an `output_limit` error instead of streaming an unbounded line back to the parent;
+  the parent's stream-reader buffer is sized from the same formula so a legitimate near-cap
+  result is never silently truncated.
+- **Warm-pool parity:** a pooled (`SANDBOX_POOL_SIZE>0`) worker is long-lived but keeps the
+  same per-call isolation — every job runs in a fresh wasm `Store`. Cumulative POSIX limits
+  (CPU/address-space) are omitted on the resident worker (they would eventually kill a
+  healthy worker); instead it gets non-cumulative ceilings (output file size with `SIGXFSZ`
+  ignored so an over-limit write fails the *job* not the worker, and a descriptor cap), and
+  any worker that times out, crashes, overruns the frame buffer, or hits an unexpected error
+  is **always** killed and replaced — never returned to serve a later caller.
+- **Tenant secret injection:** per-tenant sandbox secrets are stored encrypted in the
+  tenant DB (`sandbox_secrets`) and injected only into the sandbox job payload, never
+  into gateway process environment variables.
+- **Dependency installation is deny-by-default:** a code tool's pinned `requirements`
+  are installed with host `pip` *before* the wasm jail, so a source build could execute
+  `setup.py` on the host. The executor therefore (a) refuses any distribution not in the
+  operator allowlist `SANDBOX_ALLOWED_REQUIREMENTS` (empty by default ⇒ stdlib-only code
+  tools) and (b) installs **wheels only** (`--only-binary=:all: --no-deps`), so no source
+  build runs on the host — allowlisted package code only executes later, inside the sandbox.
+  The pinned-spec authoring lint is *not* a substitute for this; the allowlist is the boundary.
+
+### Human-in-the-loop destructive-action approvals
+
+- Tools can declare `metadata.requires_confirmation=true` and an `action_type`
+  (`read`/`write`/`destructive`). On `tools/call`, the gateway halts execution and
+  creates a TTL-backed `pending_actions` record (`tenant_id`, requester, tool, args,
+  expiry, status).
+- Approval is a second-person control: only tenant-admin/platform-admin can
+  approve/reject, and requesters cannot decide their own actions.
+- Approved actions are argument-bound: the caller must re-submit the same
+  `server`/`tool`/`arguments` with `confirmation_id`. Any mismatch is rejected.
+- Pending actions auto-expire via TTL and become non-executable.
+- Approve/reject decisions are appended to `audit_telemetry` with approver and
+  action metadata for forensic traceability.
 
 ### Downstream credential brokering (JIT)
 

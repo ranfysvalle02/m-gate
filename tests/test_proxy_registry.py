@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
+from services.code_tools import encrypt_raw_code
 from services.credential_broker import MintedCredential
 from services.proxy_registry import (
     DownstreamError,
@@ -11,6 +12,8 @@ from services.proxy_registry import (
     DownstreamTimeout,
     InMemoryFastMCPRegistry,
 )
+from services.sandbox_executor import ExecResult
+from services.server_guard import StdioNotAllowed
 
 
 class _ScriptedClient:
@@ -80,6 +83,24 @@ async def test_build_client_supports_all_transports():
     assert streamable.transport.__class__.__name__ == "StreamableHttpTransport"
     assert sse.transport.__class__.__name__ == "SSETransport"
     assert stdio.transport.__class__.__name__ == "StdioTransport"
+
+
+@pytest.mark.asyncio
+async def test_mount_or_update_rejects_tenant_origin_stdio():
+    registry = InMemoryFastMCPRegistry()
+    doc = {
+        "_id": "secure-stdio",
+        "tenant_id": "tenant-a",
+        "origin": "tenant",
+        "server": "secure-stdio",
+        "transport": "stdio",
+        "command": "python",
+        "args": ["-m", "servers.weather.server"],
+        "enabled": True,
+    }
+
+    with pytest.raises(StdioNotAllowed):
+        await registry.mount_or_update(doc)
 
 
 @pytest.mark.asyncio
@@ -455,6 +476,120 @@ async def test_unmount_evicts_pooled_client(monkeypatch):
     await registry.unmount("weather", tenant_id="local-dev")
     assert ("local-dev", "weather") not in registry._clients
     assert client.closes >= 1
+
+
+@pytest.mark.asyncio
+async def test_sync_tool_catalog_stamps_code_transport_without_raw_code(
+    patch_mongo, fake_embeddings
+):
+    """Code tools are embedded/indexed for discovery with a ``transport=code``
+    metadata stamp, and their encrypted source is never copied into the catalog."""
+    from database.mongo import get_tenant_database
+
+    registry = InMemoryFastMCPRegistry(embedding_service=fake_embeddings)
+    server_doc = {
+        "tenant_id": "local-dev",
+        "server": "my-funcs",
+        "transport": "code",
+        "tools": [
+            {
+                "server": "my-funcs",
+                "name": "add",
+                "description": "Add two numbers",
+                "input_schema": {},
+                "raw_code": "enc::ciphertext-should-not-leak",
+                "requirements": ["httpx==0.27.0"],
+                "metadata": {"action_type": "read"},
+            }
+        ],
+    }
+    await registry.sync_tool_catalog(server_doc)
+
+    catalog = get_tenant_database("local-dev")["tool_catalog"].docs
+    assert len(catalog) == 1
+    entry = catalog[0]
+    assert entry["metadata"]["transport"] == "code"
+    assert entry["metadata"]["action_type"] == "read"
+    assert "raw_code" not in entry
+    assert entry["embedding"]  # description was embedded for search
+
+
+@pytest.mark.asyncio
+async def test_call_tool_code_transport_respects_execution_flag():
+    registry = InMemoryFastMCPRegistry()
+    registry._servers[("local-dev", "my-funcs")] = DownstreamServer(
+        tenant_id="local-dev",
+        server="my-funcs",
+        transport="code",
+    )
+    settings = registry.settings
+    original = settings.code_tool_execution_enabled
+    object.__setattr__(settings, "code_tool_execution_enabled", False)
+    try:
+        with pytest.raises(DownstreamProtocolError, match="disabled"):
+            await registry.call_tool("my-funcs", "add", {})
+    finally:
+        object.__setattr__(settings, "code_tool_execution_enabled", original)
+
+
+@pytest.mark.asyncio
+async def test_call_tool_code_transport_executes_via_executor(patch_mongo):
+    from database.mongo import get_tenant_database
+    from services import usage_metering
+
+    class _Executor:
+        def __init__(self):
+            self.captured = None
+
+        async def run(self, request):
+            self.captured = request
+            return ExecResult(payload={"sum": 3}, stdout="", stderr="", elapsed_ms=1)
+
+    executor = _Executor()
+    registry = InMemoryFastMCPRegistry(executor=executor)
+    registry._servers[("local-dev", "my-funcs")] = DownstreamServer(
+        tenant_id="local-dev",
+        server="my-funcs",
+        transport="code",
+    )
+    settings = registry.settings
+    original = settings.code_tool_execution_enabled
+    object.__setattr__(settings, "code_tool_execution_enabled", True)
+    try:
+        encrypted_code = await encrypt_raw_code(
+            "local-dev", "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+        encrypted_secret = await encrypt_raw_code("local-dev", "token-123")
+        tenant_db = get_tenant_database("local-dev")
+        tenant_db["routing_registry"].docs.append(
+            {
+                "_id": "my-funcs",
+                "tenant_id": "local-dev",
+                "server": "my-funcs",
+                "transport": "code",
+                "tools": [
+                    {
+                        "name": "add",
+                        "raw_code": encrypted_code,
+                        "requirements": ["httpx==0.27.0"],
+                    }
+                ],
+            }
+        )
+        tenant_db["sandbox_secrets"].docs.append(
+            {"_id": "sandbox", "values": {"API_KEY": encrypted_secret}}
+        )
+        result = await registry.call_tool("my-funcs", "add", {"a": 1, "b": 2})
+    finally:
+        object.__setattr__(settings, "code_tool_execution_enabled", original)
+
+    assert result == {"sum": 3}
+    assert executor.captured is not None
+    assert executor.captured.tool == "add"
+    assert executor.captured.arguments == {"a": 1, "b": 2}
+    assert executor.captured.secrets["API_KEY"] == "token-123"
+    usage = await usage_metering.get_usage("local-dev")
+    assert usage["sandbox_ms"] == 1
 
 
 @pytest.mark.asyncio

@@ -15,14 +15,20 @@ class TenantCreateRequest(BaseModel):
 class TenantResponse(BaseModel):
     tenant_id: str
     db_name: str
+    status: str = "active"
+    suspended_reason: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class TenantStatusUpdateRequest(BaseModel):
+    reason: str | None = None
 
 
 class ServerUpsertRequest(BaseModel):
     tenant_id: str | None = None
     server: str
-    transport: Literal["streamable_http", "sse", "stdio"] = "streamable_http"
+    transport: Literal["streamable_http", "sse", "stdio", "code"] = "streamable_http"
     endpoint: str | None = None
     command: str | None = None
     args: list[str] = Field(default_factory=list)
@@ -35,7 +41,7 @@ class ServerUpsertRequest(BaseModel):
 
 class ServerPatchRequest(BaseModel):
     tenant_id: str | None = None
-    transport: Literal["streamable_http", "sse", "stdio"] | None = None
+    transport: Literal["streamable_http", "sse", "stdio", "code"] | None = None
     endpoint: str | None = None
     command: str | None = None
     args: list[str] | None = None
@@ -50,6 +56,129 @@ class CacheMigrateRequest(BaseModel):
     tenant_id: str | None = None
     mode: Literal["status", "purge", "reembed"] = "status"
     batch_size: int = Field(default=200, ge=1, le=10_000)
+
+
+class UserCreateRequest(BaseModel):
+    email: str
+    password: str
+    # None -> the caller's tenant (platform-admin may target any tenant).
+    tenant_id: str | None = None
+    # Least-privilege default: a bare "user" can authenticate but has no admin
+    # console surface. Promote to "admin" (tenant-admin) or, for a platform-admin
+    # only, "platform-admin" explicitly.
+    roles: list[str] = Field(default_factory=lambda: ["user"])
+    scopes: list[str] = Field(default_factory=list)
+    status: Literal["active", "disabled"] = "active"
+
+
+class UserUpdateRequest(BaseModel):
+    # All optional: only the provided fields are changed. ``password`` rotates the
+    # stored hash; omit it to leave the credential untouched.
+    password: str | None = None
+    roles: list[str] | None = None
+    scopes: list[str] | None = None
+    status: Literal["active", "disabled"] | None = None
+
+
+class UserResponse(BaseModel):
+    id: str
+    tenant_id: str
+    email: str
+    roles: list[str] = Field(default_factory=list)
+    scopes: list[str] = Field(default_factory=list)
+    status: str = "active"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    created_by: str | None = None
+
+
+class UserListResponse(BaseModel):
+    # ``None`` when a platform-admin lists across all tenants.
+    tenant_id: str | None = None
+    items: list[UserResponse] = Field(default_factory=list)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class EgressAllowlistUpdateRequest(BaseModel):
+    # Host globs / exact hosts / IP literals / CIDRs the tenant may reach.
+    # An empty list clears the tenant allowlist (global guardrail still applies).
+    allowlist: list[str] = Field(default_factory=list)
+
+
+class EgressAllowlistResponse(BaseModel):
+    tenant_id: str
+    allowlist: list[str] = Field(default_factory=list)
+    # The operator-configured global ceiling, surfaced read-only for context.
+    global_allowlist: list[str] = Field(default_factory=list)
+    enforced: bool = True
+    default_deny: bool = False
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+
+
+class SandboxSecretsUpdateRequest(BaseModel):
+    # Empty string clears a key; omitted keys are unchanged.
+    values: dict[str, str] = Field(default_factory=dict)
+
+
+class SandboxSecretsResponse(BaseModel):
+    tenant_id: str
+    keys: list[str] = Field(default_factory=list)
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+
+
+class PendingActionResponse(BaseModel):
+    action_id: str
+    tenant_id: str
+    user_id: str
+    server: str
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    action_type: str = "destructive"
+    status: str
+    created_at: datetime | None = None
+    expires_at: datetime | None = None
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+
+
+class PendingActionListResponse(BaseModel):
+    tenant_id: str
+    items: list[PendingActionResponse] = Field(default_factory=list)
+
+
+class QuotaUpdateRequest(BaseModel):
+    calls_limit: int = Field(default=0, ge=0)
+    sandbox_seconds_limit: int = Field(default=0, ge=0)
+
+
+class QuotaResponse(BaseModel):
+    tenant_id: str
+    calls_limit: int = 0
+    sandbox_seconds_limit: int = 0
+
+
+class UsageTotals(BaseModel):
+    calls: int = 0
+    sandbox_ms: int = 0
+
+
+class UsageRemaining(BaseModel):
+    calls_remaining: int | None = None
+    sandbox_seconds_remaining: int | None = None
+
+
+class UsageResponse(BaseModel):
+    tenant_id: str
+    period: str
+    usage: UsageTotals
+    quota: QuotaResponse
+    remaining: UsageRemaining
 
 
 class WhoAmIResponse(BaseModel):

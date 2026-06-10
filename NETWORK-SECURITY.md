@@ -77,6 +77,24 @@ behind a TLS-terminating ingress/LB/mesh. The container entrypoint is
 | Embedding provider (Ollama) | `11434` | HTTP/TCP | If using Ollama |
 | Embedding / JWKS / cloud APIs | `443` | HTTPS/TCP | If using a cloud embedding provider or remote JWKS |
 | Downstream MCP servers | per server (`endpoint`) | HTTP/SSE or stdio | Yes (for proxied tools) |
+| Code-tool sandbox worker | none (WASI default) | N/A | No external egress by default |
+
+Registration-time trust boundary:
+
+- `tenant`-origin server registrations may not use `stdio` and may not target endpoints
+  that resolve to loopback/private/link-local/reserved/unspecified/CGNAT addresses
+  (including metadata ranges such as `169.254.169.254`).
+- `platform`-origin servers may use internal endpoints (e.g., in-cluster service DNS)
+  and optional stdio for operator-managed integrations.
+
+Sandbox runtime boundary:
+
+- `transport="code"` tools execute inside a WebAssembly worker subprocess. The WASI
+  runtime exposes no network sockets by default, so sandboxed tools have no direct
+  outbound network path (including Atlas/internal service reachability) unless a future
+  explicit egress allowlist is introduced.
+- Per-tool egress allowlists are deferred to the productionization phase; current
+  behavior is deny-by-default.
 
 The bundled NetworkPolicy (`deploy/k8s/networkpolicy.yaml`, `deploy/helm/templates/networkpolicy.yaml`)
 is **default-deny** and allows egress only to DNS (53), `27017`, `11434`, and `443`.

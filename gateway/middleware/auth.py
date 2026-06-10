@@ -162,10 +162,17 @@ class AuthMiddleware:
 
         admin_claims, via_cookie = self._resolve_admin_session(request)
         if admin_claims is not None:
+            session_roles = self._session_roles(admin_claims)
             request.state.user_id = str(admin_claims.get("sub", "admin"))
-            request.state.roles = [self.settings.platform_admin_role, "admin"]
+            request.state.tenant_id = str(
+                admin_claims.get("tenant_id") or self.settings.default_tenant_id
+            )
+            request.state.roles = session_roles
             request.state.scopes = []
-            request.state.is_admin_principal = True
+            # Only sessions that actually carry an admin-tier role count as admin
+            # principals. A plain "user" session authenticates but cannot reach the
+            # admin control plane (RbacMiddleware still gates /admin and /ui).
+            request.state.is_admin_principal = self._has_admin_role(session_roles)
             request.state.admin_auth_via_cookie = via_cookie
 
         if self.settings.auth_mode != "disabled" and not request.state.is_admin_principal:
@@ -211,6 +218,20 @@ class AuthMiddleware:
         if not auth_header.startswith("Bearer "):
             return None
         return auth_header.replace("Bearer ", "", 1)
+
+    def _session_roles(self, claims: dict[str, Any]) -> list[str]:
+        raw = claims.get("roles")
+        if isinstance(raw, list):
+            roles = [role for role in raw if isinstance(role, str)]
+            if roles:
+                return roles
+        # Legacy session tokens (and the env bootstrap admin) carry no roles claim;
+        # treat them as full platform admins so existing deployments keep working.
+        return [self.settings.platform_admin_role, "admin"]
+
+    def _has_admin_role(self, roles: list[str]) -> bool:
+        role_set = set(roles)
+        return self.settings.platform_admin_role in role_set or "admin" in role_set
 
     def _resolve_admin_session(self, request: Request) -> tuple[dict[str, Any] | None, bool]:
         cookie_token = request.cookies.get(ADMIN_SESSION_COOKIE)

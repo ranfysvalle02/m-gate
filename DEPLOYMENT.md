@@ -39,6 +39,27 @@ Four moving parts:
 4. **Downstream MCP servers** — the tools you proxy (the repo ships demo
    `weather` and `orders` servers).
 
+### Code-tool runtime decision (Phase 3)
+
+The reference runtime for executing `transport="code"` tools is:
+
+- **WebAssembly sandbox worker** (`CODE_EXECUTOR=wasm`)
+- Host package: `wasmtime`
+- Guest runtime: pinned `python-3.12.0.wasm` from VMware Wasm Labs releases
+
+Why this choice:
+
+- Cross-platform and self-contained (runs on macOS dev + Linux CI without
+  Docker/KVM/provider accounts).
+- Deny-by-default sandbox capabilities via WASI (no inherited env/network by default).
+- Native runtime limits (fuel, memory, epoch timeout) plus host rlimit backstops.
+
+By default each call spawns a throwaway worker subprocess (cold start: subprocess
+launch + `python.wasm` compile). Set `SANDBOX_POOL_SIZE>0` to keep a warm pool of
+prewarmed workers resident so calls reuse an already-compiled runtime — each job still
+runs in a fresh wasm `Store`, so per-call isolation is unchanged. `SANDBOX_MODULE_CACHE_PATH`
+serializes the compiled module so respawned workers warm up via deserialize.
+
 ---
 
 ## Prerequisites
@@ -48,6 +69,14 @@ Four moving parts:
   - **Ollama** (default): `ollama pull nomic-embed-text` and have it reachable.
   - **or** an API key for OpenAI / Azure OpenAI / Voyage / Gemini.
 - For production: an Atlas cluster (or Atlas Local) reachable from the gateway.
+- For code-tool execution (`transport="code"`): fetch the pinned CPython-on-WASI
+  artifact used by the WebAssembly sandbox worker:
+
+```bash
+make fetch-wasm
+```
+
+This downloads `vendor/python-3.12.0.wasm` and verifies its SHA256 before writing.
 
 ---
 
@@ -287,6 +316,14 @@ Full list with defaults: [`.env.example`](.env.example). The essentials:
 | `ADMIN_SESSION_SECRET` | Signs admin session cookies |
 | `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` / `EMBEDDING_API_KEY` | Embeddings |
 | `EMBEDDING_SECRET` | Encrypts stored embedding API keys (keep stable) |
+| `CODE_TOOL_EXECUTION_ENABLED` | Master gate for executing code-backed tools |
+| `CODE_EXECUTOR` | Code runtime selector (`wasm` or `disabled`) |
+| `SANDBOX_PYTHON_WASM_PATH` | Path to the pinned CPython-on-WASI artifact |
+| `SANDBOX_FUEL` / `SANDBOX_MEMORY_BYTES` / `SANDBOX_WALL_TIMEOUT_MS` | Sandbox CPU/memory/wall-clock limits |
+| `SANDBOX_MAX_OUTPUT_BYTES` / `SANDBOX_MAX_CONCURRENCY_PER_TENANT` | Output cap and per-tenant concurrency cap |
+| `SANDBOX_POOL_SIZE` | Prewarmed warm workers per replica (`0` = throwaway worker per call) |
+| `SANDBOX_WORKER_MAX_JOBS` / `SANDBOX_POOL_ACQUIRE_TIMEOUT_MS` | Worker recycle-after-N-jobs backstop and max wait for a free worker |
+| `SANDBOX_POOL_WARMUP_TIMEOUT_MS` / `SANDBOX_MODULE_CACHE_PATH` | Worker warmup deadline and compiled-module cache dir |
 | `AUTO_BOOTSTRAP` | Create indexes + seed + sync catalog on startup |
 | `AUTO_PROVISION_TENANTS` | Create a tenant DB/indexes on first use |
 

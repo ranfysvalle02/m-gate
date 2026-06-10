@@ -158,3 +158,74 @@ async def test_call_downstream_tool_closure(patch_mongo, monkeypatch, reset_sett
     )
     assert out["result"] == {"ok": True}
     assert out["server"] == "weather"
+
+
+@pytest.mark.asyncio
+async def test_call_downstream_tool_blocked_when_tenant_suspended(
+    patch_mongo, monkeypatch, reset_settings
+):
+    import gateway.mcp_server as mcp_mod
+    from services.tenant_status import TenantSuspendedError
+
+    control = patch_mongo._control_db
+    await control["tenants"].insert_one(
+        {"tenant_id": "local-dev", "db_name": "db", "status": "suspended", "suspended_reason": "x"}
+    )
+
+    class _Reg:
+        called = False
+
+        async def call_tool(self, *, server_name, tool_name, arguments, tenant_id=None):
+            _Reg.called = True
+            return {"ok": True}
+
+    monkeypatch.setattr(mcp_mod, "get_proxy_registry", lambda: _Reg())
+    captured = {}
+
+    class _Recorder:
+        def tool(self, fn):
+            captured[fn.__name__] = fn
+            return fn
+
+    mcp_mod._register_tools(_Recorder())
+    with pytest.raises(TenantSuspendedError):
+        await captured["call_downstream_tool"](
+            server="weather", name="get_forecast", arguments={}, tenant_id="local-dev"
+        )
+    # The suspended tenant never reaches the execution layer.
+    assert _Reg.called is False
+
+
+@pytest.mark.asyncio
+async def test_mcp_discovery_blocked_when_tenant_suspended(
+    patch_mongo, monkeypatch, reset_settings
+):
+    import gateway.mcp_server as mcp_mod
+    from services.tenant_status import TenantSuspendedError
+
+    control = patch_mongo._control_db
+    await control["tenants"].insert_one(
+        {"tenant_id": "local-dev", "db_name": "db", "status": "suspended"}
+    )
+
+    searched = {"called": False}
+
+    async def fake_search(**kwargs):
+        searched["called"] = True
+        return []
+
+    monkeypatch.setattr(mcp_mod.hybrid_search_service, "search_tools", fake_search)
+    captured = {}
+
+    class _Recorder:
+        def tool(self, fn):
+            captured[fn.__name__] = fn
+            return fn
+
+    mcp_mod._register_tools(_Recorder())
+    # Discovery surfaces are blocked too, so a suspended tenant sees nothing.
+    with pytest.raises(TenantSuspendedError):
+        await captured["search_tools"](query="x", tenant_id="local-dev")
+    with pytest.raises(TenantSuspendedError):
+        await captured["list_catalog_tools"](tenant_id="local-dev")
+    assert searched["called"] is False

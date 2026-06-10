@@ -79,6 +79,17 @@ def patch_mongo(monkeypatch, fake_db):
 
     tenant_provisioner.reset_ready_tenant_cache()
 
+    # The tenant suspended/active status cache is process-global; clear it so a
+    # suspension set in one test never leaks into the next.
+    import services.tenant_status as tenant_status
+
+    tenant_status.reset_tenant_status_cache()
+
+    # The per-tenant egress allowlist cache is process-global; clear it too.
+    import services.tenant_egress as tenant_egress
+
+    tenant_egress.reset_tenant_egress_cache()
+
     # The active embedding config/service is process-global; reset it so tests that
     # exercise provisioning/identity start from the env defaults backed by the fake.
     import services.embedding_config as embedding_config
@@ -98,6 +109,11 @@ def patch_mongo(monkeypatch, fake_db):
         "services.embedding_config",
         "services.embedding_reprovision",
         "services.guardrails",
+        "services.users",
+        "services.pending_actions",
+        "services.usage_metering",
+        "services.tenant_status",
+        "services.tenant_egress",
         "gateway.middleware.rbac",
         "gateway.middleware.ratelimit",
         "gateway.routers.health",

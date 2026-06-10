@@ -12,6 +12,7 @@ def routing_registry_seed(tenant_id: str | None = None) -> list[dict]:
         {
             "_id": "weather",
             "tenant_id": resolved_tenant,
+            "origin": "platform",
             "server": "weather",
             "transport": "streamable_http",
             "endpoint": "http://weather:8101/mcp",
@@ -74,6 +75,7 @@ def routing_registry_seed(tenant_id: str | None = None) -> list[dict]:
         {
             "_id": "orders",
             "tenant_id": resolved_tenant,
+            "origin": "platform",
             "server": "orders",
             "transport": "streamable_http",
             "endpoint": "http://orders:8102/mcp",
@@ -136,6 +138,7 @@ def routing_registry_seed(tenant_id: str | None = None) -> list[dict]:
         {
             "_id": "secure-stdio",
             "tenant_id": resolved_tenant,
+            "origin": "platform",
             "server": "secure-stdio",
             "transport": "stdio",
             "command": "python",

@@ -31,13 +31,109 @@
     </form>
     <div class="table-wrap">
       <table class="table">
-        <thead><tr><th>Tenant</th><th>DB Name</th><th>Created</th></tr></thead>
+        <thead><tr><th>Tenant</th><th>DB Name</th><th>Status</th><th>Created</th><th x-show="state.whoami?.is_platform_admin"></th></tr></thead>
         <tbody>
           <template x-for="tenant in state.tenants" :key="tenant.tenant_id">
             <tr>
               <td x-text="tenant.tenant_id"></td>
               <td x-text="tenant.db_name"></td>
+              <td>
+                <span x-text="tenant.status || 'active'" :class="(tenant.status === 'suspended') ? 'text-red-600 font-medium' : 'text-emerald-700'"></span>
+                <span x-show="tenant.status === 'suspended' && tenant.suspended_reason" class="text-xs text-slate-500" x-text="` — ${tenant.suspended_reason}`"></span>
+              </td>
               <td x-text="formatDate(tenant.created_at)"></td>
+              <td x-show="state.whoami?.is_platform_admin">
+                <button type="button" class="link-btn" @click="toggleTenantStatus(tenant)" x-text="tenant.status === 'suspended' ? 'Resume' : 'Suspend'"></button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section x-show="activeSection === 'users'" class="space-y-4">
+    <h2 class="text-2xl font-semibold">Users</h2>
+    <p class="text-sm text-slate-600 max-w-3xl">
+      Users belong to the tenant selected in the top bar. A <span class="font-medium">tenant
+      admin</span> manages users and servers within their own tenant; only a
+      <span class="font-medium">platform admin</span> can grant the platform-admin role or
+      manage users across tenants.
+    </p>
+    <template x-if="state.userNotice">
+      <div class="rounded-md border border-emerald-300 bg-emerald-50 text-emerald-700 px-4 py-3 text-sm" x-text="state.userNotice"></div>
+    </template>
+    <form class="grid gap-3 md:grid-cols-3" @submit.prevent="createUser()">
+      <div><label class="field-label">Email</label><input type="email" class="field-input" x-model="forms.user.email" required /></div>
+      <div><label class="field-label">Password</label><input type="password" class="field-input" x-model="forms.user.password" autocomplete="new-password" required /></div>
+      <div>
+        <label class="field-label">Role</label>
+        <select class="field-input" x-model="forms.user.role">
+          <template x-for="opt in roleOptions" :key="opt.value">
+            <option :value="opt.value" x-text="opt.label"></option>
+          </template>
+        </select>
+      </div>
+      <div class="md:col-span-2"><label class="field-label">Scopes (comma-separated)</label><input class="field-input" x-model="forms.user.scopes" placeholder="orders:read, weather" /></div>
+      <div>
+        <label class="field-label">Status</label>
+        <select class="field-input" x-model="forms.user.status">
+          <option value="active">active</option>
+          <option value="disabled">disabled</option>
+        </select>
+      </div>
+      <div class="flex items-end gap-2 md:col-span-3">
+        <button type="submit" class="btn-primary">Create User</button>
+        <button type="button" class="btn-secondary" @click="resetUserForm()">Reset</button>
+        <button type="button" class="btn-secondary" @click="loadUsers()">Refresh</button>
+      </div>
+    </form>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Email</th><th>Tenant</th><th>Role</th><th>Scopes</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+          <template x-for="user in state.users" :key="user.id">
+            <tr>
+              <td x-text="user.email"></td>
+              <td x-text="user.tenant_id"></td>
+              <td x-text="roleLabel(user.roles)"></td>
+              <td x-text="(user.scopes || []).join(', ') || '-'"></td>
+              <td x-text="user.status"></td>
+              <td class="space-x-2">
+                <button type="button" class="link-btn" @click="toggleUserStatus(user)" x-text="user.status === 'active' ? 'Disable' : 'Enable'"></button>
+                <button type="button" class="link-btn" @click="resetUserPassword(user)">Reset password</button>
+                <button type="button" class="link-btn text-rose-600" @click="deleteUser(user)">Delete</button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section x-show="activeSection === 'approvals'" class="space-y-4">
+    <h2 class="text-2xl font-semibold">Approvals</h2>
+    <p class="text-sm text-slate-600 max-w-3xl">
+      Tools marked <code>requires_confirmation</code> pause here until a tenant admin or
+      platform admin explicitly approves or rejects them. Requesters cannot approve their own actions.
+    </p>
+    <button type="button" class="btn-secondary" @click="loadPendingActions()">Refresh</button>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Created</th><th>Requester</th><th>Server/Tool</th><th>Action</th><th>Arguments</th><th>Expires</th><th>Actions</th></tr></thead>
+        <tbody>
+          <template x-for="action in state.pendingActions" :key="action.action_id">
+            <tr>
+              <td x-text="formatDate(action.created_at)"></td>
+              <td x-text="action.user_id"></td>
+              <td x-text="`${action.server}/${action.tool}`"></td>
+              <td x-text="action.action_type"></td>
+              <td class="truncate max-w-xs" x-text="formatJson(action.arguments)"></td>
+              <td x-text="formatDate(action.expires_at)"></td>
+              <td class="space-x-2">
+                <button type="button" class="link-btn" @click="approvePendingAction(action)">Approve</button>
+                <button type="button" class="link-btn text-rose-600" @click="rejectPendingAction(action)">Reject</button>
+              </td>
             </tr>
           </template>
         </tbody>
@@ -55,11 +151,36 @@
           <option value="streamable_http">streamable_http</option>
           <option value="sse">sse</option>
           <option value="stdio">stdio</option>
+          <option value="code">code (authored function)</option>
         </select>
       </div>
-      <div><label class="field-label">Endpoint</label><input class="field-input" x-model="forms.server.endpoint" /></div>
-      <div><label class="field-label">Command</label><input class="field-input" x-model="forms.server.command" /></div>
+      <div x-show="forms.server.transport !== 'code'"><label class="field-label">Endpoint</label><input class="field-input" x-model="forms.server.endpoint" /></div>
+      <div x-show="forms.server.transport !== 'code'"><label class="field-label">Command</label><input class="field-input" x-model="forms.server.command" /></div>
       <div class="md:col-span-2"><label class="field-label">Metadata (JSON)</label><input class="field-input" x-model="forms.server.metadata" placeholder='{"domain":"weather"}' /></div>
+
+      <!-- Code-backed tool authoring (transport=code). Stored encrypted; executed by the sandbox in a later phase. -->
+      <template x-if="forms.server.transport === 'code'">
+        <div class="md:col-span-3 grid gap-3 md:grid-cols-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div class="md:col-span-2 text-sm text-slate-500">Author a Python function. It is stored encrypted and made searchable, but is not executed until the sandbox runtime ships.</div>
+          <div><label class="field-label">Function name</label><input class="field-input" x-model="forms.server.code.name" placeholder="get_weather" /></div>
+          <div>
+            <label class="field-label">Action type</label>
+            <select class="field-input" x-model="forms.server.code.action_type">
+              <option value="read">read</option>
+              <option value="write">write</option>
+              <option value="destructive">destructive</option>
+            </select>
+          </div>
+          <div class="md:col-span-2"><label class="field-label">Description</label><input class="field-input" x-model="forms.server.code.description" placeholder="What this function does" /></div>
+          <div class="flex items-center gap-2">
+            <input type="checkbox" id="code-confirm" x-model="forms.server.code.requires_confirmation" />
+            <label for="code-confirm" class="field-label !mb-0">Requires confirmation before running</label>
+          </div>
+          <div class="md:col-span-2"><label class="field-label">Requirements (one pinned package per line, e.g. <code>httpx==0.27.0</code>)</label><textarea class="field-input font-mono text-sm" rows="3" x-model="forms.server.code.requirements" placeholder="httpx==0.27.0"></textarea></div>
+          <div class="md:col-span-2"><label class="field-label">Python source</label><textarea class="field-input font-mono text-sm" rows="12" x-model="forms.server.code.raw_code" placeholder="def get_weather(city: str) -> dict:&#10;    ..."></textarea></div>
+        </div>
+      </template>
+
       <div class="flex items-end gap-2 md:col-span-3">
         <button type="submit" class="btn-primary">Save Server</button>
         <button type="button" class="btn-secondary" @click="resetServerForm()">Reset</button>
@@ -462,6 +583,26 @@
       <div class="card-value" x-text="state.whoami?.user_id || '-'"></div>
       <div class="card-label mt-4">Roles</div>
       <div class="text-sm" x-text="(state.whoami?.roles || []).join(', ') || '-'"></div>
+    </div>
+    <div class="card max-w-lg">
+      <div class="card-label">Change Password</div>
+      <p class="text-xs text-slate-500 mb-3">
+        Updates your own credential. Unavailable for the environment bootstrap admin.
+      </p>
+      <template x-if="state.userNotice">
+        <div class="mb-3 rounded-md border border-emerald-300 bg-emerald-50 text-emerald-700 px-3 py-2 text-sm" x-text="state.userNotice"></div>
+      </template>
+      <form class="space-y-3" @submit.prevent="changeMyPassword()">
+        <div>
+          <label class="field-label">Current password</label>
+          <input type="password" class="field-input" x-model="forms.passwordChange.current_password" autocomplete="current-password" required />
+        </div>
+        <div>
+          <label class="field-label">New password</label>
+          <input type="password" class="field-input" x-model="forms.passwordChange.new_password" autocomplete="new-password" required />
+        </div>
+        <button type="submit" class="btn-primary">Update password</button>
+      </form>
     </div>
   </section>
 {% endblock %}

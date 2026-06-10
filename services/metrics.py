@@ -4,11 +4,18 @@ from dataclasses import dataclass
 from typing import Any
 
 try:
-    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+    from prometheus_client import (
+        CONTENT_TYPE_LATEST,
+        Counter,
+        Gauge,
+        Histogram,
+        generate_latest,
+    )
 
     _PROMETHEUS_AVAILABLE = True
 except Exception:  # pragma: no cover - optional dependency hardening
     Counter = None  # type: ignore[assignment,misc]
+    Gauge = None  # type: ignore[assignment,misc]
     Histogram = None  # type: ignore[assignment,misc]
     CONTENT_TYPE_LATEST = "text/plain; version=0.0.4"
     generate_latest = None  # type: ignore[assignment]
@@ -27,6 +34,11 @@ DOWNSTREAM_ERRORS: Any = None
 CACHE_EVENTS: Any = None
 GUARDRAIL_EVENTS: Any = None
 AUTH_FAILURES: Any = None
+USAGE_EVENTS: Any = None
+QUOTA_BLOCKS: Any = None
+EGRESS_BLOCKS: Any = None
+SANDBOX_POOL_EVENTS: Any = None
+SANDBOX_POOL_WORKERS: Any = None
 
 if _PROMETHEUS_AVAILABLE:
     REQUEST_COUNT = Counter(
@@ -58,6 +70,29 @@ if _PROMETHEUS_AVAILABLE:
         "gateway_auth_failures_total",
         "Bearer-token rejections, labelled by cause (client error vs server-side).",
         ["reason"],
+    )
+    USAGE_EVENTS = Counter(
+        "gateway_usage_events_total",
+        "Usage metering increments recorded by the gateway.",
+        ["kind"],
+    )
+    QUOTA_BLOCKS = Counter(
+        "gateway_quota_blocks_total",
+        "Tenant requests blocked due to configured usage quotas.",
+    )
+    EGRESS_BLOCKS = Counter(
+        "gateway_egress_blocks_total",
+        "Downstream connections blocked by the egress allowlist.",
+        ["stage"],
+    )
+    SANDBOX_POOL_EVENTS = Counter(
+        "gateway_sandbox_pool_events_total",
+        "Warm sandbox worker pool lifecycle events.",
+        ["event"],
+    )
+    SANDBOX_POOL_WORKERS = Gauge(
+        "gateway_sandbox_pool_workers",
+        "Resident warm sandbox worker subprocesses currently in the pool.",
     )
 
 
@@ -94,6 +129,37 @@ def observe_auth_failure(reason: str) -> None:
     if AUTH_FAILURES is None:
         return
     AUTH_FAILURES.labels(reason=reason).inc()
+
+
+def observe_usage(kind: str, amount: int) -> None:
+    if USAGE_EVENTS is None:
+        return
+    USAGE_EVENTS.labels(kind=kind).inc(max(0, int(amount)))
+
+
+def observe_quota_block() -> None:
+    if QUOTA_BLOCKS is None:
+        return
+    QUOTA_BLOCKS.inc()
+
+
+def observe_egress_block(stage: str) -> None:
+    """Record an egress-allowlist block. ``stage`` is ``register`` or ``connect``."""
+    if EGRESS_BLOCKS is None:
+        return
+    EGRESS_BLOCKS.labels(stage=stage).inc()
+
+
+def observe_sandbox_pool_event(event: str) -> None:
+    if SANDBOX_POOL_EVENTS is None:
+        return
+    SANDBOX_POOL_EVENTS.labels(event=event).inc()
+
+
+def set_sandbox_pool_workers(count: int) -> None:
+    if SANDBOX_POOL_WORKERS is None:
+        return
+    SANDBOX_POOL_WORKERS.set(max(0, int(count)))
 
 
 def scrape_metrics() -> MetricsSnapshot:

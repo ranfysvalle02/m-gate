@@ -8,6 +8,7 @@ from config.settings import get_settings
 from services.hybrid_search import HybridSearchService
 from services.proxy_registry import get_proxy_registry
 from services.registry_watcher import get_catalog_version
+from services.tenant_status import assert_tenant_active
 
 try:
     from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -68,6 +69,7 @@ def _register_tools(mcp: FastMCP) -> None:
         tenant_id: str | None = None,
     ) -> dict:
         resolved_tenant_id = _resolve_tenant_id(tenant_id)
+        await assert_tenant_active(resolved_tenant_id)
         items = await hybrid_search_service.search_tools(
             tenant_id=resolved_tenant_id,
             query=query,
@@ -93,6 +95,7 @@ def _register_tools(mcp: FastMCP) -> None:
         tenant_id: str | None = None,
     ) -> dict:
         resolved_tenant_id = _resolve_tenant_id(tenant_id)
+        await assert_tenant_active(resolved_tenant_id)
         if query:
             items = await hybrid_search_service.search_tools(
                 tenant_id=resolved_tenant_id,
@@ -133,6 +136,7 @@ def _register_tools(mcp: FastMCP) -> None:
         tenant_id: str | None = None,
     ) -> dict:
         resolved_tenant_id = _resolve_tenant_id(tenant_id)
+        await assert_tenant_active(resolved_tenant_id)
         result = await get_proxy_registry().call_tool(
             server_name=server,
             tool_name=name,

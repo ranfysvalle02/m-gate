@@ -25,15 +25,31 @@ def verify_credentials(email: str, password: str) -> bool:
     )
 
 
-def mint_session(email: str) -> str:
+def mint_session(
+    email: str,
+    *,
+    tenant_id: str | None = None,
+    roles: list[str] | None = None,
+) -> str:
+    """Issue a signed admin-session token.
+
+    ``tenant_id`` and ``roles`` are embedded so the auth middleware can hydrate
+    ``request.state`` directly from the verified token. They are optional: a token
+    minted without them (legacy callers, the env bootstrap admin) is treated as a
+    full platform admin for backward compatibility.
+    """
     settings = get_settings()
     now = datetime.now(UTC)
-    payload = {
+    payload: dict[str, Any] = {
         "sub": email,
         "kind": "admin_session",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(seconds=settings.admin_session_ttl_seconds)).timestamp()),
     }
+    if tenant_id:
+        payload["tenant_id"] = tenant_id
+    if roles:
+        payload["roles"] = [role for role in roles if isinstance(role, str)]
     return jwt.encode(
         payload, settings.admin_session_secret or settings.jwt_secret, algorithm="HS256"
     )

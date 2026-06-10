@@ -35,6 +35,12 @@ def _matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
                 elif op == "$eq":
                     if actual != operand:
                         return False
+                elif op == "$ne":
+                    if actual == operand:
+                        return False
+                elif op == "$gt":
+                    if actual is None or actual <= operand:
+                        return False
                 else:  # pragma: no cover - unsupported operator guard
                     raise NotImplementedError(f"FakeCollection: unsupported operator {op}")
         else:

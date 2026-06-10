@@ -14,10 +14,19 @@ from models.admin import (
     CatalogItemResponse,
     CatalogListRequest,
     CatalogListResponse,
+    EgressAllowlistResponse,
+    EgressAllowlistUpdateRequest,
     EmbeddingConfigResponse,
     EmbeddingConfigUpdateRequest,
     EmbeddingTestRequest,
     EmbeddingTestResponse,
+    PasswordChangeRequest,
+    PendingActionListResponse,
+    PendingActionResponse,
+    QuotaResponse,
+    QuotaUpdateRequest,
+    SandboxSecretsResponse,
+    SandboxSecretsUpdateRequest,
     ServerPatchRequest,
     ServerUpsertRequest,
     StatsResponse,
@@ -27,9 +36,27 @@ from models.admin import (
     TenantCreateRequest,
     TenantResponse,
     TenantStats,
+    TenantStatusUpdateRequest,
+    UsageRemaining,
+    UsageResponse,
+    UsageTotals,
+    UserCreateRequest,
+    UserListResponse,
+    UserResponse,
+    UserUpdateRequest,
     WhoAmIResponse,
 )
+from services import users as users_service
 from services.cache_migration import SemanticCacheMigrationService
+from services.code_tools import (
+    CODE_TRANSPORT,
+    CodeToolValidationError,
+    decrypt_raw_code,
+    encrypt_raw_code,
+    is_encrypted_token,
+    lint_code_tool,
+)
+from services.egress_policy import EgressNotAllowed, check_endpoint_allowed, parse_allowlist
 from services.embedding_config import (
     EmbeddingConfig,
     default_model_for,
@@ -56,9 +83,21 @@ from services.embeddings import (
     embedding_version_for,
 )
 from services.hybrid_search import HybridSearchService
+from services.metrics import observe_egress_block
+from services.passwords import verify_password
+from services.pending_actions import (
+    approve_action,
+    list_pending_actions,
+    reject_action,
+)
 from services.proxy_registry import get_proxy_registry
 from services.registry_watcher import get_catalog_version
+from services.server_guard import EndpointNotAllowed, StdioNotAllowed, enforce_server_policy
+from services.telemetry_logger import get_telemetry_logger
+from services.tenant_egress import get_tenant_egress_allowlist, set_tenant_egress_allowlist
 from services.tenant_provisioner import provision_tenant
+from services.tenant_status import STATUS_ACTIVE, STATUS_SUSPENDED, set_tenant_status
+from services.usage_metering import get_effective_quota, get_usage, set_quota
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 settings = get_settings()
@@ -79,6 +118,16 @@ def _require_platform_admin(request: Request) -> None:
         )
 
 
+def _require_tenant_admin(request: Request) -> None:
+    roles = set(getattr(request.state, "roles", []))
+    if _is_platform_admin(request) or "admin" in roles or "tenant-admin" in roles:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Approvals require tenant-admin or platform-admin role.",
+    )
+
+
 def _resolve_target_tenant(request: Request, requested_tenant: str | None = None) -> str:
     caller_tenant = getattr(request.state, "tenant_id", settings.default_tenant_id)
     header_tenant = request.headers.get("x-tenant-id")
@@ -91,20 +140,173 @@ def _resolve_target_tenant(request: Request, requested_tenant: str | None = None
     return target
 
 
+def _validate_secret_key(key: str) -> str:
+    normalized = key.strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Secret keys must not be empty.",
+        )
+    if "." in normalized or normalized.startswith("$"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Secret keys may not contain '.' or start with '$'.",
+        )
+    return normalized
+
+
+def _pending_action_response(doc: dict[str, Any]) -> PendingActionResponse:
+    return PendingActionResponse(
+        action_id=str(doc.get("_id", "")),
+        tenant_id=str(doc.get("tenant_id", "")),
+        user_id=str(doc.get("user_id", "")),
+        server=str(doc.get("server", "")),
+        tool=str(doc.get("tool", "")),
+        arguments=doc.get("arguments", {}) if isinstance(doc.get("arguments"), dict) else {},
+        action_type=str(doc.get("action_type", "destructive")),
+        status=str(doc.get("status", "pending")),
+        created_at=doc.get("created_at"),
+        expires_at=doc.get("expires_at"),
+        decided_by=doc.get("decided_by"),
+        decided_at=doc.get("decided_at"),
+    )
+
+
+def _usage_response(
+    *,
+    tenant_id: str,
+    period: str,
+    calls: int,
+    sandbox_ms: int,
+    calls_limit: int,
+    sandbox_seconds_limit: int,
+) -> UsageResponse:
+    calls_remaining = None if calls_limit <= 0 else max(0, calls_limit - calls)
+    used_sandbox_seconds = max(0, int(sandbox_ms) // 1000)
+    sandbox_seconds_remaining = (
+        None if sandbox_seconds_limit <= 0 else max(0, sandbox_seconds_limit - used_sandbox_seconds)
+    )
+    return UsageResponse(
+        tenant_id=tenant_id,
+        period=period,
+        usage=UsageTotals(calls=max(0, int(calls)), sandbox_ms=max(0, int(sandbox_ms))),
+        quota=QuotaResponse(
+            tenant_id=tenant_id,
+            calls_limit=max(0, int(calls_limit)),
+            sandbox_seconds_limit=max(0, int(sandbox_seconds_limit)),
+        ),
+        remaining=UsageRemaining(
+            calls_remaining=calls_remaining,
+            sandbox_seconds_remaining=sandbox_seconds_remaining,
+        ),
+    )
+
+
+async def _sandbox_secrets_response(tenant_id: str) -> SandboxSecretsResponse:
+    doc = await get_tenant_database(tenant_id)["sandbox_secrets"].find_one({"_id": "sandbox"})
+    values = doc.get("values", {}) if isinstance(doc, dict) else {}
+    keys = sorted(str(key) for key in values.keys()) if isinstance(values, dict) else []
+    return SandboxSecretsResponse(
+        tenant_id=tenant_id,
+        keys=keys,
+        updated_at=doc.get("updated_at") if isinstance(doc, dict) else None,
+        updated_by=doc.get("updated_by") if isinstance(doc, dict) else None,
+    )
+
+
+def _assert_can_assign_roles(request: Request, roles: list[str]) -> None:
+    """A non-platform-admin may never grant (or keep granting) platform-admin."""
+    if settings.platform_admin_role in set(roles) and not _is_platform_admin(request):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only platform-admin may grant the platform-admin role.",
+        )
+
+
+async def _load_managed_user(request: Request, user_id: str) -> dict[str, Any]:
+    """Fetch a user the caller is allowed to read/modify, or raise 403/404.
+
+    Platform-admins span all tenants. A tenant-admin may only touch users inside
+    their own tenant, and never a platform-admin account.
+    """
+    doc = await users_service.get_user_raw(user_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if not _is_platform_admin(request):
+        caller_tenant = getattr(request.state, "tenant_id", settings.default_tenant_id)
+        if str(doc.get("tenant_id")) != caller_tenant:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cross-tenant user management requires platform-admin role.",
+            )
+        if settings.platform_admin_role in set(doc.get("roles", [])):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only platform-admin may manage a platform-admin user.",
+            )
+    return doc
+
+
 def _validate_server_doc(server_doc: dict[str, Any]) -> None:
     transport = server_doc.get("transport")
     endpoint = server_doc.get("endpoint")
     command = server_doc.get("command")
     if transport in {"streamable_http", "sse"} and not endpoint:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"transport={transport} requires endpoint.",
         )
     if transport == "stdio" and not command:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="transport=stdio requires command.",
         )
+    if transport == CODE_TRANSPORT and not (server_doc.get("tools") or []):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="transport=code requires at least one authored function in 'tools'.",
+        )
+
+
+async def _prepare_code_server(doc: dict[str, Any], tenant_id: str) -> dict[str, Any]:
+    """Lint and encrypt authored functions before a code server is persisted.
+
+    Each tool's ``raw_code`` is statically linted, then encrypted at rest (unless
+    it is already an encrypted token carried over from a prior save). Connection
+    fields are cleared since a code tool has no downstream endpoint/command.
+    """
+    if doc.get("transport") != CODE_TRANSPORT:
+        return doc
+    tools = doc.get("tools") or []
+    prepared: list[dict[str, Any]] = []
+    for tool in tools:
+        tool = dict(tool)
+        tool.setdefault("server", doc["server"])
+        raw_code = tool.get("raw_code")
+        # Already-encrypted source carried over from a prior save was validated at
+        # authoring time; re-linting the ciphertext would always fail. Only newly
+        # submitted plaintext is linted and then encrypted.
+        if isinstance(raw_code, str) and not is_encrypted_token(raw_code):
+            try:
+                lint_code_tool(tool)
+            except CodeToolValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=str(exc),
+                ) from exc
+            tool["raw_code"] = await encrypt_raw_code(tenant_id, raw_code)
+        # An authored function is not a downstream embedding target.
+        tool["embedding"] = []
+        prepared.append(tool)
+    doc["tools"] = prepared
+    # Code servers have no network/process target; keep these unset so the proxy
+    # never tries to connect to one.
+    doc["endpoint"] = None
+    doc["command"] = None
+    doc["args"] = []
+    doc["env"] = {}
+    doc["cwd"] = None
+    return doc
 
 
 def _to_server_doc(payload: dict[str, Any], tenant_id: str) -> dict[str, Any]:
@@ -117,9 +319,59 @@ def _to_server_doc(payload: dict[str, Any], tenant_id: str) -> dict[str, Any]:
     return doc
 
 
+async def _apply_server_policy(doc: dict[str, Any], *, is_platform_admin: bool) -> dict[str, Any]:
+    try:
+        doc = await enforce_server_policy(
+            doc,
+            is_platform_admin=is_platform_admin,
+            settings=settings,
+        )
+    except (StdioNotAllowed, EndpointNotAllowed) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+
+    # Egress allowlist gate (friendly, fail-fast on save). The connect-time
+    # transport is the authoritative gate, but rejecting here gives operators a
+    # clear 422 instead of a downstream error at first call.
+    transport = str(doc.get("transport") or "")
+    endpoint = doc.get("endpoint")
+    if transport in {"streamable_http", "sse"} and isinstance(endpoint, str) and endpoint:
+        tenant_id = str(doc.get("tenant_id") or settings.default_tenant_id)
+        tenant_allowlist = await get_tenant_egress_allowlist(tenant_id, settings=settings)
+        try:
+            await check_endpoint_allowed(
+                endpoint,
+                tenant_allowlist=tenant_allowlist,
+                settings=settings,
+            )
+        except EgressNotAllowed as exc:
+            observe_egress_block("register")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+    return doc
+
+
+def _redact_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    """Strip encrypted source from a tool, leaving a presence flag.
+
+    Authored ``raw_code`` is stored encrypted; never echo the ciphertext (or
+    plaintext) in list/collection responses. The single-server fetch decrypts it
+    explicitly for the author's editor instead.
+    """
+    public = {key: value for key, value in tool.items() if key not in {"raw_code", "embedding"}}
+    if "raw_code" in tool:
+        public["has_raw_code"] = bool(tool.get("raw_code"))
+    return public
+
+
 def _public_server_doc(doc: dict[str, Any]) -> dict[str, Any]:
     return {
         "tenant_id": doc.get("tenant_id"),
+        "origin": doc.get("origin", "platform"),
         "server": doc.get("server"),
         "transport": doc.get("transport"),
         "endpoint": doc.get("endpoint"),
@@ -129,8 +381,28 @@ def _public_server_doc(doc: dict[str, Any]) -> dict[str, Any]:
         "cwd": doc.get("cwd"),
         "enabled": bool(doc.get("enabled", True)),
         "metadata": doc.get("metadata", {}),
-        "tools": doc.get("tools", []),
+        "tools": [_redact_tool(tool) for tool in (doc.get("tools") or [])],
     }
+
+
+async def _public_server_doc_with_code(doc: dict[str, Any]) -> dict[str, Any]:
+    """Like :func:`_public_server_doc` but decrypts ``raw_code`` for the editor.
+
+    Used only by the single-server fetch so an author can load their function
+    back into the GUI. Decryption is best-effort: an undecryptable token yields
+    an empty body rather than an error.
+    """
+    public = _public_server_doc(doc)
+    if doc.get("transport") != CODE_TRANSPORT:
+        return public
+    tenant_id = str(doc.get("tenant_id") or settings.default_tenant_id)
+    decrypted: list[dict[str, Any]] = []
+    for stored, redacted in zip(doc.get("tools") or [], public["tools"], strict=False):
+        redacted = dict(redacted)
+        redacted["raw_code"] = await decrypt_raw_code(tenant_id, stored.get("raw_code"))
+        decrypted.append(redacted)
+    public["tools"] = decrypted
+    return public
 
 
 async def _resolve_target_tenants_for_cache_migration(
@@ -151,6 +423,19 @@ async def _resolve_target_tenants_for_cache_migration(
     return [getattr(request.state, "tenant_id", settings.default_tenant_id)]
 
 
+def _tenant_response(doc: dict[str, Any], *, db_name: str | None = None) -> TenantResponse:
+    status_value = str(doc.get("status", STATUS_ACTIVE)) or STATUS_ACTIVE
+    reason = str(doc.get("suspended_reason", "")) or None
+    return TenantResponse(
+        tenant_id=str(doc.get("tenant_id")),
+        db_name=str(doc.get("db_name") or db_name or ""),
+        status=status_value,
+        suspended_reason=reason if status_value == STATUS_SUSPENDED else None,
+        created_at=doc.get("created_at"),
+        updated_at=doc.get("updated_at"),
+    )
+
+
 @router.post("/tenants", response_model=TenantResponse)
 async def create_tenant(request: Request, payload: TenantCreateRequest) -> TenantResponse:
     tenant_id = _resolve_target_tenant(request, payload.tenant_id)
@@ -158,12 +443,7 @@ async def create_tenant(request: Request, payload: TenantCreateRequest) -> Tenan
     doc = await get_control_database()["tenants"].find_one({"tenant_id": tenant_id})
     if not doc:
         return TenantResponse(tenant_id=tenant_id, db_name=db_name)
-    return TenantResponse(
-        tenant_id=tenant_id,
-        db_name=str(doc.get("db_name") or db_name),
-        created_at=doc.get("created_at"),
-        updated_at=doc.get("updated_at"),
-    )
+    return _tenant_response(doc, db_name=db_name)
 
 
 @router.get("/tenants", response_model=list[TenantResponse])
@@ -175,16 +455,320 @@ async def list_tenants(request: Request) -> list[TenantResponse]:
         tenant_id = getattr(request.state, "tenant_id", settings.default_tenant_id)
         doc = await control_db["tenants"].find_one({"tenant_id": tenant_id})
         docs = [doc] if doc else []
-    return [
-        TenantResponse(
-            tenant_id=str(doc.get("tenant_id")),
-            db_name=str(doc.get("db_name")),
-            created_at=doc.get("created_at"),
-            updated_at=doc.get("updated_at"),
+    return [_tenant_response(doc) for doc in docs if doc]
+
+
+@router.post("/tenants/{tenant_id}/suspend", response_model=TenantResponse)
+async def suspend_tenant(
+    request: Request,
+    tenant_id: str,
+    payload: TenantStatusUpdateRequest | None = None,
+) -> TenantResponse:
+    return await _set_tenant_status_endpoint(
+        request=request,
+        tenant_id=tenant_id,
+        target_status=STATUS_SUSPENDED,
+        reason=payload.reason if payload else None,
+    )
+
+
+@router.post("/tenants/{tenant_id}/resume", response_model=TenantResponse)
+async def resume_tenant(request: Request, tenant_id: str) -> TenantResponse:
+    return await _set_tenant_status_endpoint(
+        request=request,
+        tenant_id=tenant_id,
+        target_status=STATUS_ACTIVE,
+        reason=None,
+    )
+
+
+async def _set_tenant_status_endpoint(
+    *,
+    request: Request,
+    tenant_id: str,
+    target_status: str,
+    reason: str | None,
+) -> TenantResponse:
+    # Suspension is a platform abuse-control lever, so it is platform-admin only
+    # (a tenant-admin cannot suspend or un-suspend their own tenant).
+    _require_platform_admin(request)
+    actor = str(getattr(request.state, "user_id", "admin"))
+    doc = await set_tenant_status(
+        tenant_id,
+        target_status,
+        updated_by=actor,
+        reason=reason,
+    )
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+    get_telemetry_logger().log_background(
+        tenant_id=tenant_id,
+        user_id=actor,
+        method=f"admin/tenants/{target_status}",
+        status="tenant_suspended" if target_status == STATUS_SUSPENDED else "tenant_resumed",
+        metadata={"tenant_id": tenant_id, "actor": actor, "reason": reason},
+    )
+    return _tenant_response(doc)
+
+
+def _egress_allowlist_response(
+    tenant_id: str, doc: dict[str, Any] | None
+) -> EgressAllowlistResponse:
+    entries = (doc or {}).get("egress_allowlist")
+    allowlist = (
+        [str(item) for item in entries if isinstance(item, str)]
+        if isinstance(entries, list)
+        else []
+    )
+    return EgressAllowlistResponse(
+        tenant_id=tenant_id,
+        allowlist=allowlist,
+        global_allowlist=parse_allowlist(settings.egress_global_allowlist),
+        enforced=bool(settings.egress_allowlist_enabled),
+        default_deny=bool(settings.egress_default_deny),
+        updated_at=(doc or {}).get("egress_allowlist_updated_at"),
+        updated_by=(doc or {}).get("egress_allowlist_updated_by"),
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/egress-allowlist",
+    response_model=EgressAllowlistResponse,
+)
+async def get_egress_allowlist(request: Request, tenant_id: str) -> EgressAllowlistResponse:
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    doc = await get_control_database()["tenants"].find_one({"tenant_id": target_tenant})
+    return _egress_allowlist_response(target_tenant, doc)
+
+
+@router.put(
+    "/tenants/{tenant_id}/egress-allowlist",
+    response_model=EgressAllowlistResponse,
+)
+async def put_egress_allowlist(
+    request: Request,
+    tenant_id: str,
+    payload: EgressAllowlistUpdateRequest,
+) -> EgressAllowlistResponse:
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    actor = str(getattr(request.state, "user_id", "admin"))
+    try:
+        doc = await set_tenant_egress_allowlist(
+            target_tenant,
+            payload.allowlist,
+            updated_by=actor,
         )
-        for doc in docs
-        if doc
-    ]
+    except EgressNotAllowed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+    get_telemetry_logger().log_background(
+        tenant_id=target_tenant,
+        user_id=actor,
+        method="admin/tenants/egress-allowlist",
+        status="egress_allowlist_updated",
+        metadata={
+            "tenant_id": target_tenant,
+            "actor": actor,
+            "entries": len(payload.allowlist),
+        },
+    )
+    return _egress_allowlist_response(target_tenant, doc)
+
+
+@router.get(
+    "/tenants/{tenant_id}/sandbox-secrets",
+    response_model=SandboxSecretsResponse,
+)
+async def get_sandbox_secrets(request: Request, tenant_id: str) -> SandboxSecretsResponse:
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    return await _sandbox_secrets_response(target_tenant)
+
+
+@router.put(
+    "/tenants/{tenant_id}/sandbox-secrets",
+    response_model=SandboxSecretsResponse,
+)
+async def put_sandbox_secrets(
+    request: Request,
+    tenant_id: str,
+    payload: SandboxSecretsUpdateRequest,
+) -> SandboxSecretsResponse:
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    collection = get_tenant_database(target_tenant)["sandbox_secrets"]
+    existing = await collection.find_one({"_id": "sandbox"})
+    current = existing.get("values", {}) if isinstance(existing, dict) else {}
+    values = dict(current) if isinstance(current, dict) else {}
+
+    for key, raw_value in payload.values.items():
+        secret_key = _validate_secret_key(str(key))
+        if not isinstance(raw_value, str):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Secret '{secret_key}' must be a string.",
+            )
+        if raw_value == "":
+            values.pop(secret_key, None)
+            continue
+        encrypted = await encrypt_raw_code(target_tenant, raw_value)
+        if not encrypted:
+            values.pop(secret_key, None)
+            continue
+        values[secret_key] = encrypted
+
+    if values:
+        now = datetime.now(UTC)
+        updated_by = getattr(request.state, "user_id", "admin")
+        await collection.replace_one(
+            {"_id": "sandbox"},
+            {
+                "_id": "sandbox",
+                "tenant_id": target_tenant,
+                "values": values,
+                "updated_at": now,
+                "updated_by": str(updated_by),
+            },
+            upsert=True,
+        )
+    else:
+        await collection.delete_one({"_id": "sandbox"})
+    return await _sandbox_secrets_response(target_tenant)
+
+
+@router.get("/tenants/{tenant_id}/usage", response_model=UsageResponse)
+async def get_tenant_usage(request: Request, tenant_id: str) -> UsageResponse:
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    usage = await get_usage(target_tenant)
+    quota = await get_effective_quota(target_tenant)
+    return _usage_response(
+        tenant_id=target_tenant,
+        period=str(usage.get("period", "")),
+        calls=int(usage.get("calls", 0)),
+        sandbox_ms=int(usage.get("sandbox_ms", 0)),
+        calls_limit=int(quota.get("calls_limit", 0)),
+        sandbox_seconds_limit=int(quota.get("sandbox_seconds_limit", 0)),
+    )
+
+
+@router.put("/tenants/{tenant_id}/quota", response_model=QuotaResponse)
+async def update_tenant_quota(
+    request: Request,
+    tenant_id: str,
+    payload: QuotaUpdateRequest,
+) -> QuotaResponse:
+    _require_platform_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    updated = await set_quota(
+        target_tenant,
+        calls_limit=payload.calls_limit,
+        sandbox_seconds_limit=payload.sandbox_seconds_limit,
+        updated_by=str(getattr(request.state, "user_id", "admin")),
+    )
+    return QuotaResponse(
+        tenant_id=target_tenant,
+        calls_limit=int(updated.get("calls_limit", 0)),
+        sandbox_seconds_limit=int(updated.get("sandbox_seconds_limit", 0)),
+    )
+
+
+@router.get("/actions", response_model=PendingActionListResponse)
+async def list_actions(
+    request: Request,
+    tenant_id: str | None = Query(default=None),
+    action_status: str = Query(default="pending", alias="status"),
+) -> PendingActionListResponse:
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    docs = await list_pending_actions(tenant_id=target_tenant, status=action_status)
+    return PendingActionListResponse(
+        tenant_id=target_tenant,
+        items=[_pending_action_response(doc) for doc in docs],
+    )
+
+
+async def _decide_action(
+    *,
+    request: Request,
+    action_id: str,
+    tenant_id: str | None,
+    decision: str,
+) -> PendingActionResponse:
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    approver_id = str(getattr(request.state, "user_id", "admin"))
+    approver_roles = [str(role) for role in getattr(request.state, "roles", [])]
+    decide_fn = approve_action if decision == "approve" else reject_action
+    outcome, action_doc = await decide_fn(
+        tenant_id=target_tenant,
+        action_id=action_id,
+        approver_id=approver_id,
+        approver_roles=approver_roles,
+    )
+    if action_doc is None and outcome == "not_found":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Pending action not found."
+        )
+    if outcome == "self_approval_forbidden":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requesters may not approve or reject their own actions.",
+        )
+    if outcome in {"not_pending", "expired"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Pending action can no longer be decided.",
+        )
+    if action_doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update pending action.",
+        )
+    get_telemetry_logger().log_background(
+        tenant_id=target_tenant,
+        user_id=approver_id,
+        method=f"admin/actions/{decision}",
+        status="action_approved" if decision == "approve" else "action_rejected",
+        metadata={
+            "action_id": action_id,
+            "server": action_doc.get("server"),
+            "tool": action_doc.get("tool"),
+            "requester": action_doc.get("user_id"),
+            "approver": approver_id,
+        },
+    )
+    return _pending_action_response(action_doc)
+
+
+@router.post("/actions/{action_id}/approve", response_model=PendingActionResponse)
+async def approve_pending_action(
+    request: Request,
+    action_id: str,
+    tenant_id: str | None = Query(default=None),
+) -> PendingActionResponse:
+    return await _decide_action(
+        request=request,
+        action_id=action_id,
+        tenant_id=tenant_id,
+        decision="approve",
+    )
+
+
+@router.post("/actions/{action_id}/reject", response_model=PendingActionResponse)
+async def reject_pending_action(
+    request: Request,
+    action_id: str,
+    tenant_id: str | None = Query(default=None),
+) -> PendingActionResponse:
+    return await _decide_action(
+        request=request,
+        action_id=action_id,
+        tenant_id=tenant_id,
+        decision="reject",
+    )
 
 
 @router.post("/servers")
@@ -193,6 +777,8 @@ async def create_or_update_server(request: Request, payload: ServerUpsertRequest
     await provision_tenant(tenant_id, wait_for_queryable_indexes=False)
     doc = _to_server_doc(payload.model_dump(), tenant_id)
     _validate_server_doc(doc)
+    doc = await _apply_server_policy(doc, is_platform_admin=_is_platform_admin(request))
+    doc = await _prepare_code_server(doc, tenant_id)
     collection = get_tenant_database(tenant_id)["routing_registry"]
     await collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
     if doc.get("enabled", True):
@@ -230,7 +816,7 @@ async def get_server(
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Server not found.")
-    return _public_server_doc(doc)
+    return await _public_server_doc_with_code(doc)
 
 
 @router.patch("/servers/{server_name}")
@@ -256,8 +842,17 @@ async def patch_server(
     merged["tenant_id"] = target_tenant
     merged["args"] = [str(arg) for arg in (merged.get("args") or [])]
     merged["env"] = {str(key): str(value) for key, value in (merged.get("env") or {}).items()}
+    merged["origin"] = existing.get("origin", "platform")
 
     _validate_server_doc(merged)
+    is_platform_admin = _is_platform_admin(request)
+    if merged["origin"] == "platform" and not is_platform_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only platform-admin may modify platform-origin servers.",
+        )
+    merged = await _apply_server_policy(merged, is_platform_admin=is_platform_admin)
+    merged = await _prepare_code_server(merged, target_tenant)
     await collection.replace_one({"_id": server_name}, merged, upsert=True)
     if merged.get("enabled", True):
         await get_proxy_registry().mount_or_update(merged)
@@ -310,6 +905,105 @@ async def who_am_i(request: Request) -> WhoAmIResponse:
         is_platform_admin=settings.platform_admin_role in set(roles),
         auth_mode=settings.auth_mode,
     )
+
+
+@router.post("/users", response_model=UserResponse)
+async def create_user(request: Request, payload: UserCreateRequest) -> UserResponse:
+    target_tenant = _resolve_target_tenant(request, payload.tenant_id)
+    _assert_can_assign_roles(request, payload.roles)
+    try:
+        user = await users_service.create_user(
+            email=payload.email,
+            password=payload.password,
+            tenant_id=target_tenant,
+            roles=payload.roles,
+            scopes=payload.scopes,
+            status=payload.status,
+            created_by=str(getattr(request.state, "user_id", "")) or None,
+        )
+    except users_service.UserAlreadyExists as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except users_service.UserError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+    await users_service.sync_session_context(user)
+    return UserResponse(**user)
+
+
+@router.get("/users", response_model=UserListResponse)
+async def list_users(
+    request: Request,
+    tenant_id: str | None = Query(default=None),
+) -> UserListResponse:
+    if _is_platform_admin(request) and not tenant_id:
+        users = await users_service.list_users()
+        return UserListResponse(tenant_id=None, items=[UserResponse(**u) for u in users])
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    users = await users_service.list_users(tenant_id=target_tenant)
+    return UserListResponse(tenant_id=target_tenant, items=[UserResponse(**u) for u in users])
+
+
+@router.post("/users/me/password")
+async def change_my_password(request: Request, payload: PasswordChangeRequest) -> dict[str, Any]:
+    caller_email = str(getattr(request.state, "user_id", ""))
+    doc = await users_service.find_user_by_email(caller_email)
+    if doc is None:
+        # The env bootstrap admin has no DB record; its password is environment-managed.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password self-service is unavailable for the bootstrap admin.",
+        )
+    if not verify_password(payload.current_password, str(doc.get("password_hash", ""))):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Current password is incorrect.",
+        )
+    user = await users_service.update_user(str(doc["_id"]), password=payload.new_password)
+    await users_service.sync_session_context(user)
+    return {"updated": True}
+
+
+@router.get("/users/{user_id}", response_model=UserResponse)
+async def get_user(request: Request, user_id: str) -> UserResponse:
+    doc = await _load_managed_user(request, user_id)
+    return UserResponse(**users_service.public_user(doc))
+
+
+@router.patch("/users/{user_id}", response_model=UserResponse)
+async def update_user(
+    request: Request,
+    user_id: str,
+    payload: UserUpdateRequest,
+) -> UserResponse:
+    await _load_managed_user(request, user_id)
+    if payload.roles is not None:
+        _assert_can_assign_roles(request, payload.roles)
+    try:
+        user = await users_service.update_user(
+            user_id,
+            password=payload.password,
+            roles=payload.roles,
+            scopes=payload.scopes,
+            status=payload.status,
+        )
+    except users_service.UserNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await users_service.sync_session_context(user)
+    return UserResponse(**user)
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(request: Request, user_id: str) -> dict[str, Any]:
+    doc = await _load_managed_user(request, user_id)
+    caller_email = str(getattr(request.state, "user_id", ""))
+    if str(doc.get("email", "")) == caller_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot delete your own account.",
+        )
+    await users_service.delete_user(user_id)
+    return {"deleted": True, "id": user_id}
 
 
 @router.get("/catalog", response_model=CatalogListResponse)

@@ -122,6 +122,24 @@ Full list with defaults: [`.env.example`](.env.example). Production essentials:
 | `GATEWAY_INSTANCE_ID` | host name | Per-replica id for the change-stream watcher |
 | `WATCHER_RESUME_TTL_SECONDS` | `86400` | TTL for per-instance watcher resume docs |
 
+### Downstream egress allowlist
+
+Restricts which downstream hosts/networks the gateway may connect to (the only
+outbound surface; the code sandbox has no network). Enforced at registration (`422`)
+and, authoritatively, at connect time with DNS re-resolution + IP pinning to defeat
+rebinding. See [`SECURITY.md`](SECURITY.md#network-egress-controls-per-tenant-allowlists).
+
+| Variable | Default | Prod guidance |
+| --- | --- | --- |
+| `EGRESS_ALLOWLIST_ENABLED` | `true` | Master switch for the egress allowlist feature |
+| `EGRESS_GLOBAL_ALLOWLIST` | _(empty)_ | Deployment-wide ceiling: comma/space-separated host globs (`*.corp.example`), exact hosts, IP literals, CIDRs. Empty = no global ceiling |
+| `EGRESS_DEFAULT_DENY` | `false` | `true` = deny every host unless explicitly allowlisted (recommended for locked-down fleets) |
+| `EGRESS_ALLOWLIST_CACHE_TTL_SECONDS` | `5` | Per-replica TTL for cached per-tenant allowlists read from the control DB |
+
+Per-tenant allowlists are managed at runtime via
+`PUT /admin/tenants/{tenant_id}/egress-allowlist` and intersect with the global
+ceiling. Watch `gateway_egress_blocks_total{stage}` (`register`/`connect`).
+
 ---
 
 ## 4. Run behind a proxy correctly (required)
@@ -199,14 +217,143 @@ limiting.
   so the limit is consistent across replicas regardless of pod clock skew.
 - **Warm downstream connection pool**: one warm client per `(tenant, server)` per replica,
   re-credentialed on token rotation. No sticky sessions required.
+- **Warm sandbox worker pool**: `SANDBOX_POOL_SIZE>0` keeps that many CPython-on-WASI
+  workers resident per replica, each with the `python.wasm` module already compiled, so a
+  code-tool call skips the subprocess-spawn + module-compile cold start (typically the
+  dominant latency for the first call). Every job still runs in a fresh wasm `Store`, so
+  isolation stays per-call. The pool is prewarmed at startup (only when
+  `CODE_TOOL_EXECUTION_ENABLED`), refills itself when a worker times out/crashes/recycles
+  (`SANDBOX_WORKER_MAX_JOBS`), and a compiled-module cache (`SANDBOX_MODULE_CACHE_PATH`)
+  makes respawns fast. Leave `SANDBOX_POOL_SIZE=0` (default) to spawn a throwaway worker
+  per call. Observe it via `gateway_sandbox_pool_workers` and
+  `gateway_sandbox_pool_events_total{event}` (`spawned`, `served`, `recycled`,
+  `acquire_timeout`, `spawn_failed`).
+- **Sandbox concurrency ceilings**: each call is bounded by a per-tenant semaphore
+  (`SANDBOX_MAX_CONCURRENCY_PER_TENANT`) *and* a process-wide ceiling
+  (`SANDBOX_MAX_GLOBAL_CONCURRENCY`, 0 = off) that caps total simultaneous executions across
+  all tenants on a replica. Size the global cap to the host's CPU/RSS budget so a fan-out of
+  many tenants cannot oversubscribe a node; in pooled mode it pairs naturally with
+  `SANDBOX_POOL_SIZE` (set the global cap >= pool size). A blocked call fails fast at the
+  pool acquire timeout (`SANDBOX_POOL_ACQUIRE_TIMEOUT_MS`) rather than queuing unboundedly.
+  Result frames are hard-capped, so a single call's worst-case memory footprint is ~2x
+  `SANDBOX_MAX_OUTPUT_BYTES`; multiply by the global cap for per-replica sizing.
+
+### Sandbox capacity planning (analytical)
+
+Use this model to size a replica before collecting host-specific benchmarks:
+
+- **Warm throughput** per replica:
+  `min(SANDBOX_POOL_SIZE, max(1, SANDBOX_MAX_GLOBAL_CONCURRENCY)) / mean_job_seconds`
+- **Cold throughput** per replica:
+  `1 / (mean_job_seconds + mean_spawn_seconds + mean_compile_seconds)` per concurrent slot.
+- **Warm latency (p50)**:
+  approximately `mean_job_seconds` (+ queueing only when semaphores saturate).
+- **Cold latency (p50)**:
+  approximately `mean_job_seconds + mean_spawn_seconds + mean_compile_seconds`.
+  `SANDBOX_MODULE_CACHE_PATH` reduces respawn compile time but not in-job runtime.
+- **Per-call memory envelope**:
+  roughly `2 * SANDBOX_MAX_OUTPUT_BYTES + SANDBOX_MEMORY_BYTES + worker_base_rss`.
+- **Per-replica memory envelope**:
+  roughly `(SANDBOX_MAX_GLOBAL_CONCURRENCY * per_call_envelope) + (SANDBOX_POOL_SIZE * resident_worker_rss)`.
+
+Tuning guidance:
+
+- Set `SANDBOX_POOL_SIZE` to expected concurrent code-tool demand *per replica*.
+- Set `SANDBOX_MAX_GLOBAL_CONCURRENCY` to the same order as pool size, then cap it by real
+  host CPU/RSS limits.
+- Keep `SANDBOX_MAX_CONCURRENCY_PER_TENANT` below the global cap to preserve fairness.
+- Keep `SANDBOX_POOL_ACQUIRE_TIMEOUT_MS` short enough to fail fast during saturation rather
+  than building unbounded queue latency.
+- Use `SANDBOX_WORKER_MAX_JOBS` as a resident-worker recycle backstop if long-lived RSS drift
+  appears.
+
+Operational signals to watch:
+
+- `gateway_sandbox_pool_workers`: should converge near `SANDBOX_POOL_SIZE`.
+- `gateway_sandbox_pool_events_total{event="acquire_timeout"}`: sustained growth indicates
+  under-provisioned pool/concurrency settings.
+- `gateway_sandbox_pool_events_total{event="served"}` versus `{event="recycled"}`:
+  spikes in recycle rate can indicate unstable workers or overly aggressive max-jobs settings.
+- `sandbox_ms` usage metering (section 8): use this as the billing/cost attribution driver
+  per tenant once pricing policy is defined.
+
+### Sandbox measured baseline (empirical)
+
+Runbook command (from repo root, with `.venv` active and `python.wasm` fetched):
+
+- `python scripts/bench_sandbox.py`
+
+Current baseline sample (captured on `macOS-26.4.1-arm64-arm-64bit`, Python `3.11.13`,
+`wasmtime 45.0.0`, `python-3.12.0.wasm`):
+
+- **Cold no-cache latency** (n=5): p50 `691 ms`, p95 `724 ms`.
+- **Cold with module cache** (n=5 + prime): prime `689 ms`, p50 `686 ms`, p95 `716 ms`.
+- **Warm serial latency** (n=20): p50 `71 ms`, p95 `76 ms`.
+- **Warm concurrent throughput** (`pool=4`, `global=4`, 20 calls): `54.48 calls/s`.
+- **Worker memory**: cold child-peak `495696 KiB`; resident warm worker peak `544160 KiB`.
+
+Treat these as a machine-specific baseline, not a universal SLO. Re-run
+`python scripts/bench_sandbox.py` on your target deployment class and update this section with
+those host-local numbers before final capacity sizing.
 - **PodDisruptionBudget**: `deploy/k8s/pdb.yaml` keeps capacity during voluntary
   disruptions. Add an HPA on CPU/RPS for autoscaling.
 - **Graceful shutdown**: the lifespan stops the watcher, closes pooled downstream clients,
-  and disconnects Mongo on shutdown.
+  tears down the warm sandbox worker pool, and disconnects Mongo on shutdown.
 
 ---
 
-## 8. Guardrails posture
+## 8. Quotas & usage metering
+
+The gateway now supports per-tenant metering + quota enforcement on `tools/call`.
+
+- **Metering dimensions**:
+  - `calls` (incremented on successful billable completions, including cache hits).
+  - `sandbox_ms` (incremented from code-tool sandbox elapsed runtime).
+- **Defaults**:
+  - `USAGE_QUOTA_PERIOD=monthly`
+  - `DEFAULT_QUOTA_CALLS_PER_PERIOD=0`
+  - `DEFAULT_QUOTA_SANDBOX_SECONDS_PER_PERIOD=0`
+  - `0` means unlimited (metering still runs).
+- **Enforcement**: when a tenant exceeds a configured limit, `tools/call` returns
+  JSON-RPC `RATE_LIMITED` (`-32029`) with `reason=quota_exceeded` and the current
+  `usage`/`quota` snapshot.
+- **Billing hook**: usage events are appended to control-plane `usage_events`
+  (`tenant_id`, `period`, `kind`, `amount`, `ts`) for downstream billing pipelines.
+- **Admin control plane**:
+  - `GET /admin/tenants/{tenant_id}/usage`
+  - `PUT /admin/tenants/{tenant_id}/quota` (platform-admin only)
+
+### Tenant suspension (abuse kill-switch)
+
+Quotas cap steady-state spend; suspension is the **instant** lever for an actively
+abusive or compromised tenant.
+
+- **Suspend / resume** (platform-admin only):
+  - `POST /admin/tenants/{tenant_id}/suspend` — optional body `{"reason":"..."}`.
+  - `POST /admin/tenants/{tenant_id}/resume`.
+  - Also surfaced as Suspend/Resume buttons on the **Tenants** admin console tab.
+- **Effect**: a suspended tenant is blocked on both data planes — `/rpc`
+  (`tools/call`, `tools/list`, `tools/search`) and the mounted `/mcp` tools. `/rpc`
+  returns JSON-RPC `FORBIDDEN` (`-32003`) with `reason=tenant_suspended`. The admin
+  console, billing, and other control-plane reads remain available.
+- **Propagation**: status is cached per replica for `TENANT_STATUS_CACHE_TTL_SECONDS`
+  (default `5`). The acting node honors the change immediately; other replicas pick it
+  up within the TTL. Set to `0` to read status on every request (no cache) if you need
+  zero-delay propagation at the cost of one extra control-plane read per data-plane call.
+- **Audit**: each suspend/resume is written to the tenant telemetry/audit trail
+  (`tenant_suspended` / `tenant_resumed`) with the acting admin and reason.
+
+**Per-user revocation.** For a single bad actor (rather than a whole tenant), disable
+the user via `PATCH /admin/users/{id}` with `{"status":"disabled"}` (or the Disable
+button on the Users tab). A user's status is mirrored into the `session_context` the
+`/rpc` RBAC gate already reads, so a disabled account is rejected with `403 Account
+suspended` on its **next** request — a standing bearer token stops working immediately,
+without waiting for token expiry. Re-enable with `{"status":"active"}`. (This applies to
+the `/rpc` plane; the `/mcp` mount still enforces tenant-level suspension.)
+
+---
+
+## 9. Guardrails posture
 
 - The **deterministic regex floor** for prompt-injection and the **request size cap** are
   always on for `/rpc` and `/mcp`.
@@ -221,7 +368,7 @@ limiting.
 
 ---
 
-## 9. Health probes and the auth interaction
+## 10. Health probes and the auth interaction
 
 The gateway exposes:
 
@@ -245,7 +392,7 @@ controller; tighten it to your Prometheus source if needed.
 
 ---
 
-## 10. Observability & alerting
+## 11. Observability & alerting
 
 - **Logs**: `LOG_JSON=true` → structured logs with request IDs. Auth failures are logged
   by *category* (`expired`, `bad_signature`, `bad_audience`, `jwks_unavailable`, …),
@@ -268,7 +415,7 @@ Suggested alerts:
 
 ---
 
-## 11. Bootstrapping, provisioning & migrations
+## 12. Bootstrapping, provisioning & migrations
 
 - **Embedding changes are data migrations, not code deploys.** Switching providers/models
   from the admin panel triggers a background reprovision: re-embed every tenant's catalog,
@@ -284,7 +431,7 @@ Suggested alerts:
 
 ---
 
-## 12. Upgrades & rollbacks
+## 13. Upgrades & rollbacks
 
 - The image is stateless; roll forward/back by changing the image tag
   (`kubectl set image …` / `helm upgrade --set image.tag=…`). State stays in MongoDB.
@@ -295,7 +442,7 @@ Suggested alerts:
 
 ---
 
-## 13. Production readiness checklist
+## 14. Production readiness checklist
 
 **Identity & access**
 - [ ] `ENVIRONMENT=production`, `AUTH_MODE` real (`jwks` preferred) with issuer + audience.

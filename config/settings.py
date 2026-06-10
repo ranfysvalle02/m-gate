@@ -96,6 +96,62 @@ class Settings(BaseSettings):
     gateway_instance_id: str | None = None
     watcher_resume_ttl_seconds: int = 86400
     platform_admin_role: str = "platform-admin"
+    # Code-backed tools (transport="code") can be authored, stored, and discovered
+    # in Phase 2, but are NOT executed until the Phase 3 sandbox ships. Until then
+    # tools/call against a code tool returns a clear "execution not enabled" error.
+    # Flipping this on without a sandbox would run untrusted user code in-process.
+    code_tool_execution_enabled: bool = False
+    # Pending approval actions expire automatically after this TTL.
+    confirmation_ttl_seconds: int = 3600
+    # Tenant usage quota period and default limits (0 => unlimited).
+    usage_quota_period: Literal["monthly"] = "monthly"
+    default_quota_calls_per_period: int = 0
+    default_quota_sandbox_seconds_per_period: int = 0
+    # How long a tenant's suspended/active status is cached per replica. Keeps the
+    # hot-path status check cheap; also the max delay before a suspend issued on
+    # one replica is honored by the others. 0 => no cache (read every request).
+    tenant_status_cache_ttl_seconds: int = 5
+    # Runtime for executing transport="code" tools when execution is enabled.
+    # "wasm" runs code in the WebAssembly sandbox worker; "disabled" keeps the
+    # runtime hard-off regardless of code_tool_execution_enabled.
+    code_executor: Literal["wasm", "disabled"] = "wasm"
+    # Pinned CPython-on-WASI binary fetched by `make fetch-wasm`.
+    sandbox_python_wasm_path: str = "vendor/python-3.12.0.wasm"
+    # Per-call sandbox resource controls.
+    sandbox_fuel: int = 4_000_000_000
+    sandbox_memory_bytes: int = 268_435_456  # 256 MiB
+    # 0 => inherit downstream_timeout_ms
+    sandbox_wall_timeout_ms: int = 0
+    sandbox_max_output_bytes: int = 262_144
+    sandbox_max_concurrency_per_tenant: int = 4
+    # Process-wide ceiling on simultaneous sandbox executions across ALL tenants.
+    # Bounds total host load so N tenants each at their per-tenant limit cannot
+    # collectively spawn an unbounded number of concurrent workers. 0 => no
+    # global cap (only the per-tenant limit applies).
+    sandbox_max_global_concurrency: int = 0
+    # Code-tool requirements are installed with host `pip` BEFORE the wasm jail,
+    # so a source build could run setup.py on the host. They are therefore
+    # DENY-by-default: only distribution names listed here (comma/space separated,
+    # e.g. "httpx,orjson") may be installed, and only as prebuilt wheels (no source
+    # builds). Empty => code tools may use the in-sandbox stdlib only.
+    sandbox_allowed_requirements: str = ""
+    # Warm sandbox worker pool. 0 => disabled (a throwaway worker subprocess is
+    # spawned per call, paying the wasm-compile cold start each time). >0 keeps
+    # that many CPython-on-WASI workers resident and prewarmed so calls reuse an
+    # already-compiled runtime; every job still runs in a fresh wasm Store, so
+    # isolation stays per-call.
+    sandbox_pool_size: int = 0
+    # Recycle a pooled worker after this many jobs (0 => never) as a leak/RSS
+    # backstop for long-lived workers.
+    sandbox_worker_max_jobs: int = 0
+    # Max wait for a free pooled worker before failing a call (0 => derive from
+    # the sandbox wall timeout).
+    sandbox_pool_acquire_timeout_ms: int = 0
+    # Max wait for a freshly spawned worker to compile its module and report ready.
+    sandbox_pool_warmup_timeout_ms: int = 20_000
+    # Directory for the serialized, compiled python.wasm module so respawned
+    # workers warm up via deserialize instead of recompiling. Empty => disabled.
+    sandbox_module_cache_path: str = "vendor/.wasm-cache"
     # When a request arrives for a tenant that has never been provisioned, create
     # its database + indexes on first use. Disable in environments where tenant
     # ids come from untrusted callers and provisioning must be an explicit step.
@@ -146,6 +202,15 @@ class Settings(BaseSettings):
     enable_tracing: bool = False
     log_json: bool = True
     request_max_bytes: int = 262144
+    tenant_endpoint_ssrf_guard: bool = True
+    # Outbound downstream egress allowlisting. Global allowlist is a comma/space
+    # separated set of host globs / exact hosts / CIDRs (e.g.
+    # "*.corp.example,api.vendor.com,203.0.113.0/24"). Enforcement remains
+    # no-op-compatible until explicitly configured (see services/egress_policy.py).
+    egress_allowlist_enabled: bool = True
+    egress_global_allowlist: str = ""
+    egress_default_deny: bool = False
+    egress_allowlist_cache_ttl_seconds: int = 5
     guardrail_ml_enabled: bool = False
     guardrail_injection_threshold: float = 0.85
     guardrail_fail_mode: Literal["open", "closed"] = "open"
@@ -202,6 +267,8 @@ class Settings(BaseSettings):
             self.admin_session_secret = self.jwt_secret
         if not self.embedding_secret:
             self.embedding_secret = self.admin_session_secret or self.jwt_secret
+        if self.sandbox_wall_timeout_ms <= 0:
+            self.sandbox_wall_timeout_ms = max(1, self.downstream_timeout_ms)
         return self
 
     @model_validator(mode="after")

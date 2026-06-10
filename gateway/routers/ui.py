@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -16,9 +17,43 @@ from services.admin_session import (
     verify_credentials,
     verify_session,
 )
+from services.users import authenticate as authenticate_user
+from services.users import normalize_email
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ui"])
 templates = Jinja2Templates(directory="gateway/templates")
+
+
+async def _resolve_login_principal(email: str, password: str) -> dict[str, Any] | None:
+    """Resolve credentials to a session principal.
+
+    Managed users (control-DB ``users`` collection) take precedence; the env
+    ``ADMIN_EMAIL``/``ADMIN_PASSWORD`` pair survives only as a bootstrap
+    superuser. The DB lookup is best-effort: before the control plane is
+    provisioned (or in unit tests without a database) it is skipped so the
+    bootstrap admin can still sign in.
+    """
+    settings = get_settings()
+    try:
+        user = await authenticate_user(email, password)
+    except Exception as exc:  # pragma: no cover - defensive: DB not yet reachable
+        logger.warning("User store unavailable during login, using bootstrap admin only: %s", exc)
+        user = None
+    if user is not None:
+        return {
+            "email": user["email"],
+            "tenant_id": user["tenant_id"],
+            "roles": user["roles"],
+        }
+    if verify_credentials(email, password):
+        return {
+            "email": normalize_email(email),
+            "tenant_id": settings.default_tenant_id,
+            "roles": [settings.platform_admin_role, "admin"],
+        }
+    return None
 
 
 def _wants_json_response(request: Request) -> bool:
@@ -88,7 +123,8 @@ async def ui_login_post(request: Request) -> Response:
         email = parsed.get("email", [""])[0]
         password = parsed.get("password", [""])[0]
 
-    if not verify_credentials(email, password):
+    principal = await _resolve_login_principal(email, password)
+    if principal is None:
         if wants_json:
             return JSONResponse(status_code=401, content={"detail": "Invalid admin credentials."})
         return templates.TemplateResponse(
@@ -101,7 +137,11 @@ async def ui_login_post(request: Request) -> Response:
             status_code=401,
         )
 
-    token = mint_session(email)
+    token = mint_session(
+        principal["email"],
+        tenant_id=principal["tenant_id"],
+        roles=principal["roles"],
+    )
     if wants_json:
         return JSONResponse(content={"token": token})
 

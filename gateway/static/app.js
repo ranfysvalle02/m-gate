@@ -5,6 +5,8 @@ window.adminConsole = function adminConsole(config) {
     navItems: [
       { key: "dashboard", label: "Dashboard" },
       { key: "tenants", label: "Tenants" },
+      { key: "users", label: "Users" },
+      { key: "approvals", label: "Approvals" },
       { key: "servers", label: "Servers" },
       { key: "catalog", label: "Tool Catalog" },
       { key: "telemetry", label: "Telemetry" },
@@ -16,12 +18,31 @@ window.adminConsole = function adminConsole(config) {
     activeSection: "dashboard",
     forms: {
       newTenantId: "",
+      user: {
+        email: "",
+        password: "",
+        role: "tenant-admin",
+        scopes: "",
+        status: "active",
+      },
+      passwordChange: {
+        current_password: "",
+        new_password: "",
+      },
       server: {
         server: "",
         transport: "streamable_http",
         endpoint: "",
         command: "",
         metadata: "{}",
+        code: {
+          name: "",
+          description: "",
+          action_type: "read",
+          requires_confirmation: false,
+          requirements: "",
+          raw_code: "",
+        },
       },
       search: {
         query: "",
@@ -62,6 +83,9 @@ window.adminConsole = function adminConsole(config) {
       whoami: null,
       stats: null,
       tenants: [],
+      users: [],
+      pendingActions: [],
+      userNotice: "",
       servers: [],
       catalog: { items: [] },
       telemetry: { items: [] },
@@ -155,6 +179,11 @@ window.adminConsole = function adminConsole(config) {
       return parsed.toLocaleString();
     },
 
+    formatJson(raw) {
+      if (!raw || typeof raw !== "object") return String(raw || "{}");
+      return JSON.stringify(raw);
+    },
+
     switchSection(section) {
       this.activeSection = section;
       this.refreshActiveSection();
@@ -165,6 +194,8 @@ window.adminConsole = function adminConsole(config) {
       try {
         if (this.activeSection === "dashboard") await this.loadStats();
         if (this.activeSection === "tenants") await this.loadTenants();
+        if (this.activeSection === "users") await this.loadUsers();
+        if (this.activeSection === "approvals") await this.loadPendingActions();
         if (this.activeSection === "servers") await this.loadServers();
         if (this.activeSection === "catalog") await this.loadCatalog();
         if (this.activeSection === "telemetry") await this.loadTelemetry();
@@ -224,6 +255,193 @@ window.adminConsole = function adminConsole(config) {
       }
     },
 
+    async toggleTenantStatus(tenant) {
+      this.clearError();
+      const suspend = tenant.status !== "suspended";
+      let reason = null;
+      if (suspend) {
+        reason = window.prompt(`Suspend tenant '${tenant.tenant_id}'? Optional reason:`, "");
+        if (reason === null) return;
+      }
+      try {
+        const action = suspend ? "suspend" : "resume";
+        await this.apiRequest(`/admin/tenants/${encodeURIComponent(tenant.tenant_id)}/${action}`, {
+          method: "POST",
+          includeTenant: false,
+          body: suspend ? { reason } : {},
+        });
+        await this.loadTenants();
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    roleOptions: [
+      { value: "user", label: "User" },
+      { value: "tenant-admin", label: "Tenant admin" },
+      { value: "platform-admin", label: "Platform admin" },
+    ],
+
+    rolesForSelection(selection) {
+      if (selection === "platform-admin") return ["platform-admin", "admin"];
+      if (selection === "tenant-admin") return ["admin"];
+      return ["user"];
+    },
+
+    roleLabel(roles) {
+      const set = new Set(roles || []);
+      if (set.has("platform-admin")) return "Platform admin";
+      if (set.has("admin")) return "Tenant admin";
+      return (roles || []).join(", ") || "user";
+    },
+
+    parseScopes(raw) {
+      if (!raw || !raw.trim()) return [];
+      return raw
+        .split(",")
+        .map((scope) => scope.trim())
+        .filter((scope) => scope.length > 0);
+    },
+
+    resetUserForm() {
+      this.forms.user = {
+        email: "",
+        password: "",
+        role: "tenant-admin",
+        scopes: "",
+        status: "active",
+      };
+    },
+
+    async loadUsers() {
+      this.clearError();
+      try {
+        const payload = await this.apiRequest("/admin/users");
+        this.state.users = payload.items || [];
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    async createUser() {
+      this.clearError();
+      this.state.userNotice = "";
+      try {
+        await this.apiRequest("/admin/users", {
+          method: "POST",
+          body: {
+            tenant_id: this.state.tenantId,
+            email: this.forms.user.email,
+            password: this.forms.user.password,
+            roles: this.rolesForSelection(this.forms.user.role),
+            scopes: this.parseScopes(this.forms.user.scopes),
+            status: this.forms.user.status,
+          },
+        });
+        this.state.userNotice = `Created ${this.forms.user.email}.`;
+        this.resetUserForm();
+        await this.loadUsers();
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    async toggleUserStatus(user) {
+      this.clearError();
+      try {
+        await this.apiRequest(`/admin/users/${encodeURIComponent(user.id)}`, {
+          method: "PATCH",
+          body: { status: user.status === "active" ? "disabled" : "active" },
+        });
+        await this.loadUsers();
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    async resetUserPassword(user) {
+      const next = window.prompt(`Set a new password for ${user.email}:`);
+      if (!next) return;
+      this.clearError();
+      try {
+        await this.apiRequest(`/admin/users/${encodeURIComponent(user.id)}`, {
+          method: "PATCH",
+          body: { password: next },
+        });
+        this.state.userNotice = `Password reset for ${user.email}.`;
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    async deleteUser(user) {
+      if (!window.confirm(`Delete user '${user.email}'?`)) return;
+      this.clearError();
+      try {
+        await this.apiRequest(`/admin/users/${encodeURIComponent(user.id)}`, {
+          method: "DELETE",
+        });
+        await this.loadUsers();
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    async changeMyPassword() {
+      this.clearError();
+      this.state.userNotice = "";
+      try {
+        await this.apiRequest("/admin/users/me/password", {
+          method: "POST",
+          includeTenant: false,
+          body: {
+            current_password: this.forms.passwordChange.current_password,
+            new_password: this.forms.passwordChange.new_password,
+          },
+        });
+        this.forms.passwordChange = { current_password: "", new_password: "" };
+        this.state.userNotice = "Your password has been updated.";
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    async loadPendingActions() {
+      this.clearError();
+      try {
+        const payload = await this.apiRequest("/admin/actions");
+        this.state.pendingActions = payload.items || [];
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    async approvePendingAction(action) {
+      if (!window.confirm(`Approve '${action.server}/${action.tool}'?`)) return;
+      this.clearError();
+      try {
+        await this.apiRequest(`/admin/actions/${encodeURIComponent(action.action_id)}/approve`, {
+          method: "POST",
+        });
+        await this.loadPendingActions();
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    async rejectPendingAction(action) {
+      if (!window.confirm(`Reject '${action.server}/${action.tool}'?`)) return;
+      this.clearError();
+      try {
+        await this.apiRequest(`/admin/actions/${encodeURIComponent(action.action_id)}/reject`, {
+          method: "POST",
+        });
+        await this.loadPendingActions();
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
     async loadServers() {
       this.clearError();
       try {
@@ -234,6 +452,17 @@ window.adminConsole = function adminConsole(config) {
       }
     },
 
+    emptyCodeForm() {
+      return {
+        name: "",
+        description: "",
+        action_type: "read",
+        requires_confirmation: false,
+        requirements: "",
+        raw_code: "",
+      };
+    },
+
     resetServerForm() {
       this.forms.server = {
         server: "",
@@ -241,17 +470,40 @@ window.adminConsole = function adminConsole(config) {
         endpoint: "",
         command: "",
         metadata: "{}",
+        code: this.emptyCodeForm(),
       };
     },
 
-    editServer(server) {
+    async editServer(server) {
       this.forms.server = {
         server: server.server || "",
         transport: server.transport || "streamable_http",
         endpoint: server.endpoint || "",
         command: server.command || "",
         metadata: JSON.stringify(server.metadata || {}),
+        code: this.emptyCodeForm(),
       };
+      if (server.transport !== "code") return;
+      // The list view redacts authored source; fetch the single server to load
+      // the decrypted function back into the editor.
+      this.clearError();
+      try {
+        const detail = await this.apiRequest(
+          `/admin/servers/${encodeURIComponent(server.server)}`,
+        );
+        const tool = (detail.tools || [])[0] || {};
+        const meta = tool.metadata || {};
+        this.forms.server.code = {
+          name: tool.name || "",
+          description: tool.description || "",
+          action_type: meta.action_type || "read",
+          requires_confirmation: Boolean(meta.requires_confirmation),
+          requirements: (tool.requirements || []).join("\n"),
+          raw_code: tool.raw_code || "",
+        };
+      } catch (error) {
+        this.setError(error);
+      }
     },
 
     parseMetadata(raw) {
@@ -259,17 +511,44 @@ window.adminConsole = function adminConsole(config) {
       return JSON.parse(raw);
     },
 
+    buildCodeTools() {
+      const code = this.forms.server.code || {};
+      const requirements = (code.requirements || "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      return [
+        {
+          server: this.forms.server.server,
+          name: code.name,
+          description: code.description,
+          input_schema: {},
+          scopes: [],
+          raw_code: code.raw_code,
+          requirements,
+          metadata: {
+            action_type: code.action_type,
+            requires_confirmation: Boolean(code.requires_confirmation),
+          },
+        },
+      ];
+    },
+
     async saveServer() {
       this.clearError();
       try {
+        const isCode = this.forms.server.transport === "code";
         const payload = {
           tenant_id: this.state.tenantId,
           server: this.forms.server.server,
           transport: this.forms.server.transport,
-          endpoint: this.forms.server.endpoint || null,
-          command: this.forms.server.command || null,
+          endpoint: isCode ? null : this.forms.server.endpoint || null,
+          command: isCode ? null : this.forms.server.command || null,
           metadata: this.parseMetadata(this.forms.server.metadata),
         };
+        if (isCode) {
+          payload.tools = this.buildCodeTools();
+        }
         await this.apiRequest("/admin/servers", { method: "POST", body: payload });
         this.resetServerForm();
         await this.loadServers();

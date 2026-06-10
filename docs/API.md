@@ -47,12 +47,68 @@ require the `platform-admin` role.
 - **Tenants**
   - `POST /admin/tenants`
   - `GET /admin/tenants`
+  - `GET /admin/tenants/{tenant_id}/sandbox-secrets` — list configured secret keys
+    for code-tool sandbox execution (values are always redacted).
+  - `PUT /admin/tenants/{tenant_id}/sandbox-secrets` — upsert per-tenant sandbox
+    secrets (`{"values":{"KEY":"value"}}`, empty string clears a key). Platform-admin
+    may target any tenant; tenant-admins are scoped to their own tenant.
+  - `GET /admin/tenants/{tenant_id}/usage` — per-period metered usage (`calls`,
+    `sandbox_ms`) with effective quota and remaining budget.
+  - `PUT /admin/tenants/{tenant_id}/quota` — set tenant quota ceilings
+    (`calls_limit`, `sandbox_seconds_limit`); platform-admin only.
+  - `POST /admin/tenants/{tenant_id}/suspend` — abuse kill-switch: block the tenant
+    from the `/rpc` and `/mcp` data planes (optional body `{"reason":"..."}`);
+    platform-admin only.
+  - `POST /admin/tenants/{tenant_id}/resume` — lift a suspension; platform-admin only.
+  - `GET /admin/tenants` responses include `status` (`active`/`suspended`) and, when
+    suspended, `suspended_reason`. Suspension takes effect within
+    `TENANT_STATUS_CACHE_TTL_SECONDS` across replicas (immediately on the acting node).
+  - `GET /admin/tenants/{tenant_id}/egress-allowlist` — the tenant's downstream egress
+    allowlist plus the deployment-wide `global_allowlist`, `enforced`, and `default_deny`
+    flags. Platform-admin for any tenant; tenant-admin for their own.
+  - `PUT /admin/tenants/{tenant_id}/egress-allowlist` — replace the tenant allowlist
+    (`{"allowlist":["*.corp.example","api.vendor.com","203.0.113.0/24"]}`). Entries are
+    normalized + validated (host globs, exact hosts, IP literals, CIDRs); malformed
+    entries return `422`. The tenant list intersects with `EGRESS_GLOBAL_ALLOWLIST` (it
+    can only narrow the global ceiling). Egress is enforced when registering downstream
+    `streamable_http`/`sse` servers (disallowed endpoints → `422`) and authoritatively at
+    connect time with DNS re-resolution + IP pinning. Same RBAC scoping as the GET.
+- **Human-in-the-loop approvals** (tenant-admin or platform-admin required)
+  - `GET /admin/actions?status=pending` — list pending/approved/rejected actions
+    for the active tenant.
+  - `POST /admin/actions/{action_id}/approve` — mark a pending action approved.
+  - `POST /admin/actions/{action_id}/reject` — mark a pending action rejected.
+  - Requesters cannot approve/reject their own actions.
 - **Server registry**
   - `POST /admin/servers`
   - `GET /admin/servers`
   - `GET /admin/servers/{server_name}`
   - `PATCH /admin/servers/{server_name}`
   - `DELETE /admin/servers/{server_name}`
+  - **Code-backed tools** (`transport="code"`): a server may host user-authored
+    Python functions instead of a downstream endpoint. Each entry in `tools[]`
+    carries `raw_code`, pinned `requirements[]` (`name==version`), and
+    `metadata.action_type` (`read`/`write`/`destructive`) / `metadata.requires_confirmation`.
+    On save, source is statically linted (size cap, blocked dangerous
+    imports/`exec`/`open`/dunder-escapes, pinned-requirements only) and **encrypted at
+    rest**; list responses redact source to a `has_raw_code` flag while
+    `GET /admin/servers/{server_name}` decrypts it for the editor. Code tools are
+    discoverable via `tools/list`/search. When `CODE_TOOL_EXECUTION_ENABLED=true`,
+    `tools/call` executes them in the WebAssembly sandbox runtime (`CODE_EXECUTOR=wasm`);
+    when false, the call returns `"code_execution_not_enabled"`.
+- **Users** (admin principal required; tenant-admins are scoped to their own tenant)
+  - `POST /admin/users` — create a user (`email`, `password`, optional `tenant_id`,
+    `roles`, `scopes`, `status`). Only `platform-admin` may grant the `platform-admin`
+    role or target another tenant.
+  - `GET /admin/users` — list users (platform-admin sees all; pass `tenant_id` to scope).
+  - `GET /admin/users/{id}` — fetch a user.
+  - `PATCH /admin/users/{id}` — update `roles`, `scopes`, `status`, or `password`
+    (admin-initiated password reset). Setting `status` to `disabled` revokes the user on
+    the `/rpc` plane on their next request (a standing token returns `403 Account
+    suspended`), without waiting for token expiry.
+  - `DELETE /admin/users/{id}` — delete a user (self-deletion is rejected).
+  - `POST /admin/users/me/password` — self-service password change (`current_password`,
+    `new_password`); unavailable for the env bootstrap admin.
 - **Catalog and telemetry**
   - `GET /admin/catalog`
   - `POST /admin/search`
@@ -140,11 +196,30 @@ Request params:
 
 Invokes downstream tool through the proxy registry.
 
+For `transport="code"` catalog entries:
+
+- `CODE_TOOL_EXECUTION_ENABLED=false` -> JSON-RPC error
+  `{"reason":"code_execution_not_enabled"}`.
+- `CODE_TOOL_EXECUTION_ENABLED=true` + `CODE_EXECUTOR=wasm` -> executes inside a
+  throwaway WebAssembly sandbox worker with per-call CPU/memory/wall/output limits.
+- For any tool call, tenant quota is enforced in-band. When exceeded, `tools/call`
+  returns JSON-RPC `RATE_LIMITED` (`-32029`) with
+  `{"reason":"quota_exceeded","usage":...,"quota":...}`.
+- For catalog entries where `metadata.requires_confirmation=true`:
+  - Without `confirmation_id`, the gateway does **not** execute the tool. It
+    persists a pending action and returns a JSON-RPC result frame:
+    `{"status":"confirmation_required","confirmation":{"action_id":"...","expires_at":"..."}}`.
+  - An admin approves/rejects via `/admin/actions/{action_id}/approve|reject`.
+  - Caller re-invokes `tools/call` with the same request plus
+    `confirmation_id=<action_id>`. Execution proceeds only when the action is
+    approved, unexpired, and argument-matched.
+
 Request params:
 
 - `server` (required)
 - `name` (required)
 - `arguments` (optional object, default `{}`)
+- `confirmation_id` (optional; required on the second call for approval-gated tools)
 
 Example:
 
@@ -186,6 +261,9 @@ Common cases:
 - Missing/invalid token: `401` (or `503` when JWKS is unavailable).
 - Unknown tenant: JSON-RPC error with `tenant_not_provisioned` metadata.
 - Downstream timeout: JSON-RPC `UPSTREAM_TIMEOUT`.
+- Tenant quota exceeded: JSON-RPC `RATE_LIMITED` with `reason=quota_exceeded`.
+- Suspended tenant: JSON-RPC `FORBIDDEN` (`-32003`) with `reason=tenant_suspended`
+  (and `detail` carrying the operator-supplied reason when present).
 
 ## `/mcp` Sub-Application Note
 

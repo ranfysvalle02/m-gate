@@ -14,6 +14,7 @@ class ToolCallParams(BaseModel):
     server: str
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+    confirmation_id: str | None = None
 
 
 class ToolSearchParams(BaseModel):
