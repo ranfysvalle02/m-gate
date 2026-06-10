@@ -501,6 +501,19 @@ async def _validate_and_detect_dimensions(candidate: EmbeddingConfig) -> Embeddi
     return replace(candidate, dimensions=detected)
 
 
+def _secret_encryption_label(config: EmbeddingConfig) -> str | None:
+    """Describe how this config's API key is protected at rest.
+
+    Tenant overrides use a per-tenant Queryable Encryption DEK when QE is on;
+    everything else (platform default, QE disabled) uses the shared Fernet seam.
+    """
+    if not config.has_api_key:
+        return None
+    if config.source == "tenant-db" and settings.qe_enabled:
+        return "per-tenant-dek"
+    return "shared-fernet"
+
+
 def _embedding_config_response(
     config: EmbeddingConfig,
     reprovision: dict[str, Any] | None = None,
@@ -519,6 +532,7 @@ def _embedding_config_response(
         azure_deployment=config.azure_deployment,
         supported_providers=list(SUPPORTED_PROVIDERS),
         source=config.source,
+        secret_encryption=_secret_encryption_label(config),
         updated_at=config.updated_at,
         updated_by=config.updated_by,
         reprovision=reprovision or {},

@@ -6,7 +6,11 @@ from datetime import UTC, datetime
 from pymongo.errors import OperationFailure
 
 from config.settings import Settings, get_settings
-from database.encryption import create_encrypted_routing_registry, ensure_key_vault
+from database.encryption import (
+    create_encrypted_routing_registry,
+    ensure_key_vault,
+    ensure_tenant_data_key,
+)
 from database.indexes import ensure_tool_catalog_indexes, upsert_search_index
 from database.mongo import (
     get_control_database,
@@ -210,6 +214,7 @@ async def provision_tenant(
         if settings.qe_enabled:
             await ensure_key_vault(settings)
             await create_encrypted_routing_registry(tenant_db, settings)
+            await ensure_tenant_data_key(tenant_id, settings)
         await tenant_db["tool_catalog"].create_index([("server", 1), ("name", 1)], unique=True)
         await tenant_db["routing_registry"].create_index("server", unique=True)
         await tenant_db["semantic_cache"].create_index("expires_at", expireAfterSeconds=0)

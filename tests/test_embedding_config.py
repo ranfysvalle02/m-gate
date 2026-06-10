@@ -5,6 +5,7 @@ defaults, validation, control-DB persistence, and active-config resolution.
 from __future__ import annotations
 
 import pytest
+from bson.binary import Binary
 
 from config.settings import Settings
 from database.mongo import get_control_database, get_tenant_database
@@ -219,6 +220,53 @@ async def test_save_and_load_tenant_round_trip_encrypts_key(patch_mongo):
     assert loaded.api_key == "sk-tenant-secret-123456"
     assert loaded.updated_by == "tenant-admin@example.com"
     assert loaded.source == "tenant-db"
+
+
+@pytest.mark.asyncio
+async def test_tenant_api_key_uses_qe_scheme_when_enabled(patch_mongo, monkeypatch):
+    import services.embedding_config as ec
+
+    settings = _settings(
+        qe_enabled=True,
+        kms_provider="local",
+        qe_local_master_key="a" * 128,
+    )
+    calls = {"encrypt": 0, "decrypt": 0}
+
+    async def _encrypt_tenant_secret(tenant_id: str, plaintext: str, settings=None) -> Binary:
+        assert tenant_id == "tenant-qe"
+        assert plaintext == "sk-tenant-qe-secret"
+        calls["encrypt"] += 1
+        return Binary(b"cipher-bytes", subtype=6)
+
+    async def _decrypt_tenant_secret(ciphertext: Binary, settings=None) -> str:
+        assert bytes(ciphertext) == b"cipher-bytes"
+        calls["decrypt"] += 1
+        return "sk-tenant-qe-secret"
+
+    monkeypatch.setattr(ec, "encrypt_tenant_secret", _encrypt_tenant_secret)
+    monkeypatch.setattr(ec, "decrypt_tenant_secret", _decrypt_tenant_secret)
+
+    await save_tenant_config(
+        "tenant-qe",
+        EmbeddingConfig(
+            provider="openai",
+            model="text-embedding-3-small",
+            api_key="sk-tenant-qe-secret",
+            dimensions=1536,
+        ),
+        settings=settings,
+    )
+    raw = await get_tenant_database("tenant-qe")[EMBEDDING_CONFIG_COLLECTION].find_one(
+        {"_id": EMBEDDING_CONFIG_ID}
+    )
+    assert raw is not None
+    assert raw["api_key_encrypted"].startswith("qe::")
+    assert "sk-tenant-qe-secret" not in raw["api_key_encrypted"]
+
+    loaded = await load_tenant_config("tenant-qe", settings=settings)
+    assert loaded.api_key == "sk-tenant-qe-secret"
+    assert calls == {"encrypt": 1, "decrypt": 1}
 
 
 @pytest.mark.asyncio

@@ -50,7 +50,9 @@
               x-model="state.tenantId"
               @change="refreshActiveSection()"
             >
-              <option x-for="tenant in state.tenantOptions" :key="tenant" :value="tenant" x-text="tenant"></option>
+              <template x-for="tenant in state.tenantOptions" :key="tenant">
+                <option :value="tenant" x-text="tenant"></option>
+              </template>
             </select>
             <form :action="`${uiPath}/logout`" method="post">
               <button

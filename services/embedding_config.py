@@ -27,9 +27,11 @@ from datetime import UTC, datetime
 from threading import Lock
 from typing import Any
 
+from bson.binary import Binary
 from cryptography.fernet import Fernet, InvalidToken
 
 from config.settings import Settings, get_settings
+from database.encryption import decrypt_tenant_secret, encrypt_tenant_secret
 from database.mongo import get_control_database, get_tenant_database
 from services.embeddings import (
     PROVIDER_DEFAULT_MODELS,
@@ -45,6 +47,7 @@ logger = logging.getLogger(__name__)
 EMBEDDING_CONFIG_COLLECTION = "gateway_config"
 EMBEDDING_CONFIG_ID = "embedding"
 _ENC_PREFIX = "enc::"
+_QE_PREFIX = "qe::"
 
 
 @dataclass
@@ -107,6 +110,48 @@ def decrypt_api_key(stored: str | None, settings: Settings | None = None) -> str
     except (InvalidToken, ValueError) as exc:
         logger.warning("Failed to decrypt stored embedding API key: %s", exc)
         return ""
+
+
+def _tenant_encryption_enabled(settings: Settings) -> bool:
+    return bool(settings.qe_enabled)
+
+
+async def encrypt_tenant_api_key(
+    tenant_id: str,
+    plaintext: str,
+    settings: Settings | None = None,
+) -> str | None:
+    if not plaintext:
+        return None
+    settings = settings or get_settings()
+    if not _tenant_encryption_enabled(settings):
+        return encrypt_api_key(plaintext, settings) or None
+    encrypted = await encrypt_tenant_secret(tenant_id, plaintext, settings)
+    return f"{_QE_PREFIX}{base64.b64encode(bytes(encrypted)).decode('utf-8')}"
+
+
+async def decrypt_tenant_api_key(
+    tenant_id: str,
+    stored: str | None,
+    settings: Settings | None = None,
+) -> str:
+    if not stored:
+        return ""
+    settings = settings or get_settings()
+    if stored.startswith(_QE_PREFIX):
+        if not _tenant_encryption_enabled(settings):
+            return ""
+        try:
+            payload = base64.b64decode(stored[len(_QE_PREFIX) :], validate=True)
+            return await decrypt_tenant_secret(Binary(payload, subtype=6), settings)
+        except Exception as exc:  # noqa: BLE001 - intentionally safe decrypt seam
+            logger.warning(
+                "Failed to decrypt tenant embedding API key for %s: %s",
+                tenant_id,
+                exc,
+            )
+            return ""
+    return decrypt_api_key(stored, settings)
 
 
 # --------------------------------------------------------------------------- #
@@ -175,14 +220,9 @@ def _config_from_doc(
     doc: dict[str, Any],
     settings: Settings,
     *,
+    api_key: str,
     source: str = "db",
-    allow_env_api_key_fallback: bool = True,
 ) -> EmbeddingConfig:
-    api_key = decrypt_api_key(doc.get("api_key_encrypted"), settings)
-    if allow_env_api_key_fallback and not api_key:
-        # Allow the API key to live purely in the environment even when the rest
-        # of the config is DB-managed.
-        api_key = settings.embedding_api_key or ""
     return EmbeddingConfig(
         provider=str(doc.get("provider") or settings.embedding_provider),
         model=str(doc.get("model") or ""),
@@ -200,8 +240,8 @@ def _config_from_doc(
 
 def _config_doc(
     config: EmbeddingConfig,
-    settings: Settings,
     *,
+    api_key_encrypted: str | None,
     updated_by: str | None,
     now: datetime,
 ) -> dict[str, Any]:
@@ -211,7 +251,7 @@ def _config_doc(
         "model": config.model,
         "base_url": config.base_url,
         "dimensions": int(config.dimensions or 0),
-        "api_key_encrypted": encrypt_api_key(config.api_key, settings) or None,
+        "api_key_encrypted": api_key_encrypted,
         "azure_endpoint": config.azure_endpoint,
         "azure_api_version": config.azure_api_version,
         "azure_deployment": config.azure_deployment,
@@ -231,7 +271,12 @@ async def load_persisted_config(settings: Settings | None = None) -> EmbeddingCo
         doc = None
     if not doc:
         return default_config_from_settings(settings)
-    return _config_from_doc(doc, settings, source="db", allow_env_api_key_fallback=True)
+    api_key = decrypt_api_key(doc.get("api_key_encrypted"), settings)
+    if not api_key:
+        # Allow the API key to live purely in the environment even when the rest
+        # of the config is DB-managed.
+        api_key = settings.embedding_api_key or ""
+    return _config_from_doc(doc, settings, source="db", api_key=api_key)
 
 
 async def save_persisted_config(
@@ -242,7 +287,13 @@ async def save_persisted_config(
 ) -> None:
     settings = settings or get_settings()
     now = datetime.now(UTC)
-    doc = _config_doc(config, settings, updated_by=updated_by, now=now)
+    api_key_encrypted = encrypt_api_key(config.api_key, settings) or None
+    doc = _config_doc(
+        config,
+        api_key_encrypted=api_key_encrypted,
+        updated_by=updated_by,
+        now=now,
+    )
     await get_control_database()[EMBEDDING_CONFIG_COLLECTION].update_one(
         {"_id": EMBEDDING_CONFIG_ID},
         {"$set": doc},
@@ -266,11 +317,16 @@ async def load_tenant_config(
     if not doc:
         platform_config = await load_persisted_config(settings)
         return replace(platform_config, source="platform-default")
+    api_key = await decrypt_tenant_api_key(
+        resolved_tenant_id,
+        doc.get("api_key_encrypted"),
+        settings,
+    )
     return _config_from_doc(
         doc,
         settings,
         source="tenant-db",
-        allow_env_api_key_fallback=False,
+        api_key=api_key,
     )
 
 
@@ -284,7 +340,17 @@ async def save_tenant_config(
     settings = settings or get_settings()
     resolved_tenant_id = tenant_id or settings.default_tenant_id
     now = datetime.now(UTC)
-    doc = _config_doc(config, settings, updated_by=updated_by, now=now)
+    api_key_encrypted = await encrypt_tenant_api_key(
+        resolved_tenant_id,
+        config.api_key,
+        settings,
+    )
+    doc = _config_doc(
+        config,
+        api_key_encrypted=api_key_encrypted,
+        updated_by=updated_by,
+        now=now,
+    )
     await get_tenant_database(resolved_tenant_id)[EMBEDDING_CONFIG_COLLECTION].update_one(
         {"_id": EMBEDDING_CONFIG_ID},
         {"$set": doc},
@@ -439,6 +505,8 @@ __all__ = [
     "EMBEDDING_CONFIG_ID",
     "encrypt_api_key",
     "decrypt_api_key",
+    "encrypt_tenant_api_key",
+    "decrypt_tenant_api_key",
     "default_config_from_settings",
     "default_model_for",
     "validate_config",

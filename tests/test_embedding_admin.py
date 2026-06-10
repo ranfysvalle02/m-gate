@@ -235,3 +235,46 @@ async def test_tenant_status_endpoint_returns_tenant_status(patch_mongo, monkeyp
     status = await admin.get_tenant_embedding_status(_Req(roles=[]), "local-dev")
     assert status["state"] == "completed"
     assert status["tenant_id"] == "local-dev"
+
+
+def test_secret_encryption_label_variants():
+    import gateway.routers.admin as admin
+    from services.embedding_config import EmbeddingConfig
+
+    assert admin._secret_encryption_label(EmbeddingConfig(provider="ollama", model="m")) is None
+
+    global_key = EmbeddingConfig(provider="openai", model="m", api_key="k", source="db")
+    assert admin._secret_encryption_label(global_key) == "shared-fernet"
+
+    original = admin.settings.qe_enabled
+    try:
+        object.__setattr__(admin.settings, "qe_enabled", False)
+        tenant_off = EmbeddingConfig(provider="openai", model="m", api_key="k", source="tenant-db")
+        assert admin._secret_encryption_label(tenant_off) == "shared-fernet"
+
+        object.__setattr__(admin.settings, "qe_enabled", True)
+        tenant_on = EmbeddingConfig(provider="openai", model="m", api_key="k", source="tenant-db")
+        assert admin._secret_encryption_label(tenant_on) == "per-tenant-dek"
+    finally:
+        object.__setattr__(admin.settings, "qe_enabled", original)
+
+
+@pytest.mark.asyncio
+async def test_tenant_embedding_response_reports_secret_encryption(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    _stub_provider_build(monkeypatch, admin, dims=8)
+    payload = EmbeddingConfigUpdateRequest(
+        provider="openai",
+        model="text-embedding-3-small",
+        api_key="sk-tenant-key",
+        reprovision=False,
+    )
+    response = await admin.update_tenant_embedding_config(_Req(roles=[]), "local-dev", payload)
+    assert response.api_key_set is True
+    assert response.source == "tenant-db"
+    # QE is disabled in the unit suite, so the seam falls back to the shared key.
+    assert response.secret_encryption == "shared-fernet"
+
+    fetched = await admin.get_tenant_embedding_config(_Req(roles=[]), "local-dev")
+    assert fetched.secret_encryption == "shared-fernet"

@@ -4,10 +4,13 @@ import base64
 from pathlib import Path
 from typing import Any
 
+from bson.binary import Binary
 from bson.codec_options import DEFAULT_CODEC_OPTIONS
 from pymongo.asynchronous.encryption import AsyncClientEncryption
 from pymongo.asynchronous.mongo_client import AsyncMongoClient
+from pymongo.encryption import Algorithm
 from pymongo.encryption_options import AutoEncryptionOpts
+from pymongo.errors import DuplicateKeyError
 
 from config.settings import Settings, get_settings
 
@@ -153,6 +156,95 @@ async def create_encrypted_routing_registry(tenant_db, settings: Settings | None
             master_key=master_key(settings),
         )
         return collection
+    finally:
+        await client_encryption.close()
+        close_result = key_vault_client.close()
+        if close_result is not None:
+            await close_result
+
+
+def _tenant_key_alt_name(tenant_id: str) -> str:
+    return f"tenant:{tenant_id}"
+
+
+async def ensure_tenant_data_key(tenant_id: str, settings: Settings | None = None) -> Any:
+    settings = settings or get_settings()
+    key_alt_name = _tenant_key_alt_name(tenant_id)
+    key_vault_client, client_encryption = get_client_encryption(settings)
+    try:
+        existing = await client_encryption.get_key_by_alt_name(key_alt_name)
+        if existing is not None:
+            return existing["_id"]
+        try:
+            return await client_encryption.create_data_key(
+                settings.kms_provider,
+                master_key=master_key(settings),
+                key_alt_names=[key_alt_name],
+            )
+        except DuplicateKeyError:
+            # Another concurrent provisioner/save likely created the same keyAltName.
+            existing = await client_encryption.get_key_by_alt_name(key_alt_name)
+            if existing is None:
+                raise
+            return existing["_id"]
+    finally:
+        await client_encryption.close()
+        close_result = key_vault_client.close()
+        if close_result is not None:
+            await close_result
+
+
+async def encrypt_tenant_secret(
+    tenant_id: str,
+    plaintext: str,
+    settings: Settings | None = None,
+) -> Binary:
+    settings = settings or get_settings()
+    key_alt_name = _tenant_key_alt_name(tenant_id)
+    await ensure_tenant_data_key(tenant_id, settings)
+    key_vault_client, client_encryption = get_client_encryption(settings)
+    try:
+        encrypted = await client_encryption.encrypt(
+            plaintext.encode("utf-8"),
+            Algorithm.AEAD_AES_256_CBC_HMAC_SHA_512_Random,
+            key_alt_name=key_alt_name,
+        )
+        return encrypted
+    finally:
+        await client_encryption.close()
+        close_result = key_vault_client.close()
+        if close_result is not None:
+            await close_result
+
+
+async def decrypt_tenant_secret(
+    ciphertext: Binary,
+    settings: Settings | None = None,
+) -> str:
+    settings = settings or get_settings()
+    key_vault_client, client_encryption = get_client_encryption(settings)
+    try:
+        decrypted = await client_encryption.decrypt(ciphertext)
+        if isinstance(decrypted, bytes):
+            return decrypted.decode("utf-8")
+        return str(decrypted)
+    finally:
+        await client_encryption.close()
+        close_result = key_vault_client.close()
+        if close_result is not None:
+            await close_result
+
+
+async def delete_tenant_data_key(tenant_id: str, settings: Settings | None = None) -> bool:
+    settings = settings or get_settings()
+    key_alt_name = _tenant_key_alt_name(tenant_id)
+    key_vault_client, client_encryption = get_client_encryption(settings)
+    try:
+        existing = await client_encryption.get_key_by_alt_name(key_alt_name)
+        if existing is None:
+            return False
+        result = await client_encryption.delete_key(existing["_id"])
+        return bool(getattr(result, "deleted_count", 0))
     finally:
         await client_encryption.close()
         close_result = key_vault_client.close()

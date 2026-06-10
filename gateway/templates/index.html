@@ -174,6 +174,10 @@
         <div class="card-label">Dimensions</div>
         <div class="card-value" x-text="state.embedding?.dimensions ?? '-'"></div>
       </div>
+      <div class="card">
+        <div class="card-label">API Key At Rest</div>
+        <div class="text-sm text-slate-700" x-text="state.embedding?.api_key_set ? 'Encrypted (shared Fernet key)' : 'No key stored'"></div>
+      </div>
     </div>
 
     <template x-if="state.embeddingStatus && state.embeddingStatus.state && state.embeddingStatus.state !== 'idle'">
@@ -262,6 +266,142 @@
         <span class="font-medium" x-text="state.embeddingTest.ok ? 'Reachable' : 'Failed'"></span>
         <span x-show="state.embeddingTest.ok" x-text="`— ${state.embeddingTest.model} @ ${state.embeddingTest.dimensions} dims`"></span>
         <span x-text="`: ${state.embeddingTest.message}`"></span>
+      </div>
+    </template>
+  </section>
+
+  <section x-show="activeSection === 'tenantEmbeddings'" class="space-y-4">
+    <h2 class="text-2xl font-semibold">Tenant Embeddings</h2>
+    <p class="text-sm text-slate-600 max-w-3xl">
+      Bring-your-own embeddings per tenant. This panel targets the tenant selected
+      in the top bar (<span class="font-medium" x-text="state.tenantId"></span>).
+      A tenant without its own configuration transparently inherits the platform
+      default. The API key is encrypted at rest with a per-tenant Queryable
+      Encryption key when encryption is enabled. Saving a change re-embeds this
+      tenant's catalog and cache and rebuilds its vector index.
+    </p>
+
+    <div class="grid gap-4 md:grid-cols-4">
+      <div class="card">
+        <div class="card-label">Provider</div>
+        <div class="card-value" x-text="state.tenantEmbedding?.provider ?? '-'"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Model</div>
+        <div class="card-value text-lg" x-text="state.tenantEmbedding?.model ?? '-'"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Dimensions</div>
+        <div class="card-value" x-text="state.tenantEmbedding?.dimensions ?? '-'"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Configuration Source</div>
+        <div class="text-sm text-slate-700" x-text="state.tenantEmbedding?.source === 'tenant-db' ? 'Tenant override' : 'Platform default (inherited)'"></div>
+      </div>
+    </div>
+
+    <div
+      class="max-w-3xl rounded-md border px-4 py-3 text-sm"
+      :class="state.tenantEmbedding?.secret_encryption === 'per-tenant-dek'
+        ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+        : 'border-slate-300 bg-slate-50 text-slate-700'"
+    >
+      <span class="font-medium">API Key At Rest:</span>
+      <span
+        x-text="!state.tenantEmbedding?.api_key_set
+          ? 'No key stored (provider needs no key, or inheriting platform default)'
+          : (state.tenantEmbedding?.secret_encryption === 'per-tenant-dek'
+            ? 'Encrypted with a per-tenant key (Queryable Encryption DEK) — crypto-shreddable'
+            : 'Encrypted with the shared deployment key (Fernet)')"
+      ></span>
+      <template x-if="state.tenantEmbedding?.api_key_hint">
+        <span class="text-slate-500" x-text="`· stored ${state.tenantEmbedding.api_key_hint}`"></span>
+      </template>
+    </div>
+
+    <template x-if="state.tenantEmbeddingStatus && state.tenantEmbeddingStatus.state && state.tenantEmbeddingStatus.state !== 'idle'">
+      <div
+        class="rounded-md border px-4 py-3 text-sm"
+        :class="state.tenantEmbeddingStatus.state === 'failed'
+          ? 'border-rose-300 bg-rose-50 text-rose-700'
+          : (state.tenantEmbeddingStatus.state === 'running'
+            ? 'border-amber-300 bg-amber-50 text-amber-800'
+            : 'border-emerald-300 bg-emerald-50 text-emerald-700')"
+      >
+        <span class="font-medium">Reprovision:</span>
+        <span x-text="state.tenantEmbeddingStatus.state"></span>
+        <template x-if="state.tenantEmbeddingStatus.target_version">
+          <span x-text="`→ ${state.tenantEmbeddingStatus.target_version}`"></span>
+        </template>
+        <template x-if="state.tenantEmbeddingStatus.error">
+          <span class="block mt-1" x-text="state.tenantEmbeddingStatus.error"></span>
+        </template>
+      </div>
+    </template>
+
+    <form class="grid gap-3 md:grid-cols-2 max-w-3xl" @submit.prevent="applyTenantEmbedding()">
+      <div>
+        <label class="field-label">Provider</label>
+        <select class="field-input" x-model="forms.tenantEmbedding.provider">
+          <template x-for="p in embeddingProviders" :key="p.value">
+            <option :value="p.value" x-text="p.label"></option>
+          </template>
+        </select>
+      </div>
+      <div>
+        <label class="field-label" x-text="tenantEmbeddingIsAzure() ? 'Deployment / Model' : 'Model'"></label>
+        <input class="field-input" x-model="forms.tenantEmbedding.model" placeholder="e.g. text-embedding-3-small" />
+      </div>
+
+      <div class="md:col-span-2">
+        <label class="field-label">Base URL <span class="text-slate-400">(optional)</span></label>
+        <input class="field-input" x-model="forms.tenantEmbedding.base_url" placeholder="provider default" />
+        <p class="mt-1 text-xs text-slate-500">Vector dimensions are detected automatically when you save.</p>
+      </div>
+
+      <template x-if="tenantEmbeddingNeedsApiKey()">
+        <div class="md:col-span-2">
+          <label class="field-label">
+            API Key
+            <span class="text-slate-400" x-show="state.tenantEmbedding?.api_key_set" x-text="`(stored ${state.tenantEmbedding?.api_key_hint || ''}; leave blank to keep)`"></span>
+          </label>
+          <input type="password" class="field-input" x-model="forms.tenantEmbedding.api_key" placeholder="••••••••" autocomplete="new-password" />
+        </div>
+      </template>
+
+      <template x-if="tenantEmbeddingIsAzure()">
+        <div class="md:col-span-2 grid gap-3 md:grid-cols-2">
+          <div>
+            <label class="field-label">Azure Endpoint</label>
+            <input class="field-input" x-model="forms.tenantEmbedding.azure_endpoint" placeholder="https://my-resource.openai.azure.com" />
+          </div>
+          <div>
+            <label class="field-label">API Version</label>
+            <input class="field-input" x-model="forms.tenantEmbedding.azure_api_version" placeholder="2023-05-15" />
+          </div>
+        </div>
+      </template>
+
+      <label class="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+        <input type="checkbox" x-model="forms.tenantEmbedding.reprovision" />
+        Re-embed this tenant's data and rebuild its index after saving
+      </label>
+
+      <div class="md:col-span-2 flex items-center gap-2">
+        <button type="submit" class="btn-primary" :disabled="state.tenantEmbeddingSaving || tenantEmbeddingIsRunning()" x-text="state.tenantEmbeddingSaving ? 'Saving…' : 'Save & Apply'"></button>
+        <button type="button" class="btn-secondary" @click="testTenantEmbedding()">Test connection</button>
+        <button type="button" class="btn-secondary" @click="loadTenantEmbedding()">Refresh</button>
+      </div>
+    </form>
+
+    <template x-if="state.tenantEmbeddingTest">
+      <div
+        class="max-w-3xl rounded-md border px-4 py-3 text-sm"
+        :class="state.tenantEmbeddingTest.ok ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-rose-300 bg-rose-50 text-rose-700'"
+      >
+        <span class="font-medium" x-text="state.tenantEmbeddingTest.ok ? 'Reachable' : 'Failed'"></span>
+        <span x-show="state.tenantEmbeddingTest.ok" x-text="`— ${state.tenantEmbeddingTest.model} @ ${state.tenantEmbeddingTest.dimensions} dims`"></span>
+        <span x-text="`: ${state.tenantEmbeddingTest.message}`"></span>
       </div>
     </template>
   </section>

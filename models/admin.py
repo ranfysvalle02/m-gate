@@ -143,6 +143,10 @@ class EmbeddingConfigResponse(BaseModel):
     azure_deployment: str | None = None
     supported_providers: list[str] = Field(default_factory=list)
     source: str = "env"
+    # How the stored API key is protected at rest: "per-tenant-dek" (Queryable
+    # Encryption DEK), "shared-fernet" (deployment-wide key), or None when no key
+    # is stored. Purely informational for the admin UI; the scheme is automatic.
+    secret_encryption: str | None = None
     updated_at: datetime | None = None
     updated_by: str | None = None
     reprovision: dict[str, Any] = Field(default_factory=dict)

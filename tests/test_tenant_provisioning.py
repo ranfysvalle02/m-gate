@@ -142,3 +142,28 @@ async def test_provision_tenant_uses_tenant_embedding_identity_dimensions(patch_
         if field.get("type") == "vector"
     )
     assert catalog_vector_dims == 42
+
+
+@pytest.mark.asyncio
+async def test_provision_tenant_qe_branch_ensures_tenant_data_key(patch_mongo, monkeypatch):
+    settings = get_settings()
+    object.__setattr__(settings, "qe_enabled", True)
+    calls = {"vault": 0, "registry": 0, "tenant_key": 0}
+
+    async def _ensure_key_vault(settings=None):
+        calls["vault"] += 1
+
+    async def _create_encrypted_routing_registry(tenant_db, settings=None):
+        calls["registry"] += 1
+        return tenant_db["routing_registry"]
+
+    async def _ensure_tenant_data_key(tenant_id: str, settings=None):
+        calls["tenant_key"] += 1
+        assert tenant_id == "tenant-qe"
+
+    monkeypatch.setattr(tp, "ensure_key_vault", _ensure_key_vault)
+    monkeypatch.setattr(tp, "create_encrypted_routing_registry", _create_encrypted_routing_registry)
+    monkeypatch.setattr(tp, "ensure_tenant_data_key", _ensure_tenant_data_key)
+
+    await tp.provision_tenant("tenant-qe", wait_for_queryable_indexes=False)
+    assert calls == {"vault": 1, "registry": 1, "tenant_key": 1}

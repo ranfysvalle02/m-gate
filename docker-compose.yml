@@ -126,6 +126,8 @@ services:
       EMBEDDING_SECRET_FILE: /gateway-secrets/embedding_secret
       TENANT_DB_PREFIX: tenant_
       FUSION_STRATEGY: rank_fusion
+      # Tenant embedding API keys are wrapped with per-tenant DEKs, each wrapped
+      # by this shared CMK via LocalStack KMS (or AWS KMS in non-local envs).
       QE_ENABLED: "true"
       KMS_PROVIDER: aws
       AWS_ACCESS_KEY_ID: test
@@ -190,6 +192,8 @@ services:
       FORWARDED_ALLOW_IPS: 127.0.0.1
       ADMIN_SESSION_SECRET_FILE: /gateway-secrets/admin_session_secret
       EMBEDDING_SECRET_FILE: /gateway-secrets/embedding_secret
+      # Tenant embedding API keys are wrapped with per-tenant DEKs, each wrapped
+      # by this shared CMK via LocalStack KMS (or AWS KMS in non-local envs).
       QE_ENABLED: "true"
       KMS_PROVIDER: aws
       AWS_ACCESS_KEY_ID: test
