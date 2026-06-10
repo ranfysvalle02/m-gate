@@ -30,7 +30,7 @@ from typing import Any
 from cryptography.fernet import Fernet, InvalidToken
 
 from config.settings import Settings, get_settings
-from database.mongo import get_control_database
+from database.mongo import get_control_database, get_tenant_database
 from services.embeddings import (
     PROVIDER_DEFAULT_MODELS,
     SUPPORTED_PROVIDERS,
@@ -171,9 +171,15 @@ def validate_config(config: EmbeddingConfig) -> None:
 # --------------------------------------------------------------------------- #
 # Persistence
 # --------------------------------------------------------------------------- #
-def _config_from_doc(doc: dict[str, Any], settings: Settings) -> EmbeddingConfig:
+def _config_from_doc(
+    doc: dict[str, Any],
+    settings: Settings,
+    *,
+    source: str = "db",
+    allow_env_api_key_fallback: bool = True,
+) -> EmbeddingConfig:
     api_key = decrypt_api_key(doc.get("api_key_encrypted"), settings)
-    if not api_key:
+    if allow_env_api_key_fallback and not api_key:
         # Allow the API key to live purely in the environment even when the rest
         # of the config is DB-managed.
         api_key = settings.embedding_api_key or ""
@@ -188,8 +194,30 @@ def _config_from_doc(doc: dict[str, Any], settings: Settings) -> EmbeddingConfig
         azure_deployment=doc.get("azure_deployment"),
         updated_at=doc.get("updated_at"),
         updated_by=doc.get("updated_by"),
-        source="db",
+        source=source,
     )
+
+
+def _config_doc(
+    config: EmbeddingConfig,
+    settings: Settings,
+    *,
+    updated_by: str | None,
+    now: datetime,
+) -> dict[str, Any]:
+    return {
+        "_id": EMBEDDING_CONFIG_ID,
+        "provider": config.provider,
+        "model": config.model,
+        "base_url": config.base_url,
+        "dimensions": int(config.dimensions or 0),
+        "api_key_encrypted": encrypt_api_key(config.api_key, settings) or None,
+        "azure_endpoint": config.azure_endpoint,
+        "azure_api_version": config.azure_api_version,
+        "azure_deployment": config.azure_deployment,
+        "updated_at": now,
+        "updated_by": updated_by,
+    }
 
 
 async def load_persisted_config(settings: Settings | None = None) -> EmbeddingConfig:
@@ -203,7 +231,7 @@ async def load_persisted_config(settings: Settings | None = None) -> EmbeddingCo
         doc = None
     if not doc:
         return default_config_from_settings(settings)
-    return _config_from_doc(doc, settings)
+    return _config_from_doc(doc, settings, source="db", allow_env_api_key_fallback=True)
 
 
 async def save_persisted_config(
@@ -214,24 +242,55 @@ async def save_persisted_config(
 ) -> None:
     settings = settings or get_settings()
     now = datetime.now(UTC)
-    doc = {
-        "_id": EMBEDDING_CONFIG_ID,
-        "provider": config.provider,
-        "model": config.model,
-        "base_url": config.base_url,
-        "dimensions": int(config.dimensions or 0),
-        "api_key_encrypted": encrypt_api_key(config.api_key, settings) or None,
-        "azure_endpoint": config.azure_endpoint,
-        "azure_api_version": config.azure_api_version,
-        "azure_deployment": config.azure_deployment,
-        "updated_at": now,
-        "updated_by": updated_by,
-    }
+    doc = _config_doc(config, settings, updated_by=updated_by, now=now)
     await get_control_database()[EMBEDDING_CONFIG_COLLECTION].update_one(
         {"_id": EMBEDDING_CONFIG_ID},
         {"$set": doc},
         upsert=True,
     )
+
+
+async def load_tenant_config(
+    tenant_id: str,
+    settings: Settings | None = None,
+) -> EmbeddingConfig:
+    settings = settings or get_settings()
+    resolved_tenant_id = tenant_id or settings.default_tenant_id
+    try:
+        doc = await get_tenant_database(resolved_tenant_id)[EMBEDDING_CONFIG_COLLECTION].find_one(
+            {"_id": EMBEDDING_CONFIG_ID}
+        )
+    except Exception as exc:  # tenant db unavailable -> fall back to platform defaults
+        logger.warning("Could not load tenant embedding config for %s: %s", resolved_tenant_id, exc)
+        doc = None
+    if not doc:
+        platform_config = await load_persisted_config(settings)
+        return replace(platform_config, source="platform-default")
+    return _config_from_doc(
+        doc,
+        settings,
+        source="tenant-db",
+        allow_env_api_key_fallback=False,
+    )
+
+
+async def save_tenant_config(
+    tenant_id: str,
+    config: EmbeddingConfig,
+    settings: Settings | None = None,
+    *,
+    updated_by: str | None = None,
+) -> None:
+    settings = settings or get_settings()
+    resolved_tenant_id = tenant_id or settings.default_tenant_id
+    now = datetime.now(UTC)
+    doc = _config_doc(config, settings, updated_by=updated_by, now=now)
+    await get_tenant_database(resolved_tenant_id)[EMBEDDING_CONFIG_COLLECTION].update_one(
+        {"_id": EMBEDDING_CONFIG_ID},
+        {"$set": doc},
+        upsert=True,
+    )
+    invalidate_tenant_embedding(resolved_tenant_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -265,6 +324,7 @@ async def resolve_dimensions(
 # --------------------------------------------------------------------------- #
 _active_service: BaseHttpEmbeddingService | None = None
 _lock = Lock()
+_tenant_services: dict[str, EmbeddingService] = {}
 
 
 def _set_active(service: BaseHttpEmbeddingService) -> None:
@@ -291,6 +351,7 @@ def reset_active_embedding_config() -> None:
     global _active_service
     with _lock:
         _active_service = None
+        _tenant_services.clear()
 
 
 async def refresh_active_embedding_config(settings: Settings | None = None) -> EmbeddingConfig:
@@ -304,6 +365,42 @@ async def refresh_active_embedding_config(settings: Settings | None = None) -> E
 def active_embedding_identity() -> tuple[str, int, str]:
     """Return ``(model_id, dimensions, embedding_version)`` for the active provider."""
     service = _resolve_active_service()
+    return service.model_id, service.dimensions, embedding_version_for(service)
+
+
+def invalidate_tenant_embedding(tenant_id: str) -> None:
+    with _lock:
+        _tenant_services.pop(tenant_id, None)
+
+
+async def get_embedding_service_for(
+    tenant_id: str,
+    settings: Settings | None = None,
+) -> EmbeddingService:
+    settings = settings or get_settings()
+    resolved_tenant_id = tenant_id or settings.default_tenant_id
+    with _lock:
+        cached = _tenant_services.get(resolved_tenant_id)
+    if cached is not None:
+        return cached
+
+    config = await load_tenant_config(resolved_tenant_id, settings)
+    if config.source == "platform-default":
+        # Keep fallback tenants pinned to the process-wide active proxy so they
+        # transparently follow platform config updates.
+        return get_active_embedding_service()
+
+    service = build_provider_service(config, settings)
+    with _lock:
+        _tenant_services[resolved_tenant_id] = service
+    return service
+
+
+async def tenant_embedding_identity(
+    tenant_id: str,
+    settings: Settings | None = None,
+) -> tuple[str, int, str]:
+    service = await get_embedding_service_for(tenant_id, settings)
     return service.model_id, service.dimensions, embedding_version_for(service)
 
 
@@ -347,9 +444,14 @@ __all__ = [
     "validate_config",
     "load_persisted_config",
     "save_persisted_config",
+    "load_tenant_config",
+    "save_tenant_config",
     "resolve_dimensions",
     "refresh_active_embedding_config",
     "reset_active_embedding_config",
     "active_embedding_identity",
+    "tenant_embedding_identity",
+    "invalidate_tenant_embedding",
+    "get_embedding_service_for",
     "get_active_embedding_service",
 ]

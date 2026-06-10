@@ -175,3 +175,63 @@ async def test_status_endpoint_requires_platform_admin(patch_mongo):
     with pytest.raises(HTTPException) as exc:
         await admin.get_embedding_status(_Req(roles=["admin"]))
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_tenant_embedding_allows_same_tenant_without_platform_admin(patch_mongo):
+    import gateway.routers.admin as admin
+
+    response = await admin.get_tenant_embedding_config(_Req(roles=[]), "local-dev")
+    assert response.provider == "ollama"
+    assert response.source in {"platform-default", "env", "db"}
+
+
+@pytest.mark.asyncio
+async def test_get_tenant_embedding_rejects_cross_tenant_without_platform_admin(patch_mongo):
+    import gateway.routers.admin as admin
+
+    with pytest.raises(HTTPException) as exc:
+        await admin.get_tenant_embedding_config(_Req(roles=[]), "other-tenant")
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_put_tenant_embedding_detects_and_triggers_tenant_reprovision(
+    patch_mongo, monkeypatch
+):
+    import gateway.routers.admin as admin
+
+    _stub_provider_build(monkeypatch, admin, dims=384)
+    started: dict = {}
+
+    async def fake_trigger(*, tenant_id: str, started_by=None):
+        started["tenant"] = tenant_id
+        started["by"] = started_by
+        return {"state": "running", "tenant_id": tenant_id, "started_by": started_by}
+
+    monkeypatch.setattr(admin, "trigger_tenant_reprovision", fake_trigger)
+
+    payload = EmbeddingConfigUpdateRequest(
+        provider="ollama",
+        model="nomic-embed-text",
+        reprovision=True,
+    )
+    response = await admin.update_tenant_embedding_config(_Req(roles=[]), "local-dev", payload)
+    assert response.provider == "ollama"
+    assert response.dimensions == 384
+    assert response.reprovision["state"] == "running"
+    assert started["tenant"] == "local-dev"
+    assert started["by"] == "demo@demo.com"
+
+
+@pytest.mark.asyncio
+async def test_tenant_status_endpoint_returns_tenant_status(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    async def fake_status(tenant_id: str):
+        return {"state": "completed", "tenant_id": tenant_id}
+
+    monkeypatch.setattr(admin, "get_tenant_reprovision_status", fake_status)
+    status = await admin.get_tenant_embedding_status(_Req(roles=[]), "local-dev")
+    assert status["state"] == "completed"
+    assert status["tenant_id"] == "local-dev"

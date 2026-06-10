@@ -12,8 +12,10 @@ from services import embedding_config
 from services.embedding_reprovision import (
     ReprovisionInProgressError,
     get_reprovision_status,
+    get_tenant_reprovision_status,
     run_reprovision,
     trigger_reprovision,
+    trigger_tenant_reprovision,
 )
 
 
@@ -115,3 +117,61 @@ async def test_trigger_allowed_when_running_status_is_stale(patch_mongo):
     # Drain the scheduled background job so it doesn't outlive the patched DB.
     await asyncio.gather(*list(er._background_tasks), return_exceptions=True)
     assert (await get_reprovision_status())["state"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_trigger_tenant_reprovision_runs_and_records_tenant_status(patch_mongo, monkeypatch):
+    import asyncio
+
+    from services import embedding_reprovision as er
+
+    fake = FakeEmbeddingService(dimensions=11, model_id="tenant-model")
+
+    async def _service_for_tenant(tenant_id: str, settings=None):
+        return fake
+
+    async def _tenant_identity(tenant_id: str, settings=None):
+        return ("tenant-model", 11, "tenant-model:11")
+
+    monkeypatch.setattr(er, "get_embedding_service_for", _service_for_tenant)
+    monkeypatch.setattr(er, "tenant_embedding_identity", _tenant_identity)
+
+    catalog = get_tenant_database("tenant-a")["tool_catalog"]
+    catalog.docs.append(
+        {
+            "server": "weather",
+            "name": "get_forecast",
+            "description": "Weather",
+            "embedding": [0.0],
+        }
+    )
+
+    status = await trigger_tenant_reprovision("tenant-a", started_by="admin@example.com")
+    assert status["state"] == "running"
+
+    await asyncio.gather(*list(er._background_tasks), return_exceptions=True)
+    done = await get_tenant_reprovision_status("tenant-a")
+    assert done["state"] == "completed"
+    assert done["tenant_id"] == "tenant-a"
+    assert done["totals"]["tenants"] == 1
+    assert done["totals"]["catalog_reembedded"] == 1
+
+
+@pytest.mark.asyncio
+async def test_trigger_tenant_reprovision_rejects_when_already_running(patch_mongo):
+    from datetime import UTC, datetime
+
+    await get_control_database()["embedding_status"].update_one(
+        {"_id": "reprovision:tenant-a"},
+        {
+            "$set": {
+                "_id": "reprovision:tenant-a",
+                "state": "running",
+                "tenant_id": "tenant-a",
+                "started_at": datetime.now(UTC),
+            }
+        },
+        upsert=True,
+    )
+    with pytest.raises(ReprovisionInProgressError):
+        await trigger_tenant_reprovision("tenant-a", started_by="admin")

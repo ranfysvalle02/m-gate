@@ -14,7 +14,7 @@ from database.mongo import (
     tenant_db_name,
 )
 from services.cache_manager import semantic_cache_index_spec
-from services.embedding_config import active_embedding_identity
+from services.embedding_config import active_embedding_identity, tenant_embedding_identity
 from services.guardrails import guardrail_signature_index_spec
 
 
@@ -213,7 +213,9 @@ async def provision_tenant(
         await tenant_db["tool_catalog"].create_index([("server", 1), ("name", 1)], unique=True)
         await tenant_db["routing_registry"].create_index("server", unique=True)
         await tenant_db["semantic_cache"].create_index("expires_at", expireAfterSeconds=0)
-        _model_id, dimensions, embedding_version = active_embedding_identity()
+        _model_id, dimensions, embedding_version = await tenant_embedding_identity(
+            tenant_id, settings=settings
+        )
         cache_index_spec = semantic_cache_index_spec(
             embedding_version=embedding_version,
             dimensions=dimensions,

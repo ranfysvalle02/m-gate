@@ -112,3 +112,33 @@ async def test_watcher_state_index_is_recreated_when_ttl_changes():
 
     assert collection.dropped == ["updated_at_1"]
     assert collection.created == [("updated_at", 86400)]
+
+
+@pytest.mark.asyncio
+async def test_provision_tenant_uses_tenant_embedding_identity_dimensions(patch_mongo, monkeypatch):
+    async def _tenant_identity(tenant_id: str, settings=None):
+        return ("tenant-model", 42, "tenant-model:42")
+
+    monkeypatch.setattr(tp, "tenant_embedding_identity", _tenant_identity)
+    db_name = await tp.provision_tenant("tenant-dims", wait_for_queryable_indexes=False)
+    assert db_name.startswith(get_settings().tenant_db_prefix)
+
+    tenant_db = mongo_module.get_tenant_database("tenant-dims")
+    cache_indexes = tenant_db["semantic_cache"]._search_indexes
+    assert cache_indexes
+    cache_vector_dims = next(
+        field["numDimensions"]
+        for index in cache_indexes.values()
+        for field in index["definition"]["fields"]
+        if field.get("type") == "vector"
+    )
+    assert cache_vector_dims == 42
+
+    catalog_indexes = tenant_db["tool_catalog"]._search_indexes
+    vector_index = catalog_indexes["hybrid-vector-search"]
+    catalog_vector_dims = next(
+        field["numDimensions"]
+        for field in vector_index["definition"]["fields"]
+        if field.get("type") == "vector"
+    )
+    assert catalog_vector_dims == 42

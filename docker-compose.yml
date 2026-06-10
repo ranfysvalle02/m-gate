@@ -106,6 +106,10 @@ services:
     environment:
       MONGODB_URI: mongodb://mongodb:27017/?directConnection=true
       MONGODB_DB_NAME: mcp_gateway
+      # Platform default embeddings for bootstrap + tenant fallbacks.
+      # BYO embeddings is tenant-scoped at runtime via:
+      #   PUT /admin/tenants/{tenant_id}/embedding
+      # so no extra compose wiring is required for the default path.
       EMBEDDING_PROVIDER: ollama
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: nomic-embed-text
@@ -162,6 +166,8 @@ services:
     environment:
       MONGODB_URI: mongodb://mongodb:27017/?directConnection=true
       MONGODB_DB_NAME: mcp_gateway
+      # Platform default embeddings for all tenants that have not configured
+      # per-tenant BYO embedding settings through the admin API.
       EMBEDDING_PROVIDER: ollama
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: nomic-embed-text

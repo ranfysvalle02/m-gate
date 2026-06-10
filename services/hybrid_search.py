@@ -8,7 +8,8 @@ from pymongo.errors import OperationFailure
 from config.settings import Settings, get_settings
 from database.indexes import TEXT_INDEX_NAME, VECTOR_INDEX_NAME
 from database.mongo import get_tenant_database
-from services.embeddings import EmbeddingService, EmbeddingUnavailableError, get_embedding_service
+from services.embedding_config import get_embedding_service_for
+from services.embeddings import EmbeddingService, EmbeddingUnavailableError
 
 # The three retrieval strategies this service can run over the SAME collection
 # and the SAME two indexes. The whole point of the gateway is that switching
@@ -174,7 +175,7 @@ class HybridSearchService:
         embedding_service: EmbeddingService | None = None,
     ) -> None:
         self.settings = settings or get_settings()
-        self.embedding_service = embedding_service or get_embedding_service(self.settings)
+        self._embedding_service_override = embedding_service
 
     async def search_tools(
         self,
@@ -202,8 +203,11 @@ class HybridSearchService:
             cursor = await collection.aggregate(pipeline)
             return await cursor.to_list(length=effective_limit)
 
+        embedding_service = self._embedding_service_override or await get_embedding_service_for(
+            resolved_tenant_id, self.settings
+        )
         try:
-            query_vector = await self.embedding_service.embed_text(query)
+            query_vector = await embedding_service.embed_text(query)
         except EmbeddingUnavailableError:
             # Resiliency fallback: keep routing alive with lexical-only retrieval.
             pipeline = build_text_pipeline(

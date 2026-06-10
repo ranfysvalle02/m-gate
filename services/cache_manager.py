@@ -17,6 +17,7 @@ from database.errors import (
     is_namespace_not_found,
 )
 from database.mongo import get_tenant_database
+from services.embedding_config import get_embedding_service_for
 from services.embeddings import EmbeddingService, embedding_version_for, get_embedding_service
 from services.metrics import observe_cache_event
 
@@ -67,6 +68,7 @@ class SemanticCacheManager:
         embedding_service: EmbeddingService | None = None,
     ) -> None:
         self.settings = settings or get_settings()
+        self._embedding_service_override = embedding_service
         self.embedding_service = embedding_service or get_embedding_service(self.settings)
         self._ensured_indexes: set[tuple[str, str]] = set()
         self._ensure_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -99,17 +101,28 @@ class SemanticCacheManager:
         tenant_id: str,
     ) -> dict[str, Any] | None:
         collection = get_tenant_database(tenant_id)["semantic_cache"]
-        await self._ensure_index(tenant_id=tenant_id, collection=collection)
+        embedding_service = await self._embedding_service_for_tenant(tenant_id)
+        embedding_version = embedding_version_for(embedding_service)
+        index_spec = semantic_cache_index_spec(
+            embedding_version=embedding_version,
+            dimensions=embedding_service.dimensions,
+        )
+        await self._ensure_index(
+            tenant_id=tenant_id,
+            collection=collection,
+            embedding_version=embedding_version,
+            dimensions=embedding_service.dimensions,
+        )
         serialized = self._serialize(tool_name, arguments)
-        query_vector = await self.embedding_service.embed_text(serialized)
+        query_vector = await embedding_service.embed_text(serialized)
         query_filter = semantic_cache_lookup_filter(
             tenant_id=tenant_id,
-            embedding_version=self.embedding_version,
+            embedding_version=embedding_version,
         )
         pipeline = [
             {
                 "$vectorSearch": {
-                    "index": self.index_spec["name"],
+                    "index": index_spec["name"],
                     "path": SEMANTIC_CACHE_VECTOR_PATH,
                     "queryVector": query_vector,
                     "filter": query_filter,
@@ -143,7 +156,7 @@ class SemanticCacheManager:
         top = docs[0]
         if top.get("tenant_id") != tenant_id:
             return None
-        if top.get("embedding_version") != self.embedding_version:
+        if top.get("embedding_version") != embedding_version:
             observe_cache_event("version_skip")
             return None
         if top.get("tool_name") != tool_name:
@@ -162,8 +175,12 @@ class SemanticCacheManager:
         ttl_seconds: int = 24 * 3600,
     ) -> None:
         collection = get_tenant_database(tenant_id)["semantic_cache"]
+        embedding_service = await self._embedding_service_for_tenant(tenant_id)
+        embedding_version = embedding_version_for(embedding_service)
+        embedding_model = embedding_service.model_id
+        embedding_dim = embedding_service.dimensions
         serialized = self._serialize(tool_name, arguments)
-        embedding = await self.embedding_service.embed_text(serialized)
+        embedding = await embedding_service.embed_text(serialized)
         arguments_hash = self._hash(serialized)
         expires_at = datetime.now(UTC) + timedelta(seconds=max(1, ttl_seconds))
         await collection.update_one(
@@ -171,7 +188,7 @@ class SemanticCacheManager:
                 "tenant_id": tenant_id,
                 "tool_name": tool_name,
                 "arguments_hash": arguments_hash,
-                "embedding_version": self.embedding_version,
+                "embedding_version": embedding_version,
             },
             {
                 "$set": {
@@ -180,9 +197,9 @@ class SemanticCacheManager:
                     "arguments": arguments,
                     "arguments_hash": arguments_hash,
                     "embedding": embedding,
-                    "embedding_model": self.embedding_model,
-                    "embedding_dim": self.embedding_dim,
-                    "embedding_version": self.embedding_version,
+                    "embedding_model": embedding_model,
+                    "embedding_dim": embedding_dim,
+                    "embedding_version": embedding_version,
                     "result": result,
                     "expires_at": expires_at,
                     "updated_at": datetime.now(UTC),
@@ -190,7 +207,12 @@ class SemanticCacheManager:
             },
             upsert=True,
         )
-        await self._ensure_index(tenant_id=tenant_id, collection=collection)
+        await self._ensure_index(
+            tenant_id=tenant_id,
+            collection=collection,
+            embedding_version=embedding_version,
+            dimensions=embedding_dim,
+        )
 
     async def invalidate(self, *, tenant_id: str, tool_names: list[str]) -> int:
         names = [name for name in tool_names if name]
@@ -209,8 +231,25 @@ class SemanticCacheManager:
     def _hash(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
-    async def _ensure_index(self, *, tenant_id: str, collection: Any) -> None:
-        key = (tenant_id, self.embedding_version)
+    async def _embedding_service_for_tenant(self, tenant_id: str) -> EmbeddingService:
+        if self._embedding_service_override is not None:
+            return self._embedding_service_override
+        return await get_embedding_service_for(tenant_id, self.settings)
+
+    async def _ensure_index(
+        self,
+        *,
+        tenant_id: str,
+        collection: Any,
+        embedding_version: str | None = None,
+        dimensions: int | None = None,
+    ) -> None:
+        if embedding_version is None or dimensions is None:
+            service = await self._embedding_service_for_tenant(tenant_id)
+            embedding_version = embedding_version or embedding_version_for(service)
+            dimensions = dimensions or service.dimensions
+
+        key = (tenant_id, embedding_version)
         if key in self._ensured_indexes:
             return
 
@@ -219,7 +258,10 @@ class SemanticCacheManager:
             if key in self._ensured_indexes:
                 return
 
-            spec = self.index_spec
+            spec = semantic_cache_index_spec(
+                embedding_version=embedding_version,
+                dimensions=dimensions,
+            )
             model = SearchIndexModel(
                 name=spec["name"],
                 type="vectorSearch",

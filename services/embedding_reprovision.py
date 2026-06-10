@@ -26,8 +26,13 @@ from config.settings import Settings, get_settings
 from database.indexes import VECTOR_INDEX_NAME, ensure_tool_catalog_indexes
 from database.mongo import get_control_database, get_tenant_database
 from services.cache_migration import SemanticCacheMigrationService
-from services.embedding_config import active_embedding_identity, get_active_embedding_service
-from services.embeddings import EmbeddingService
+from services.embedding_config import (
+    active_embedding_identity,
+    get_active_embedding_service,
+    get_embedding_service_for,
+    tenant_embedding_identity,
+)
+from services.embeddings import EmbeddingService, embedding_version_for
 from services.guardrails import resync_guardrail_signatures
 from services.registry_watcher import _bump_catalog_version
 from services.tenant_provisioner import ensure_control_plane_indexes
@@ -52,6 +57,12 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _status_id_for(tenant_id: str | None = None) -> str:
+    if not tenant_id:
+        return STATUS_ID
+    return f"{STATUS_ID}:{tenant_id}"
+
+
 def _is_running_and_fresh(status: dict[str, Any]) -> bool:
     """True if a job is genuinely in-flight (not a stale, crashed run)."""
     if status.get("state") != "running":
@@ -66,7 +77,7 @@ def _is_running_and_fresh(status: dict[str, Any]) -> bool:
 
 async def get_reprovision_status() -> dict[str, Any]:
     try:
-        doc = await get_control_database()[STATUS_COLLECTION].find_one({"_id": STATUS_ID})
+        doc = await get_control_database()[STATUS_COLLECTION].find_one({"_id": _status_id_for()})
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Could not read reprovision status: %s", exc)
         doc = None
@@ -78,9 +89,10 @@ async def get_reprovision_status() -> dict[str, Any]:
 
 
 async def _write_status(**fields: Any) -> None:
+    status_id = str(fields.pop("_id", _status_id_for()))
     await get_control_database()[STATUS_COLLECTION].update_one(
-        {"_id": STATUS_ID},
-        {"$set": {"_id": STATUS_ID, **fields}},
+        {"_id": status_id},
+        {"$set": {"_id": status_id, **fields}},
         upsert=True,
     )
 
@@ -88,6 +100,25 @@ async def _write_status(**fields: Any) -> None:
 async def is_reprovision_running() -> bool:
     """True if a non-stale reprovision job is currently in flight."""
     return _is_running_and_fresh(await get_reprovision_status())
+
+
+async def get_tenant_reprovision_status(tenant_id: str) -> dict[str, Any]:
+    try:
+        doc = await get_control_database()[STATUS_COLLECTION].find_one(
+            {"_id": _status_id_for(tenant_id)}
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Could not read tenant reprovision status: %s", exc)
+        doc = None
+    if not doc:
+        return {"state": "idle"}
+    doc = dict(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+async def is_tenant_reprovision_running(tenant_id: str) -> bool:
+    return _is_running_and_fresh(await get_tenant_reprovision_status(tenant_id))
 
 
 async def _all_tenant_ids(settings: Settings) -> list[str]:
@@ -159,8 +190,12 @@ async def _reprovision_tenant(
         mode="reembed",
         batch_size=500,
     )
+    target_version = embedding_version_for(service)
     return {
         "tenant_id": tenant_id,
+        "target_model": service.model_id,
+        "target_dimensions": dimensions,
+        "target_version": target_version,
         "catalog_reembedded": reembedded,
         "cache": cache_summary.get("totals", {}),
     }
@@ -174,7 +209,7 @@ async def run_reprovision(
 ) -> dict[str, Any]:
     """Run the full reprovision synchronously and return the final status."""
     settings = settings or get_settings()
-    service = get_active_embedding_service()
+    guardrail_service = get_active_embedding_service()
     model_id, dimensions, version = active_embedding_identity()
 
     await _write_status(
@@ -192,21 +227,22 @@ async def run_reprovision(
 
     try:
         await ensure_control_plane_indexes()
-        guardrail_count = await resync_guardrail_signatures(embedding_service=service)
+        guardrail_count = await resync_guardrail_signatures(embedding_service=guardrail_service)
 
         tenant_ids = await _all_tenant_ids(settings)
-        cache_service = SemanticCacheMigrationService(
-            settings=settings,
-            embedding_service=service,
-        )
         summaries: list[dict[str, Any]] = []
         catalog_total = 0
         for tenant_id in tenant_ids:
+            tenant_service = await get_embedding_service_for(tenant_id, settings)
+            tenant_cache_service = SemanticCacheMigrationService(
+                settings=settings,
+                embedding_service=tenant_service,
+            )
             summary = await _reprovision_tenant(
                 tenant_id,
-                service=service,
-                dimensions=dimensions,
-                cache_service=cache_service,
+                service=tenant_service,
+                dimensions=tenant_service.dimensions,
+                cache_service=tenant_cache_service,
                 wait_for_queryable=wait_for_queryable,
             )
             summaries.append(summary)
@@ -241,6 +277,77 @@ async def _run_in_background(*, started_by: str | None) -> None:
         logger.warning("Background embedding reprovision ended with an error.")
 
 
+async def run_tenant_reprovision(
+    tenant_id: str,
+    *,
+    started_by: str | None = None,
+    settings: Settings | None = None,
+    wait_for_queryable: bool = False,
+) -> dict[str, Any]:
+    settings = settings or get_settings()
+    status_id = _status_id_for(tenant_id)
+    model_id, dimensions, version = await tenant_embedding_identity(tenant_id, settings)
+    await _write_status(
+        _id=status_id,
+        state="running",
+        tenant_id=tenant_id,
+        started_at=_now(),
+        finished_at=None,
+        started_by=started_by,
+        target_model=model_id,
+        target_version=version,
+        target_dimensions=dimensions,
+        error=None,
+        tenants=[],
+        totals={},
+    )
+    try:
+        service = await get_embedding_service_for(tenant_id, settings)
+        cache_service = SemanticCacheMigrationService(
+            settings=settings,
+            embedding_service=service,
+        )
+        summary = await _reprovision_tenant(
+            tenant_id,
+            service=service,
+            dimensions=dimensions,
+            cache_service=cache_service,
+            wait_for_queryable=wait_for_queryable,
+        )
+        _bump_catalog_version()
+        await _write_status(
+            _id=status_id,
+            state="completed",
+            tenant_id=tenant_id,
+            finished_at=_now(),
+            tenants=[summary],
+            totals={
+                "tenants": 1,
+                "catalog_reembedded": int(summary.get("catalog_reembedded", 0)),
+                "guardrail_signatures": 0,
+            },
+        )
+    except Exception as exc:
+        logger.exception("Tenant embedding reprovision failed for %s.", tenant_id)
+        await _write_status(
+            _id=status_id,
+            tenant_id=tenant_id,
+            state="failed",
+            finished_at=_now(),
+            error=str(exc),
+        )
+        raise
+
+    return await get_tenant_reprovision_status(tenant_id)
+
+
+async def _run_tenant_in_background(*, tenant_id: str, started_by: str | None) -> None:
+    try:
+        await run_tenant_reprovision(tenant_id, started_by=started_by)
+    except Exception:  # status already records the failure; don't crash the loop
+        logger.warning("Background tenant embedding reprovision ended with an error.")
+
+
 async def trigger_reprovision(*, started_by: str | None = None) -> dict[str, Any]:
     """Start a reprovision in the background and return the initial status.
 
@@ -268,3 +375,38 @@ async def trigger_reprovision(*, started_by: str | None = None) -> dict[str, Any
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return await get_reprovision_status()
+
+
+async def trigger_tenant_reprovision(
+    tenant_id: str,
+    *,
+    started_by: str | None = None,
+) -> dict[str, Any]:
+    status = await get_tenant_reprovision_status(tenant_id)
+    if _is_running_and_fresh(status):
+        raise ReprovisionInProgressError(
+            f"An embedding reprovision is already in progress for tenant '{tenant_id}'."
+        )
+
+    model_id, dimensions, version = await tenant_embedding_identity(tenant_id)
+    await _write_status(
+        _id=_status_id_for(tenant_id),
+        state="running",
+        tenant_id=tenant_id,
+        started_at=_now(),
+        finished_at=None,
+        started_by=started_by,
+        target_model=model_id,
+        target_version=version,
+        target_dimensions=dimensions,
+        error=None,
+        tenants=[],
+        totals={},
+    )
+
+    task = asyncio.create_task(
+        _run_tenant_in_background(tenant_id=tenant_id, started_by=started_by)
+    )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return await get_tenant_reprovision_status(tenant_id)

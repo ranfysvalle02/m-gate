@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 
 from config.settings import Settings
-from database.mongo import get_control_database
+from database.mongo import get_control_database, get_tenant_database
 from services.embedding_config import (
     EMBEDDING_CONFIG_COLLECTION,
     EMBEDDING_CONFIG_ID,
@@ -16,10 +16,15 @@ from services.embedding_config import (
     decrypt_api_key,
     default_config_from_settings,
     encrypt_api_key,
+    get_embedding_service_for,
+    invalidate_tenant_embedding,
     load_persisted_config,
+    load_tenant_config,
     refresh_active_embedding_config,
     resolve_dimensions,
     save_persisted_config,
+    save_tenant_config,
+    tenant_embedding_identity,
     validate_config,
 )
 
@@ -172,3 +177,99 @@ async def test_refresh_sets_active_identity(patch_mongo):
     assert model_id == "voyage-3"
     assert dimensions == 1024
     assert version == "voyage-3:1024"
+
+
+@pytest.mark.asyncio
+async def test_load_tenant_config_falls_back_to_platform_default(patch_mongo):
+    cfg = EmbeddingConfig(
+        provider="voyage",
+        model="voyage-3",
+        api_key="platform-key",
+        dimensions=1024,
+    )
+    await save_persisted_config(cfg)
+    loaded = await load_tenant_config("tenant-a")
+    assert loaded.provider == "voyage"
+    assert loaded.model == "voyage-3"
+    assert loaded.dimensions == 1024
+    assert loaded.source == "platform-default"
+
+
+@pytest.mark.asyncio
+async def test_save_and_load_tenant_round_trip_encrypts_key(patch_mongo):
+    cfg = EmbeddingConfig(
+        provider="openai",
+        model="text-embedding-3-small",
+        api_key="sk-tenant-secret-123456",
+        dimensions=1536,
+    )
+    await save_tenant_config("tenant-a", cfg, updated_by="tenant-admin@example.com")
+
+    raw = await get_tenant_database("tenant-a")[EMBEDDING_CONFIG_COLLECTION].find_one(
+        {"_id": EMBEDDING_CONFIG_ID}
+    )
+    assert raw is not None
+    assert raw["api_key_encrypted"].startswith("enc::")
+    assert "sk-tenant-secret-123456" not in raw["api_key_encrypted"]
+
+    loaded = await load_tenant_config("tenant-a")
+    assert loaded.provider == "openai"
+    assert loaded.model == "text-embedding-3-small"
+    assert loaded.dimensions == 1536
+    assert loaded.api_key == "sk-tenant-secret-123456"
+    assert loaded.updated_by == "tenant-admin@example.com"
+    assert loaded.source == "tenant-db"
+
+
+@pytest.mark.asyncio
+async def test_get_embedding_service_for_caches_tenant_service(patch_mongo, monkeypatch):
+    from fakes import FakeEmbeddingService
+
+    import services.embedding_config as ec
+
+    await save_tenant_config(
+        "tenant-a",
+        EmbeddingConfig(provider="ollama", model="tenant-model", dimensions=8),
+    )
+
+    calls = {"count": 0}
+
+    def _build(config, settings=None):
+        calls["count"] += 1
+        return FakeEmbeddingService(dimensions=config.dimensions or 8, model_id=config.model)
+
+    monkeypatch.setattr(ec, "build_provider_service", _build)
+    svc1 = await get_embedding_service_for("tenant-a")
+    svc2 = await get_embedding_service_for("tenant-a")
+    assert svc1 is svc2
+    assert calls["count"] == 1
+
+    invalidate_tenant_embedding("tenant-a")
+    svc3 = await get_embedding_service_for("tenant-a")
+    assert svc3 is not svc1
+    assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_tenant_embedding_identity_uses_tenant_specific_service(patch_mongo, monkeypatch):
+    from fakes import FakeEmbeddingService
+
+    import services.embedding_config as ec
+
+    await save_tenant_config(
+        "tenant-a",
+        EmbeddingConfig(provider="ollama", model="tenant-model", dimensions=12),
+    )
+
+    monkeypatch.setattr(
+        ec,
+        "build_provider_service",
+        lambda config, settings=None: FakeEmbeddingService(
+            dimensions=config.dimensions or 12,
+            model_id=config.model or "tenant-model",
+        ),
+    )
+    model_id, dimensions, version = await tenant_embedding_identity("tenant-a")
+    assert model_id == "tenant-model"
+    assert dimensions == 12
+    assert version == "tenant-model:12"
