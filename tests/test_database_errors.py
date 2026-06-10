@@ -30,6 +30,30 @@ def test_is_index_not_queryable_yet_handles_not_started_fallback():
     assert is_index_not_queryable_yet(exc) is True
 
 
+def test_is_index_not_queryable_yet_handles_unknown_state_vector_index():
+    # Real Atlas Local failure: a freshly-created vector index queried before it
+    # is materialized reports state UNKNOWN via code 8 / UnknownError.
+    exc = OperationFailure(
+        "PlanExecutor error during aggregation :: caused by :: cannot query vector "
+        "index 6a28a1dae233546bf156a2b1 (vector index semantic-cache-v-nomic-embed-text-768 "
+        "collection semantic_cache (90714fa3) in database tenant_itest_a6be5618) "
+        "while in state UNKNOWN",
+        code=8,
+        details={"codeName": "UnknownError"},
+    )
+    assert is_index_not_queryable_yet(exc) is True
+
+
+def test_is_index_not_queryable_yet_does_not_mask_failed_state():
+    # A terminal FAILED state is a real error and must propagate, not be retried.
+    exc = OperationFailure(
+        "cannot query vector index abc while in state FAILED",
+        code=8,
+        details={"codeName": "UnknownError"},
+    )
+    assert is_index_not_queryable_yet(exc) is False
+
+
 def test_is_index_already_exists_substring_fallback_without_metadata():
     # Older servers may omit code/codeName; the lower-cased message is the floor.
     exc = OperationFailure("Index already exists with a different name")

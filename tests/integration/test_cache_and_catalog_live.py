@@ -22,8 +22,13 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 # --------------------------------------------------------------------------
 
 
-async def _poll_lookup(manager, tool_name, arguments, *, tenant_id, attempts=20):
-    """Atlas vector indexes are eventually consistent; poll a freshly stored doc."""
+async def _poll_lookup(manager, tool_name, arguments, *, tenant_id, attempts=40):
+    """Atlas vector indexes are eventually consistent; poll a freshly stored doc.
+
+    A freshly-created vector index passes through transient states (NOT_STARTED,
+    UNKNOWN, …) before it is queryable; ``lookup`` treats those as a miss, so we
+    poll long enough (~20s) for mongot to materialize the index.
+    """
     for _ in range(attempts):
         hit = await manager.lookup(tool_name, arguments, tenant_id=tenant_id)
         if hit is not None:

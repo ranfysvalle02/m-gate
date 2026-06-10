@@ -8,6 +8,19 @@ _INDEX_ALREADY_EXISTS_CODES = {68}
 _NAMESPACE_NOT_FOUND_CODES = {26}
 _INDEX_NOT_FOUND_CODES = {27}
 
+# A freshly-created Atlas vector index passes through several transient states
+# while mongot materializes it. Querying it before it is queryable raises
+# "cannot query vector index ... while in state <STATE>" (often surfaced as
+# code 8 / UnknownError). These states mean "not ready yet, retry"; a terminal
+# FAILED state is deliberately excluded so genuine failures still propagate.
+_TRANSIENT_VECTOR_INDEX_STATES = (
+    "NOT_STARTED",
+    "INITIAL_SYNC",
+    "PENDING",
+    "BUILDING",
+    "UNKNOWN",
+)
+
 
 def _details(exc: OperationFailure) -> dict[str, Any]:
     details = getattr(exc, "details", None)
@@ -55,5 +68,9 @@ def is_index_not_queryable_yet(exc: OperationFailure) -> bool:
     if code_name == "IndexNotFound":
         return True
     message = str(exc)
-    # Atlas vector indexes can briefly report NOT_STARTED while materializing.
-    return "IndexNotFound" in message or "state NOT_STARTED" in message
+    if "IndexNotFound" in message:
+        return True
+    # Atlas vector indexes briefly report a transient build state (NOT_STARTED,
+    # UNKNOWN, …) while materializing; querying that early is a "not ready yet"
+    # signal callers should retry, not a hard failure.
+    return any(f"state {state}" in message for state in _TRANSIENT_VECTOR_INDEX_STATES)

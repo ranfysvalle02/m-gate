@@ -2,8 +2,15 @@
 #
 # These targets mirror .github/workflows/ci.yml so you can reproduce the exact
 # CI gate locally before pushing. The canonical pre-push command is `make ci`,
-# which runs the same lint + format-check + types + coverage-gated unit tests
-# that the `quality` job runs on GitHub.
+# which runs BOTH GitHub jobs end-to-end: the `quality` job (lint + format-check
+# + types + coverage-gated unit tests) AND the `integration` job (the live
+# Atlas Local + Ollama integration/load tier). A green `make ci` means a green
+# cloud CI — so you catch failures here, not in the cloud.
+#
+# `make ci` runs the integration tier in STRICT mode: if Docker or Ollama is
+# unavailable the tier FAILS instead of skipping, because a silent skip is just
+# another way to miss the failure. Use `make check` for the fast inner loop, or
+# `make quality` for the unit-only gate when you can't run the engine.
 
 # Use the project venv's tools if present, else fall back to PATH.
 VENV       ?= .venv
@@ -24,8 +31,8 @@ INTEGRATION_MARKERS := integration or load
 .DEFAULT_GOAL := help
 
 .PHONY: help install install-dev lint format format-check typecheck \
-        test test-cov test-integration test-load check ci precommit \
-        precommit-install clean
+        test test-cov test-integration test-integration-strict test-load \
+        check quality ci precommit precommit-install clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -62,15 +69,21 @@ test-cov: ## Unit tier with coverage gate (exact CI command)
 	$(PYTEST) -q -m "$(UNIT_MARKERS)" \
 		--cov --cov-report=term-missing --cov-fail-under=$(COV_MIN)
 
-# `check` is the fast inner-loop gate; `ci` is the full quality job CI runs.
+# `check` = fast inner loop; `quality` = the GitHub `quality` job; `ci` = the
+# FULL gate (quality + integration/load), mirroring both GitHub jobs.
 check: lint format-check typecheck test ## Fast local gate: lint + format + types + unit tests
 
-ci: lint format-check typecheck test-cov ## Full CI quality gate (lint + format + types + coverage)
+quality: lint format-check typecheck test-cov ## Quality job only: lint + format + types + coverage-gated unit
+
+ci: quality test-integration-strict ## FULL CI gate: quality + integration/load tier (needs Docker + Ollama)
 
 ## ---- integration tier (needs Docker + Ollama) ----------------------------
 
 test-integration: ## Integration tier — testcontainers spins up Atlas Local (needs Docker + Ollama)
 	$(PYTEST) -q -m "$(INTEGRATION_MARKERS)"
+
+test-integration-strict: ## Integration tier where missing Docker/Ollama is a hard FAIL (used by `make ci`)
+	INTEGRATION_STRICT=1 $(PYTEST) -q -m "$(INTEGRATION_MARKERS)"
 
 test-load: ## Load/concurrency tier only
 	$(PYTEST) -q -m "load"

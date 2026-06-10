@@ -40,6 +40,7 @@ import os
 import sys
 import uuid
 from pathlib import Path
+from typing import NoReturn
 
 import httpx
 import pytest
@@ -58,6 +59,23 @@ INTEGRATION_DB_NAME = f"itest_{uuid.uuid4().hex[:10]}"
 
 # Ollama defaults to the host daemon's published port. Overridable for CI.
 os.environ.setdefault("OLLAMA_BASE_URL", "http://localhost:11434")
+
+
+def _unavailable(reason: str) -> NoReturn:
+    """Skip the integration tier — unless INTEGRATION_STRICT=1 is set.
+
+    On a bare laptop (no Docker / no Ollama) the tier should skip cleanly so the
+    inner loop stays fast. But ``make ci`` sets ``INTEGRATION_STRICT=1`` to turn
+    a missing engine into a HARD FAILURE: the whole point of ``make ci`` is to
+    reproduce the cloud gate locally, and a silently-skipped tier is just
+    another way to "miss the failure" until it shows up in CI.
+    """
+    if os.environ.get("INTEGRATION_STRICT") == "1":
+        pytest.fail(
+            f"INTEGRATION_STRICT=1 but the integration tier cannot run: {reason}",
+            pytrace=False,
+        )
+    pytest.skip(reason, allow_module_level=True)
 
 
 def _verify_atlas_search(uri: str, *, timeout_ms: int = 2500) -> None:
@@ -137,10 +155,8 @@ def atlas_uri():
     if override:
         reason = _wait_for_atlas_search(override)
         if reason:
-            pytest.skip(
-                f"INTEGRATION_MONGODB_URI={override} is not a search-capable "
-                f"Atlas engine: {reason}",
-                allow_module_level=True,
+            _unavailable(
+                f"INTEGRATION_MONGODB_URI={override} is not a search-capable Atlas engine: {reason}"
             )
         yield override
         return
@@ -148,19 +164,17 @@ def atlas_uri():
     try:
         from testcontainers.core.container import DockerContainer
     except Exception as exc:  # noqa: BLE001
-        pytest.skip(
+        _unavailable(
             "No INTEGRATION_MONGODB_URI set and testcontainers is unavailable "
-            f"({exc}); cannot provision Atlas Local.",
-            allow_module_level=True,
+            f"({exc}); cannot provision Atlas Local."
         )
 
     try:
         container = DockerContainer(ATLAS_LOCAL_IMAGE).with_exposed_ports(27017)
         container.start()
     except Exception as exc:  # noqa: BLE001 - Docker not running, image pull blocked, etc.
-        pytest.skip(
-            f"Could not start {ATLAS_LOCAL_IMAGE} via testcontainers ({exc}); is Docker running?",
-            allow_module_level=True,
+        _unavailable(
+            f"Could not start {ATLAS_LOCAL_IMAGE} via testcontainers ({exc}); is Docker running?"
         )
 
     try:
@@ -169,10 +183,7 @@ def atlas_uri():
         uri = f"mongodb://{host}:{port}/?directConnection=true"
         reason = _wait_for_atlas_search(uri)
         if reason:
-            pytest.skip(
-                f"Atlas Local container did not become search-ready: {reason}",
-                allow_module_level=True,
-            )
+            _unavailable(f"Atlas Local container did not become search-ready: {reason}")
         yield uri
     finally:
         container.stop()
@@ -211,7 +222,7 @@ def settings(atlas_uri):
 def require_ollama(settings):
     reason = _probe_ollama(settings.ollama_base_url, settings.ollama_model)
     if reason:
-        pytest.skip(reason, allow_module_level=True)
+        _unavailable(reason)
     return settings.ollama_base_url
 
 
