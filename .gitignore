@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# WASM sandbox runtime artifacts
+#   python.wasm is fetched/verified via `make fetch-wasm` (scripts/fetch_python_wasm.py);
+#   .wasm-cache holds compiled-module (.cwasm) caches generated at runtime.
+#   Both are large, regenerable binaries and should not be tracked.
+vendor/python-*.wasm
+vendor/.wasm-cache/
+*.cwasm
