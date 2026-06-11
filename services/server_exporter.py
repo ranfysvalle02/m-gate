@@ -293,7 +293,7 @@ async def build_server_export(
     primary_tools = [tool for key, tool in built.items() if key[0] == server_name]
     if not primary_tools:
         raise ServerExportError(
-            f"Server '{server_name}' has no exportable tools " "(no decryptable code-tool source)."
+            f"Server '{server_name}' has no exportable tools (no decryptable code-tool source)."
         )
 
     # Group every bundled tool by its owning server, preserving stable slugs.
@@ -343,7 +343,9 @@ def _zip_files(root: str, files: dict[str, str]) -> bytes:
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(files):
             info = zipfile.ZipInfo(f"{root}/{path}", date_time=fixed_date)
-            info.external_attr = 0o644 << 16
+            # Make shell helpers executable; everything else stays 0644.
+            mode = 0o755 if path.endswith(".sh") else 0o644
+            info.external_attr = mode << 16
             zf.writestr(info, files[path])
     return buffer.getvalue()
 
@@ -374,8 +376,34 @@ def _render_project(
     files["requirements.txt"] = _render_requirements(bundled)
     files[".env.example"] = _render_env_example(tenant_id, bundled)
     files[".gitignore"] = ".env\n__pycache__/\n*.pyc\n.venv/\nvenv/\n"
+    files[".python-version"] = "3.12\n"
+    files["run.sh"] = _render_run_sh()
     files["README.md"] = _render_readme(primary_server, bundled, missing_refs)
     return files
+
+
+def _render_run_sh() -> str:
+    return (
+        "#!/usr/bin/env bash\n"
+        "# One-shot launcher: create a venv, install deps, and start the server.\n"
+        "# Re-runs are fast — the venv and installed deps are reused.\n"
+        "set -euo pipefail\n"
+        'cd "$(dirname "$0")"\n'
+        "\n"
+        "if [ ! -d .venv ]; then\n"
+        "  python3 -m venv .venv\n"
+        "fi\n"
+        "source .venv/bin/activate\n"
+        "pip install --quiet --upgrade pip\n"
+        "pip install --quiet -r requirements.txt\n"
+        "\n"
+        "# Load .env if present (export every KEY=VALUE line).\n"
+        "if [ -f .env ]; then\n"
+        "  set -a; source .env; set +a\n"
+        "fi\n"
+        "\n"
+        "exec python server.py\n"
+    )
 
 
 def _render_tool_module(server: _BundledServer, tool: _Tool) -> str:
@@ -444,7 +472,17 @@ def _render_server_py(primary_server: str, bundled: dict[str, _BundledServer]) -
     lines.append("")
     lines.append("")
     lines.append('if __name__ == "__main__":')
-    lines.append("    mcp.run()")
+    lines.append("    import os")
+    lines.append("")
+    lines.append('    transport = os.environ.get("MCP_TRANSPORT", "stdio").strip().lower()')
+    lines.append('    if transport in {"http", "streamable-http"}:')
+    lines.append("        mcp.run(")
+    lines.append('            transport="http",')
+    lines.append('            host=os.environ.get("MCP_HOST", "127.0.0.1"),')
+    lines.append('            port=int(os.environ.get("MCP_PORT", "8000")),')
+    lines.append("        )")
+    lines.append("    else:")
+    lines.append("        mcp.run()")
     lines.append("")
     return "\n".join(lines)
 
@@ -485,6 +523,13 @@ def _render_env_example(tenant_id: str, bundled: dict[str, _BundledServer]) -> s
         "# --- context.tools: cross-tool call safety ------------------------------",
         "# Max nesting depth for context.tools calls (guards against cycles).",
         "MCP_TOOL_CALL_MAX_DEPTH=5",
+        "",
+        "# --- transport: how the server is served --------------------------------",
+        "# Default is stdio (what MCP clients use). Set http to serve over HTTP.",
+        "MCP_TRANSPORT=stdio",
+        "# Only used when MCP_TRANSPORT=http:",
+        "MCP_HOST=127.0.0.1",
+        "MCP_PORT=8000",
     ]
     has_env = any(server.env_keys for server in bundled.values())
     if has_env:
@@ -549,22 +594,94 @@ def _render_readme(
             names = ", ".join(f"`{tool.name}`" for tool in server.tools)
             lines.append(f"- `{server.name}`: {names}")
         lines.append("")
+    root = f"{_slug(primary_server)}-mcp"
+
     lines.append("## Quickstart")
+    lines.append("")
+    lines.append(
+        "One command — sets up a venv, installs deps, loads `.env`, and serves over stdio:"
+    )
+    lines.append("")
+    lines.append("```bash")
+    lines.append("cp .env.example .env   # then fill in real values")
+    lines.append("./run.sh")
+    lines.append("```")
+    lines.append("")
+    lines.append("<details><summary>Prefer to run it by hand?</summary>")
     lines.append("")
     lines.append("```bash")
     lines.append("python -m venv .venv && source .venv/bin/activate")
     lines.append("pip install -r requirements.txt")
-    lines.append("cp .env.example .env   # then fill in real values")
-    lines.append("set -a && . ./.env && set +a   # load env into your shell")
-    lines.append("python server.py       # runs over stdio (for MCP clients)")
+    lines.append("cp .env.example .env            # then fill in real values")
+    lines.append("set -a && . ./.env && set +a    # load env into your shell")
+    lines.append("python server.py                # runs over stdio (for MCP clients)")
     lines.append("```")
     lines.append("")
-    lines.append("### Run over HTTP instead")
+    lines.append("</details>")
     lines.append("")
-    lines.append("Edit the bottom of `server.py`:")
+    lines.append("## Connect it to your MCP client")
     lines.append("")
-    lines.append("```python")
-    lines.append('mcp.run(transport="http", host="127.0.0.1", port=8000)')
+    lines.append(
+        f"Point any MCP client at this server over stdio. Replace `/ABSOLUTE/PATH/TO/{root}` "
+        "with wherever you unzipped this project."
+    )
+    lines.append("")
+    lines.append(
+        "**Cursor** (`.cursor/mcp.json`) or **Claude Desktop** (`claude_desktop_config.json`):"
+    )
+    lines.append("")
+    lines.append("```json")
+    lines.append("{")
+    lines.append('  "mcpServers": {')
+    lines.append(f'    "{primary_server}": {{')
+    lines.append(f'      "command": "/ABSOLUTE/PATH/TO/{root}/run.sh"')
+    lines.append("    }")
+    lines.append("  }")
+    lines.append("}")
+    lines.append("```")
+    lines.append("")
+    lines.append(
+        "`run.sh` provisions the venv on first launch and loads `.env`, so that line is all "
+        "the client needs. Prefer an explicit interpreter? Use the venv's Python directly:"
+    )
+    lines.append("")
+    lines.append("```json")
+    lines.append("{")
+    lines.append('  "mcpServers": {')
+    lines.append(f'    "{primary_server}": {{')
+    lines.append(f'      "command": "/ABSOLUTE/PATH/TO/{root}/.venv/bin/python",')
+    lines.append('      "args": ["server.py"],')
+    lines.append(f'      "cwd": "/ABSOLUTE/PATH/TO/{root}"')
+    lines.append("    }")
+    lines.append("  }")
+    lines.append("}")
+    lines.append("```")
+    lines.append("")
+    lines.append("## Run over HTTP instead")
+    lines.append("")
+    lines.append("No code edits — just set environment variables:")
+    lines.append("")
+    lines.append("```bash")
+    lines.append("MCP_TRANSPORT=http MCP_HOST=127.0.0.1 MCP_PORT=8000 python server.py")
+    lines.append("```")
+    lines.append("")
+    lines.append("## What's inside")
+    lines.append("")
+    lines.append("```")
+    lines.append(f"{root}/")
+    lines.append("├── server.py          # FastMCP entrypoint: registers + exposes the tools")
+    lines.append("├── run.sh             # venv + install + run (loads .env)")
+    lines.append("├── requirements.txt")
+    lines.append("├── .env.example       # copy to .env and fill in")
+    lines.append("├── .python-version")
+    lines.append("├── mcp_context/       # reconstructs context.db / context.env / context.tools")
+    lines.append("└── tools/             # the authored source for every bundled tool")
+    servers = list(bundled.values())
+    width = max((len(s.slug) for s in servers), default=0) + 1
+    for idx, server in enumerate(servers):
+        connector = "└──" if idx == len(servers) - 1 else "├──"
+        entry = f"{server.slug}/".ljust(width + 1)
+        lines.append(f"    {connector} {entry} # {server.name}")
     lines.append("```")
     lines.append("")
     lines.append("## Configuration")

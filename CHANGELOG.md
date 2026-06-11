@@ -20,6 +20,12 @@
   `server.py`, `requirements.txt` (gateway-pinned `fastmcp`/`pymongo` + each
   tool's pins), a `mcp_context/` runtime, per-tool modules with the verbatim
   authored source, a README, and `.gitignore`.
+- **Drops straight into a client:** ships an executable `run.sh` (venv +
+  install + load `.env` + run) and a `.python-version`; the README includes a
+  paste-ready `mcpServers` config for Cursor/Claude Desktop and a "What's
+  inside" tour. The generated `server.py` picks its transport from the
+  environment (`MCP_TRANSPORT=stdio|http`, `MCP_HOST`, `MCP_PORT`) — serve over
+  HTTP with no code edits.
 
 ### Cross-tool calls: `context.tools` (tenant-as-namespace)
 - Added `context.tools` / `context.call(...)` so a code tool can invoke sibling

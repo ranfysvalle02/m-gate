@@ -227,6 +227,56 @@ async def test_env_example_lists_keys_but_never_values(seeded):
 
 
 @pytest.mark.asyncio
+async def test_export_ships_runnable_scaffolding(seeded):
+    export = await build_server_export(tenant_id=TENANT, server_name="analytics")
+    names = _zip_names(export.content)
+    assert "analytics-mcp/run.sh" in names
+    assert "analytics-mcp/.python-version" in names
+
+    run_sh = _read(export.content, "analytics-mcp/run.sh")
+    assert run_sh.startswith("#!/usr/bin/env bash")
+    assert "pip install" in run_sh and "python server.py" in run_sh
+
+    # run.sh must be marked executable inside the archive (0o755 high bits).
+    with zipfile.ZipFile(io.BytesIO(export.content)) as zf:
+        mode = zf.getinfo("analytics-mcp/run.sh").external_attr >> 16
+        assert mode & 0o111, f"run.sh not executable: {oct(mode)}"
+        readme_mode = zf.getinfo("analytics-mcp/README.md").external_attr >> 16
+        assert not (readme_mode & 0o111)
+
+
+@pytest.mark.asyncio
+async def test_server_py_transport_is_env_driven(seeded):
+    export = await build_server_export(tenant_id=TENANT, server_name="analytics")
+    server_py = _read(export.content, "analytics-mcp/server.py")
+    assert 'os.environ.get("MCP_TRANSPORT"' in server_py
+    assert 'transport="http"' in server_py
+    assert 'os.environ.get("MCP_PORT"' in server_py
+
+
+@pytest.mark.asyncio
+async def test_env_example_documents_transport(seeded):
+    export = await build_server_export(tenant_id=TENANT, server_name="analytics")
+    env_example = _read(export.content, "analytics-mcp/.env.example")
+    assert "MCP_TRANSPORT=stdio" in env_example
+    assert "MCP_HOST=127.0.0.1" in env_example
+    assert "MCP_PORT=8000" in env_example
+
+
+@pytest.mark.asyncio
+async def test_readme_has_paste_ready_mcp_client_config(seeded):
+    export = await build_server_export(tenant_id=TENANT, server_name="analytics")
+    readme = _read(export.content, "analytics-mcp/README.md")
+    # A copy-paste mcpServers block keyed by the primary server name, plus the
+    # one-command launcher and an env-driven HTTP recipe.
+    assert '"mcpServers"' in readme
+    assert '"analytics"' in readme
+    assert "analytics-mcp/run.sh" in readme
+    assert "MCP_TRANSPORT=http" in readme
+    assert "./run.sh" in readme
+
+
+@pytest.mark.asyncio
 async def test_export_rejects_non_code_server(seeded):
     with pytest.raises(ServerExportError):
         await build_server_export(tenant_id=TENANT, server_name="weather")
