@@ -43,8 +43,12 @@ async def test_bridge_rejects_write_for_read_action_type(patch_mongo):
 
 @pytest.mark.asyncio
 async def test_bridge_scopes_to_current_tenant(patch_mongo):
-    await get_tenant_database("tenant-a")["users"].insert_one({"_id": "a-only", "tenant": "tenant-a"})
-    await get_tenant_database("tenant-b")["users"].insert_one({"_id": "b-only", "tenant": "tenant-b"})
+    await get_tenant_database("tenant-a")["users"].insert_one(
+        {"_id": "a-only", "tenant": "tenant-a"}
+    )
+    await get_tenant_database("tenant-b")["users"].insert_one(
+        {"_id": "b-only", "tenant": "tenant-b"}
+    )
 
     bridge = SandboxDbBridge(tenant_id="tenant-a", action_type="read", settings=Settings())
     frame = await bridge.handle(

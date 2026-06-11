@@ -191,9 +191,11 @@ async def summarize_billing_events(
     limit: int = 100,
 ) -> dict[str, Any]:
     resolved_period = period or current_period()
-    docs = await _events_collection().find(
-        {"tenant_id": tenant_id, "period": resolved_period}
-    ).to_list(length=10_000)
+    docs = (
+        await _events_collection()
+        .find({"tenant_id": tenant_id, "period": resolved_period})
+        .to_list(length=10_000)
+    )
     docs.sort(
         key=lambda item: item.get("ts")
         if isinstance(item.get("ts"), datetime)

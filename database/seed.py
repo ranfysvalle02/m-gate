@@ -520,9 +520,7 @@ def routing_registry_seed(tenant_id: str | None = None) -> list[dict]:
                 {
                     "server": "deepwiki",
                     "name": "read_wiki_structure",
-                    "description": (
-                        "Get a list of documentation topics for a GitHub repository."
-                    ),
+                    "description": ("Get a list of documentation topics for a GitHub repository."),
                     "scopes": ["deepwiki", "readonly"],
                     "metadata": {
                         "cacheable": True,

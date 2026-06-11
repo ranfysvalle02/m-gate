@@ -110,7 +110,9 @@ class SemanticCacheMigrationService:
             summary["purged_entries"] = await self._purge_stale_entries(
                 collection, stale_docs=stale_docs
             )
-            summary["remaining_entries"] = max(0, summary["stale_entries"] - summary["purged_entries"])
+            summary["remaining_entries"] = max(
+                0, summary["stale_entries"] - summary["purged_entries"]
+            )
             return summary
 
         reembedded, skipped = await self._reembed_stale_entries(

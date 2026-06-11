@@ -821,7 +821,9 @@ async def test_get_tenant_usage_events_returns_rollup_and_recent_events(patch_mo
 
 
 @pytest.mark.asyncio
-async def test_delete_tenant_requires_platform_admin_and_deletes_when_allowed(patch_mongo, monkeypatch):
+async def test_delete_tenant_requires_platform_admin_and_deletes_when_allowed(
+    patch_mongo, monkeypatch
+):
     import gateway.routers.admin as admin
     import services.tenant_provisioner as tp
 

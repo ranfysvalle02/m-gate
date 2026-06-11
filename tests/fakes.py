@@ -106,7 +106,9 @@ class FakeCollection:
         query = query or {}
         return len([d for d in self.docs if _matches(d, query)])
 
-    async def distinct(self, field: str, query: dict[str, Any] | None = None, **_kwargs: Any) -> list[Any]:
+    async def distinct(
+        self, field: str, query: dict[str, Any] | None = None, **_kwargs: Any
+    ) -> list[Any]:
         query = query or {}
         values = []
         seen = set()

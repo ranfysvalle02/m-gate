@@ -276,10 +276,7 @@ def _find_snippet(collection: str, filter_doc: dict[str, Any], limit: int) -> st
 
 
 def _aggregate_snippet(collection: str, pipeline: list[dict[str, Any]]) -> str:
-    return (
-        f"context.db[{json.dumps(collection)}].aggregate("
-        f"{json.dumps(pipeline, indent=2)})"
-    )
+    return f"context.db[{json.dumps(collection)}].aggregate({json.dumps(pipeline, indent=2)})"
 
 
 async def _bridge_read(
@@ -306,7 +303,8 @@ async def _bridge_read(
         }
     )
     if not frame.get("ok"):
-        error = frame.get("error") if isinstance(frame.get("error"), dict) else {}
+        raw_error = frame.get("error")
+        error = raw_error if isinstance(raw_error, dict) else {}
         message = str(error.get("message") or "Explore query failed.")
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=message)
     return frame.get("result")
@@ -580,7 +578,9 @@ async def delete_tenant(request: Request, tenant_id: str) -> TenantDeleteRespons
         status="tenant_deprovisioned",
         metadata={"tenant_id": tenant_id, "actor": actor},
     )
-    return TenantDeleteResponse(tenant_id=tenant_id, db_name=tenant_db_name(tenant_id), deleted=True)
+    return TenantDeleteResponse(
+        tenant_id=tenant_id, db_name=tenant_db_name(tenant_id), deleted=True
+    )
 
 
 @router.post("/tenants/{tenant_id}/suspend", response_model=TenantResponse)
@@ -1010,12 +1010,12 @@ async def explore_collections(
 ) -> ExploreCollectionsResponse:
     _require_tenant_admin(request)
     _require_db_bridge_enabled()
-    target_tenant = _resolve_target_tenant(request, tenant_id if isinstance(tenant_id, str) else None)
+    target_tenant = _resolve_target_tenant(
+        request, tenant_id if isinstance(tenant_id, str) else None
+    )
     names = await get_tenant_database(target_tenant).list_collection_names()
     collections = sorted(
-        name
-        for name in names
-        if isinstance(name, str) and name and not name.startswith("system.")
+        name for name in names if isinstance(name, str) and name and not name.startswith("system.")
     )
     return ExploreCollectionsResponse(tenant_id=target_tenant, collections=collections)
 
@@ -1103,7 +1103,9 @@ async def validate_code_tool_endpoint(
         {
             "name": payload.name,
             "raw_code": payload.raw_code,
-            "requirements": [str(req).strip() for req in (payload.requirements or []) if str(req).strip()],
+            "requirements": [
+                str(req).strip() for req in (payload.requirements or []) if str(req).strip()
+            ],
             "metadata": {"action_type": payload.action_type},
             "input_schema": payload.input_schema,
         }
@@ -1134,7 +1136,9 @@ async def test_code_tool(
         "name": tool_name,
         "description": "sandbox test run",
         "raw_code": payload.raw_code,
-        "requirements": [str(req).strip() for req in (payload.requirements or []) if str(req).strip()],
+        "requirements": [
+            str(req).strip() for req in (payload.requirements or []) if str(req).strip()
+        ],
         "metadata": {
             "action_type": payload.action_type,
             "requires_confirmation": bool(payload.requires_confirmation),
@@ -1510,7 +1514,12 @@ async def admin_search(request: Request, payload: AdminSearchRequest) -> dict[st
         mode=payload.mode,
         server=payload.server,
     )
-    return {"tenant_id": target_tenant, "mode": payload.mode, "server": payload.server, "items": items}
+    return {
+        "tenant_id": target_tenant,
+        "mode": payload.mode,
+        "server": payload.server,
+        "items": items,
+    }
 
 
 def _merge_embedding_config(

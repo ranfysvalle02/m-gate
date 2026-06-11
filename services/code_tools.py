@@ -132,9 +132,10 @@ def _top_level_bindings(tree: ast.Module) -> set[str]:
     return names
 
 
-def _function_params(func: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[set[str], set[str], bool]:
-    """(all named params, required params, accepts **kwargs) for a function def.
-    """
+def _function_params(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[set[str], set[str], bool]:
+    """(all named params, required params, accepts **kwargs) for a function def."""
     args = func.args
     positional = list(args.posonlyargs) + list(args.args)
     num_defaults = len(args.defaults)
@@ -151,9 +152,7 @@ def _function_params(func: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[set[
     return params, required, args.kwarg is not None
 
 
-def _signature_issues(
-    tree: ast.Module, tool_name: str, input_schema: Any
-) -> list[dict[str, Any]]:
+def _signature_issues(tree: ast.Module, tool_name: str, input_schema: Any) -> list[dict[str, Any]]:
     """Advisory checks that the function signature matches the declared schema.
 
     The runner calls ``func(**arguments)`` where ``arguments`` is built by the
@@ -318,9 +317,7 @@ def suggest_input_schema(raw_code: str, tool_name: str) -> dict[str, Any] | None
     return schema
 
 
-def _source_issues(
-    raw_code: str, tool_name: str, input_schema: Any = None
-) -> list[dict[str, Any]]:
+def _source_issues(raw_code: str, tool_name: str, input_schema: Any = None) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     if len(raw_code.encode("utf-8")) > MAX_RAW_CODE_BYTES:
         issues.append(_issue(f"Code exceeds the maximum size of {MAX_RAW_CODE_BYTES // 1024} KB."))
@@ -337,15 +334,11 @@ def _source_issues(
             for alias in node.names:
                 root = alias.name.split(".")[0]
                 if root in BANNED_IMPORTS:
-                    issues.append(
-                        _issue(f"Importing '{root}' is not allowed.", line=node.lineno)
-                    )
+                    issues.append(_issue(f"Importing '{root}' is not allowed.", line=node.lineno))
         elif isinstance(node, ast.ImportFrom):
             root = (node.module or "").split(".")[0]
             if root in BANNED_IMPORTS:
-                issues.append(
-                    _issue(f"Importing from '{root}' is not allowed.", line=node.lineno)
-                )
+                issues.append(_issue(f"Importing from '{root}' is not allowed.", line=node.lineno))
         elif isinstance(node, ast.Call):
             func = node.func
             if isinstance(func, ast.Name) and func.id in BANNED_CALLS:
@@ -424,7 +417,9 @@ def lint_code_tool(tool: dict[str, Any]) -> None:
     issue is present, joining their messages into one rejection string.
     """
     name = tool.get("name") or "<unnamed>"
-    errors = [issue["message"] for issue in validate_code_tool(tool) if issue["severity"] == "error"]
+    errors = [
+        issue["message"] for issue in validate_code_tool(tool) if issue["severity"] == "error"
+    ]
     if errors:
         raise CodeToolValidationError(f"Code tool '{name}' rejected: " + " ".join(errors))
 

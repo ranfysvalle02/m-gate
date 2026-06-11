@@ -210,9 +210,7 @@ async def test_run_enforces_output_limit(monkeypatch):
     process = _FakeProcess(
         stdout=(
             b'{"ok": true, "result": {"sum": 3}, '
-            b'"stdout": "", "stderr": "'
-            + (b"x" * 2048)
-            + b'"}\n'
+            b'"stdout": "", "stderr": "' + (b"x" * 2048) + b'"}\n'
         ),
         returncode=0,
     )
@@ -432,8 +430,7 @@ async def _noop_invoker(server, tool, args):  # pragma: no cover - replaced per 
 @pytest.mark.asyncio
 async def test_run_routes_tool_rpc_frames_to_tool_bridge(monkeypatch):
     tool_frame = (
-        b'{"type":"tool_rpc","id":7,"server":"analytics","tool":"track",'
-        b'"arguments":{"x":1}}\n'
+        b'{"type":"tool_rpc","id":7,"server":"analytics","tool":"track","arguments":{"x":1}}\n'
     )
     final_frame = b'{"ok": true, "result": {"done": true}, "stdout": "", "stderr": ""}\n'
     process = _FakeProcess(stdout=[tool_frame, final_frame], returncode=0)

@@ -162,7 +162,9 @@ class WasmExecutor:
                     if process.stdout is None or process.stdin is None:
                         raise SandboxError("Sandbox worker did not expose stdio pipes.")
                     stderr_task = asyncio.create_task(
-                        process.stderr.read() if process.stderr is not None else asyncio.sleep(0, result=b"")
+                        process.stderr.read()
+                        if process.stderr is not None
+                        else asyncio.sleep(0, result=b"")
                     )
                     try:
                         frame = await self._pump_worker_frames(
@@ -324,9 +326,7 @@ class WasmExecutor:
             writer.write((json.dumps(response) + "\n").encode("utf-8"))
             await writer.drain()
 
-    async def _tenant_semaphore(
-        self, tenant_id: str, *, nested: bool = False
-    ) -> asyncio.Semaphore:
+    async def _tenant_semaphore(self, tenant_id: str, *, nested: bool = False) -> asyncio.Semaphore:
         if nested:
             # A re-entrant sibling call must not contend on (and stall behind)
             # the per-tenant slot the originating run already holds. A fresh,

@@ -564,9 +564,7 @@ def _run_wasm(
 
     wall_timeout = max(1, int(limits["wall_timeout_ms"]))
     timer_lock = threading.Lock()
-    timer_ref = {
-        "timer": threading.Timer(wall_timeout / 1000, engine.increment_epoch)
-    }
+    timer_ref = {"timer": threading.Timer(wall_timeout / 1000, engine.increment_epoch)}
     timer_ref["timer"].daemon = True
     timer_ref["timer"].start()
 

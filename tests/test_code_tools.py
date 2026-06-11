@@ -176,10 +176,7 @@ def test_validate_ignores_empty_schema():
 
 
 def test_suggest_schema_infers_types_and_required():
-    code = (
-        "def fetch(city: str, days: int = 3, verbose: bool = False) -> dict:\n"
-        "    return {}\n"
-    )
+    code = "def fetch(city: str, days: int = 3, verbose: bool = False) -> dict:\n    return {}\n"
     schema = suggest_input_schema(code, "fetch")
     assert schema == {
         "type": "object",

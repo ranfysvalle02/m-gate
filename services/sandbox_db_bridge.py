@@ -79,9 +79,7 @@ class SandboxDbBridge:
     ) -> None:
         self.settings = settings or get_settings()
         self.tenant_id = tenant_id
-        self.action_type = (
-            action_type if action_type in ALLOWED_ACTION_TYPES else "read"
-        )
+        self.action_type = action_type if action_type in ALLOWED_ACTION_TYPES else "read"
         self.calls = 0
         configured_max_calls = max(0, int(self.settings.sandbox_db_max_calls_per_invocation))
         if max_calls_override is not None:
@@ -117,8 +115,10 @@ class SandboxDbBridge:
 
         op = str(rpc.get("op") or "").strip()
         collection_name = str(rpc.get("collection") or "").strip()
-        args = rpc.get("args") if isinstance(rpc.get("args"), list) else []
-        kwargs = rpc.get("kwargs") if isinstance(rpc.get("kwargs"), dict) else {}
+        raw_args = rpc.get("args")
+        args = raw_args if isinstance(raw_args, list) else []
+        raw_kwargs = rpc.get("kwargs")
+        kwargs = raw_kwargs if isinstance(raw_kwargs, dict) else {}
 
         self._validate_op(op)
         collection = self._collection(collection_name)
@@ -232,23 +232,31 @@ class SandboxDbBridge:
             return values[: self.max_docs]
         return []
 
-    async def _insert_one(self, collection, args: list[Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    async def _insert_one(
+        self, collection, args: list[Any], kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
         if not args or not isinstance(args[0], dict):
             raise RuntimeError("insert_one requires a document object.")
         result = await self._call_with_timeout(lambda: collection.insert_one(args[0]))
         return {"inserted_id": getattr(result, "inserted_id", None)}
 
-    async def _insert_many(self, collection, args: list[Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    async def _insert_many(
+        self, collection, args: list[Any], kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
         docs = args[0] if args else []
         if not isinstance(docs, list) or not all(isinstance(item, dict) for item in docs):
             raise RuntimeError("insert_many requires an array of documents.")
         result = await self._call_with_timeout(
-            lambda: collection.insert_many(docs[: self.max_docs], ordered=_as_bool(kwargs.get("ordered", True)))
+            lambda: collection.insert_many(
+                docs[: self.max_docs], ordered=_as_bool(kwargs.get("ordered", True))
+            )
         )
         inserted_ids = getattr(result, "inserted_ids", [])
         return {"inserted_ids": inserted_ids if isinstance(inserted_ids, list) else []}
 
-    async def _update_one(self, collection, args: list[Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    async def _update_one(
+        self, collection, args: list[Any], kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
         if len(args) < 2 or not isinstance(args[0], dict) or not isinstance(args[1], dict):
             raise RuntimeError("update_one requires filter and update objects.")
         result = await self._call_with_timeout(
@@ -260,7 +268,9 @@ class SandboxDbBridge:
             "upserted_id": getattr(result, "upserted_id", None),
         }
 
-    async def _update_many(self, collection, args: list[Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    async def _update_many(
+        self, collection, args: list[Any], kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
         if len(args) < 2 or not isinstance(args[0], dict) or not isinstance(args[1], dict):
             raise RuntimeError("update_many requires filter and update objects.")
         result = await self._call_with_timeout(
@@ -272,13 +282,17 @@ class SandboxDbBridge:
             "upserted_id": getattr(result, "upserted_id", None),
         }
 
-    async def _delete_one(self, collection, args: list[Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    async def _delete_one(
+        self, collection, args: list[Any], kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
         if not args or not isinstance(args[0], dict):
             raise RuntimeError("delete_one requires a filter object.")
         result = await self._call_with_timeout(lambda: collection.delete_one(args[0]))
         return {"deleted_count": int(getattr(result, "deleted_count", 0))}
 
-    async def _delete_many(self, collection, args: list[Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    async def _delete_many(
+        self, collection, args: list[Any], kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
         if not args or not isinstance(args[0], dict):
             raise RuntimeError("delete_many requires a filter object.")
         result = await self._call_with_timeout(lambda: collection.delete_many(args[0]))
@@ -336,4 +350,3 @@ class SandboxDbBridge:
             raise RuntimeError("$lookup requires a string 'from' collection.")
         if payload.get("pipeline"):
             raise RuntimeError("$lookup with nested pipeline is not allowed.")
-

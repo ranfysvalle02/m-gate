@@ -93,7 +93,9 @@ async def test_run_reprovision_emits_incremental_progress(patch_mongo, monkeypat
     async def _spy_write_status(**fields):
         progress = fields.get("progress")
         if isinstance(progress, dict):
-            progress_states.append((int(progress.get("completed", -1)), int(progress.get("total", -1))))
+            progress_states.append(
+                (int(progress.get("completed", -1)), int(progress.get("total", -1)))
+            )
         await original_write_status(**fields)
 
     monkeypatch.setattr(er, "_write_status", _spy_write_status)

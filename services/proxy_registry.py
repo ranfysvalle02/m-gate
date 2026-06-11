@@ -407,7 +407,8 @@ class InMemoryFastMCPRegistry:
         requirements = [
             str(req) for req in (tool_doc.get("requirements") or []) if isinstance(req, str)
         ]
-        metadata = tool_doc.get("metadata") if isinstance(tool_doc.get("metadata"), dict) else {}
+        raw_metadata = tool_doc.get("metadata")
+        metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
         env = await self._read_server_env(server.tenant_id, server.server)
         tool_invoker = self.make_tool_invoker(
             tenant_id=server.tenant_id,

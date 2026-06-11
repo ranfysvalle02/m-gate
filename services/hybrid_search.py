@@ -54,9 +54,7 @@ def _scope_filter(scopes: list[str], *, server: str | None = None) -> dict[str, 
         {
             scope.split(":", 1)[1]
             for scope in scopes
-            if scope.startswith("server:")
-            and scope != "server:*"
-            and scope.split(":", 1)[1]
+            if scope.startswith("server:") and scope != "server:*" and scope.split(":", 1)[1]
         }
     )
     match["server"] = {"$in": allowed_servers} if allowed_servers else {"$in": []}
