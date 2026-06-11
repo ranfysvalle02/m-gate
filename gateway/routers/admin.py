@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -14,6 +15,8 @@ from models.admin import (
     CatalogItemResponse,
     CatalogListRequest,
     CatalogListResponse,
+    CodeToolTestRequest,
+    CodeToolTestResponse,
     EgressAllowlistResponse,
     EgressAllowlistUpdateRequest,
     EmbeddingConfigResponse,
@@ -93,6 +96,13 @@ from services.pending_actions import (
 from services.proxy_registry import get_proxy_registry
 from services.registry_watcher import get_catalog_version
 from services.server_guard import EndpointNotAllowed, StdioNotAllowed, enforce_server_policy
+from services.sandbox_executor import (
+    ExecRequest,
+    SandboxError,
+    SandboxProtocolError,
+    SandboxTimeoutError,
+    get_executor,
+)
 from services.telemetry_logger import get_telemetry_logger
 from services.tenant_egress import get_tenant_egress_allowlist, set_tenant_egress_allowlist
 from services.tenant_provisioner import provision_tenant
@@ -300,12 +310,13 @@ async def _prepare_code_server(doc: dict[str, Any], tenant_id: str) -> dict[str,
         prepared.append(tool)
     doc["tools"] = prepared
     # Code servers have no network/process target; keep these unset so the proxy
-    # never tries to connect to one.
+    # never tries to connect to one. Under Queryable Encryption the encrypted
+    # routing fields (env/command/args) cannot store a null, so omit them rather
+    # than writing null/empty placeholders that libmongocrypt rejects.
     doc["endpoint"] = None
-    doc["command"] = None
-    doc["args"] = []
-    doc["env"] = {}
     doc["cwd"] = None
+    for connection_field in ("command", "args", "env"):
+        doc.pop(connection_field, None)
     return doc
 
 
@@ -819,6 +830,68 @@ async def get_server(
     return await _public_server_doc_with_code(doc)
 
 
+@router.post(
+    "/servers/{server_name}/tools/{tool_name}/test",
+    response_model=CodeToolTestResponse,
+)
+async def test_code_tool(
+    request: Request,
+    server_name: str,
+    tool_name: str,
+    payload: CodeToolTestRequest,
+) -> CodeToolTestResponse:
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, payload.tenant_id)
+    candidate_tool = {
+        "server": server_name,
+        "name": tool_name,
+        "description": "sandbox test run",
+        "raw_code": payload.raw_code,
+        "requirements": [str(req).strip() for req in (payload.requirements or []) if str(req).strip()],
+        "metadata": {
+            "action_type": payload.action_type,
+            "requires_confirmation": bool(payload.requires_confirmation),
+        },
+        "input_schema": {},
+        "scopes": [],
+    }
+    try:
+        lint_code_tool(candidate_tool)
+    except CodeToolValidationError as exc:
+        return CodeToolTestResponse(ok=False, error=str(exc))
+
+    timeout_seconds = settings.sandbox_wall_timeout_ms / 1000
+    executor = get_executor()
+    try:
+        result = await asyncio.wait_for(
+            executor.run(
+                ExecRequest(
+                    tenant_id=target_tenant,
+                    server=server_name,
+                    tool=tool_name,
+                    raw_code=payload.raw_code,
+                    requirements=candidate_tool["requirements"],
+                    arguments=payload.arguments if isinstance(payload.arguments, dict) else {},
+                    secrets={},
+                )
+            ),
+            timeout=timeout_seconds,
+        )
+        return CodeToolTestResponse(ok=True, result=result.payload, elapsed_ms=result.elapsed_ms)
+    except TimeoutError:
+        return CodeToolTestResponse(
+            ok=False,
+            error=(
+                f"Sandbox test exceeded {settings.sandbox_wall_timeout_ms}ms timeout. "
+                "Optimize your function or inputs."
+            ),
+        )
+    except SandboxTimeoutError as exc:
+        return CodeToolTestResponse(ok=False, error=str(exc))
+    except (SandboxProtocolError, SandboxError, ValueError) as exc:
+        return CodeToolTestResponse(ok=False, error=str(exc))
+
+
 @router.patch("/servers/{server_name}")
 async def patch_server(
     request: Request,
@@ -1024,6 +1097,12 @@ async def list_catalog(
             name=str(doc.get("name", "")),
             description=str(doc.get("description", "")),
             scopes=[scope for scope in doc.get("scopes", []) if isinstance(scope, str)],
+            input_schema=doc.get("input_schema")
+            if isinstance(doc.get("input_schema"), dict)
+            else {},
+            metadata=doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {},
+            transport=str((doc.get("metadata") or {}).get("transport", "")) or None,
+            action_type=str((doc.get("metadata") or {}).get("action_type", "")) or None,
             updated_at=doc.get("updated_at"),
         )
         for doc in window

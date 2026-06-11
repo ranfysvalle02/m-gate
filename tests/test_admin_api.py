@@ -9,6 +9,7 @@ from database.mongo import get_tenant_database
 from models.admin import (
     AdminSearchRequest,
     CacheMigrateRequest,
+    CodeToolTestRequest,
     EgressAllowlistUpdateRequest,
     QuotaUpdateRequest,
     SandboxSecretsUpdateRequest,
@@ -73,6 +74,57 @@ async def test_create_server_upserts_registry_and_mounts(patch_mongo, monkeypatc
     assert len(docs) == 1
     assert docs[0]["endpoint"] == "http://weather:8101/mcp"
     assert mounted and mounted[0]["server"] == "weather"
+
+
+@pytest.mark.asyncio
+async def test_code_server_save_preserves_multiple_tools(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    async def fake_provision(tenant_id: str, wait_for_queryable_indexes: bool = True):
+        return f"tenant_{tenant_id}"
+
+    class _Registry:
+        async def mount_or_update(self, doc):
+            return None
+
+        async def unmount(self, server_name, tenant_id=None):
+            return None
+
+    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin, "get_proxy_registry", lambda: _Registry())
+
+    payload = ServerUpsertRequest(
+        server="utilities",
+        transport="code",
+        metadata={"domain": "utilities", "runtime": "wasm"},
+        tools=[
+            ToolDocument(
+                server="utilities",
+                name="json_format",
+                description="pretty print json",
+                input_schema={"type": "object"},
+                scopes=["utilities"],
+                raw_code="def json_format(payload: str) -> dict:\n    return {'payload': payload}\n",
+                requirements=[],
+                metadata={"action_type": "read"},
+            ),
+            ToolDocument(
+                server="utilities",
+                name="hash_text",
+                description="hash text",
+                input_schema={"type": "object"},
+                scopes=["utilities"],
+                raw_code="def hash_text(text: str) -> dict:\n    return {'text': text}\n",
+                requirements=[],
+                metadata={"action_type": "read"},
+            ),
+        ],
+    )
+    await admin.create_or_update_server(_Req(roles=[admin.settings.platform_admin_role]), payload)
+    stored = get_tenant_database("local-dev")["routing_registry"].docs[0]
+    assert stored["transport"] == "code"
+    assert len(stored.get("tools") or []) == 2
+    assert {tool.get("name") for tool in stored.get("tools") or []} == {"json_format", "hash_text"}
 
 
 @pytest.mark.asyncio
@@ -178,6 +230,58 @@ async def test_tenant_admin_cannot_create_stdio_server(patch_mongo, monkeypatch)
         await admin.create_or_update_server(_Req(tenant_id="local-dev", roles=["admin"]), payload)
     assert exc.value.status_code == 422
     assert "Tenant servers may not use stdio" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_test_code_tool_endpoint_executes_and_returns_payload(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    class _Result:
+        payload = {"ok": True, "echo": "Lisbon"}
+        elapsed_ms = 8.4
+
+    class _Executor:
+        async def run(self, request):
+            assert request.server == "weather"
+            assert request.tool == "get_current_weather"
+            assert request.arguments["city"] == "Lisbon"
+            return _Result()
+
+    monkeypatch.setattr(admin, "get_executor", lambda: _Executor())
+
+    response = await admin.test_code_tool(
+        _Req(roles=["admin"]),
+        "weather",
+        "get_current_weather",
+        CodeToolTestRequest(
+            raw_code=(
+                "def get_current_weather(city: str, unit: str = 'celsius') -> dict:\n"
+                "    return {'city': city, 'unit': unit}\n"
+            ),
+            arguments={"city": "Lisbon"},
+            requirements=[],
+        ),
+    )
+    assert response.ok is True
+    assert response.result == {"ok": True, "echo": "Lisbon"}
+
+
+@pytest.mark.asyncio
+async def test_test_code_tool_endpoint_returns_lint_error(patch_mongo):
+    import gateway.routers.admin as admin
+
+    response = await admin.test_code_tool(
+        _Req(roles=["admin"]),
+        "weather",
+        "get_current_weather",
+        CodeToolTestRequest(
+            raw_code="import os\ndef get_current_weather(city: str) -> dict:\n    return {'city': city}\n",
+            arguments={"city": "Lisbon"},
+            requirements=[],
+        ),
+    )
+    assert response.ok is False
+    assert "not allowed" in (response.error or "").lower()
 
 
 @pytest.mark.asyncio
@@ -908,8 +1012,11 @@ async def test_tenant_can_author_code_tool_encrypted_at_rest(patch_mongo, monkey
     stored_code = stored["tools"][0]["raw_code"]
     assert stored_code.startswith(("enc::", "qe::"))
     assert _CODE_SRC not in stored_code  # ciphertext, never plaintext
-    # Code servers carry no downstream connection target.
-    assert stored["endpoint"] is None and stored["command"] is None
+    # Code servers carry no downstream connection target. The encrypted routing
+    # fields (command/env/args) are omitted entirely so Queryable Encryption never
+    # has to encrypt a null value.
+    assert stored["endpoint"] is None and stored.get("command") is None
+    assert "command" not in stored and "env" not in stored and "args" not in stored
     assert mounted and mounted[0]["transport"] == "code"
 
 

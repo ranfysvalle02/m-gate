@@ -96,10 +96,9 @@ class Settings(BaseSettings):
     gateway_instance_id: str | None = None
     watcher_resume_ttl_seconds: int = 86400
     platform_admin_role: str = "platform-admin"
-    # Code-backed tools (transport="code") can be authored, stored, and discovered
-    # in Phase 2, but are NOT executed until the Phase 3 sandbox ships. Until then
-    # tools/call against a code tool returns a clear "execution not enabled" error.
-    # Flipping this on without a sandbox would run untrusted user code in-process.
+    # Feature flag for transport="code" execution. When false, code tools remain
+    # authorable/searchable but tools/call returns a clear "disabled" error.
+    # Keep enabled only when a sandbox runtime (code_executor != "disabled") is available.
     code_tool_execution_enabled: bool = False
     # Pending approval actions expire automatically after this TTL.
     confirmation_ttl_seconds: int = 3600

@@ -335,9 +335,9 @@ async def _handle_tools_call(context: RpcContext) -> JsonRpcResponse:
 
     tool_metadata = (authz.tool or {}).get("metadata", {})
 
-    # Code-backed tools are authored and stored in Phase 2 but only executed by
-    # the Phase 3 sandbox. Until the feature flag is on, refuse the call with a
-    # clear, protocol-safe error instead of attempting a downstream proxy hop.
+    # Code-backed tools execute in the local sandbox path. When the feature flag
+    # is off, refuse the call with a clear, protocol-safe error instead of
+    # attempting any downstream proxy hop.
     is_code_tool = tool_metadata.get("transport") == "code"
     if is_code_tool and not context.settings.code_tool_execution_enabled:
         _telemetry(

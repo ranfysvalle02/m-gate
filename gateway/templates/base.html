@@ -15,9 +15,10 @@
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-  <body class="bg-slate-100 text-slate-900">
+  <body>
     <div
-      class="min-h-screen flex"
+      class="app-shell theme-dark"
+      :class="isDarkTheme() ? 'theme-dark' : 'theme-light'"
       x-data='adminConsole({
         uiPath: "{{ ui_path }}",
         defaultTenantId: "{{ default_tenant_id }}",
@@ -26,34 +27,50 @@
       })'
       x-init="init()"
     >
-      <aside class="w-64 bg-slate-900 text-slate-200 flex flex-col">
-        <div class="px-4 py-5 border-b border-slate-700">
-          <div class="text-xs uppercase tracking-wide text-slate-400">mdb-mcp-gateway</div>
-          <div class="text-lg font-semibold">Admin Console</div>
+      <aside class="sidebar-shell">
+        <div class="brand-wrap">
+          <div class="brand-chip">
+            <svg class="brand-leaf" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 1.6c1.9 3.4 5.6 6.9 5.6 12.1 0 3.3-2.2 5.7-4.8 6.4l-.5 2.3h-.6l-.5-2.3c-2.6-.7-4.8-3.1-4.8-6.4C6.4 8.5 10.1 5 12 1.6z" />
+            </svg>
+          </div>
+          <div>
+            <div class="brand-kicker">mdb-mcp-gateway</div>
+            <div class="brand-title">Admin Console</div>
+          </div>
         </div>
-        <nav class="flex-1 px-2 py-4 space-y-1">
+        <p class="brand-copy">
+          Control tenants, routes, approvals, embeddings, and live catalog health in one place.
+        </p>
+        <nav class="nav-list">
           <template x-for="item in navItems" :key="item.key">
             <button
               type="button"
-              class="w-full text-left px-3 py-2 rounded-md text-sm transition"
-              :class="activeSection === item.key ? 'bg-sky-500 text-white' : 'hover:bg-slate-800'"
+              class="nav-link"
+              :class="activeSection === item.key ? 'nav-link-active' : ''"
               @click="switchSection(item.key)"
-              x-text="item.label"
-            ></button>
+            >
+              <span class="nav-icon" x-text="item.icon"></span>
+              <span x-text="item.label"></span>
+            </button>
           </template>
         </nav>
+        <div class="sidebar-footer">
+          <span class="status-dot"></span>
+          <span>Gateway online</span>
+        </div>
       </aside>
-      <main class="flex-1 p-6 md:p-8">
-        <div class="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 p-4 flex items-center justify-between gap-4">
-          <div>
-            <div class="text-sm text-slate-500">Signed in as</div>
-            <div class="font-medium" x-text="state.whoami?.user_id || loggedInEmail"></div>
+      <main class="workspace-shell">
+        <div class="topbar-shell">
+          <div class="topbar-user">
+            <div class="topbar-label">Signed in as</div>
+            <div class="topbar-value" x-text="state.whoami?.user_id || loggedInEmail"></div>
           </div>
-          <div class="flex items-center gap-3">
-            <label class="text-sm text-slate-600" for="tenant-picker">Tenant</label>
+          <div class="topbar-actions">
+            <label class="field-label !mb-0" for="tenant-picker">Tenant</label>
             <select
               id="tenant-picker"
-              class="border border-slate-300 rounded-md px-3 py-2 text-sm"
+              class="field-input tenant-picker"
               x-model="state.tenantId"
               @change="refreshActiveSection()"
             >
@@ -61,21 +78,382 @@
                 <option :value="tenant" x-text="tenant"></option>
               </template>
             </select>
+            <button
+              type="button"
+              class="btn-secondary help-btn"
+              @click="openHelp('mcp')"
+              title="Learn: MCP & JSON-RPC"
+              aria-label="Learn about MCP and JSON-RPC"
+            >
+              <span class="help-badge" aria-hidden="true">?</span>
+              <span>Learn</span>
+            </button>
+            <button type="button" class="btn-secondary theme-toggle" @click="toggleTheme()">
+              <span class="theme-toggle-icon" x-text="isDarkTheme() ? '☀' : '☾'"></span>
+              <span x-text="isDarkTheme() ? 'Light' : 'Dark'"></span>
+            </button>
             <form :action="`${uiPath}/logout`" method="post">
-              <button
-                type="submit"
-                class="rounded-md px-3 py-2 text-sm font-medium bg-slate-900 text-white hover:bg-slate-800"
-              >
-                Logout
-              </button>
+              <button type="submit" class="btn-primary">Logout</button>
             </form>
           </div>
         </div>
         <template x-if="state.errorMessage">
-          <div class="mb-4 rounded-md border border-rose-300 bg-rose-50 text-rose-700 px-4 py-3 text-sm" x-text="state.errorMessage"></div>
+          <div class="error-banner" @click="clearError()" title="Dismiss" x-text="state.errorMessage"></div>
         </template>
-        {% block content %}{% endblock %}
+        <section class="content-shell">{% block content %}{% endblock %}</section>
       </main>
+
+      <div class="toast-stack" aria-live="polite" aria-atomic="true">
+        <template x-for="toast in state.toasts" :key="toast.id">
+          <div
+            class="toast"
+            :class="`toast-${toast.type}`"
+            role="status"
+            @click="dismissToast(toast.id)"
+            x-transition:enter="toast-enter-active"
+            x-transition:enter-start="toast-enter-from"
+            x-transition:enter-end="toast-enter-to"
+            x-transition:leave="toast-leave-active"
+            x-transition:leave-start="toast-leave-from"
+            x-transition:leave-end="toast-leave-to"
+          >
+            <span class="toast-icon" x-text="toast.icon"></span>
+            <span class="toast-msg" x-text="toast.message"></span>
+          </div>
+        </template>
+      </div>
+
+      <!-- ============================ MCP / JSON-RPC guide ===================== -->
+      <div
+        class="modal-overlay"
+        x-show="state.helpOpen"
+        x-cloak
+        @click.self="closeHelp()"
+        @keydown.escape.window="closeHelp()"
+        x-transition:enter="modal-overlay-enter-active"
+        x-transition:enter-start="modal-overlay-enter-from"
+        x-transition:enter-end="modal-overlay-enter-to"
+        x-transition:leave="modal-overlay-leave-active"
+        x-transition:leave-start="modal-overlay-leave-from"
+        x-transition:leave-end="modal-overlay-leave-to"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="help-modal-title"
+      >
+        <div
+          class="modal-card"
+          x-show="state.helpOpen"
+          x-transition:enter="modal-card-enter-active"
+          x-transition:enter-start="modal-card-enter-from"
+          x-transition:enter-end="modal-card-enter-to"
+        >
+          <div class="modal-header">
+            <div>
+              <div class="modal-eyebrow">Protocol guide</div>
+              <h2 class="modal-title" id="help-modal-title">MCP &amp; JSON-RPC, explained</h2>
+              <p class="modal-subtitle">
+                How the Model Context Protocol lets AI assistants use tools and data — and how every
+                message is a tiny JSON-RPC 2.0 object. Written for newcomers and integrators alike.
+              </p>
+            </div>
+            <button type="button" class="modal-close" @click="closeHelp()" title="Close (Esc)" aria-label="Close">✕</button>
+          </div>
+
+          <div class="modal-tabs" role="tablist">
+            <button type="button" class="modal-tab" :class="state.helpTab === 'mcp' ? 'modal-tab-active' : ''" @click="state.helpTab = 'mcp'">🧩 What is MCP</button>
+            <button type="button" class="modal-tab" :class="state.helpTab === 'jsonrpc' ? 'modal-tab-active' : ''" @click="state.helpTab = 'jsonrpc'">📨 JSON-RPC 2.0</button>
+            <button type="button" class="modal-tab" :class="state.helpTab === 'lifecycle' ? 'modal-tab-active' : ''" @click="state.helpTab = 'lifecycle'">🔄 Lifecycle &amp; methods</button>
+            <button type="button" class="modal-tab" :class="state.helpTab === 'examples' ? 'modal-tab-active' : ''" @click="state.helpTab = 'examples'">⚡ Examples</button>
+          </div>
+
+          <div class="modal-body">
+            <!-- TAB: What is MCP -->
+            <div x-show="state.helpTab === 'mcp'">
+              <div class="tldr">
+                <span aria-hidden="true">💡</span>
+                <span><strong>In one line:</strong> MCP (Model Context Protocol) is an open standard — think “USB-C for AI” — that lets an AI assistant securely discover and use external tools and data through one common interface.</span>
+              </div>
+
+              <h4>The three roles</h4>
+              <ul>
+                <li><strong>Host</strong> — the AI app a person uses (an IDE, chat app, or agent). It runs one or more clients.</li>
+                <li><strong>Client</strong> — lives inside the host and holds a 1:1 connection to a single server.</li>
+                <li><strong>Server</strong> — exposes capabilities: <code>tools</code> (actions), <code>resources</code> (data), and <code>prompts</code> (templates).</li>
+              </ul>
+
+              <h4>How the pieces talk</h4>
+              <p>Every message is a <strong>JSON-RPC 2.0</strong> object carried over a <strong>transport</strong>:</p>
+              <ul>
+                <li><strong>stdio</strong> — the host launches the server as a subprocess and exchanges messages over stdin/stdout. Great for local tools.</li>
+                <li><strong>Streamable HTTP</strong> — the server is a web endpoint and can stream responses over Server-Sent Events. Great for remote, shared servers.</li>
+              </ul>
+
+              <h4>Where this gateway fits</h4>
+              <p>This is a <strong>multi-tenant MCP front door</strong>. Instead of wiring each assistant to dozens of servers, point it here once. It adds:</p>
+              <ul>
+                <li><strong>One endpoint</strong> aggregating many MCP servers, with per-tenant isolation and RBAC.</li>
+                <li><strong>Semantic discovery</strong> — <code>tools/search</code> ranks the right tool out of a large catalog.</li>
+                <li><strong>Guardrails &amp; approvals</strong> for sensitive actions, plus full telemetry.</li>
+                <li><strong>Code tools</strong> — author a Python function that runs sandboxed in WebAssembly and is exposed as a normal MCP tool.</li>
+              </ul>
+            </div>
+
+            <!-- TAB: JSON-RPC -->
+            <div x-show="state.helpTab === 'jsonrpc'">
+              <div class="tldr">
+                <span aria-hidden="true">💡</span>
+                <span><strong>In one line:</strong> JSON-RPC 2.0 is a tiny convention for “call a method, get a result.” Each message is one JSON object that is a <strong>request</strong>, a <strong>response</strong>, or a <strong>notification</strong>.</span>
+              </div>
+
+              <h4>The four message shapes</h4>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">Request (expects a reply)</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'Request')">Copy</button>
+                </div>
+                <pre>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/list",
+  "params": {}
+}</pre>
+              </div>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">Response · success</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'Success response')">Copy</button>
+                </div>
+                <pre>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": { "tools": [] }
+}</pre>
+              </div>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">Response · error</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'Error response')">Copy</button>
+                </div>
+                <pre>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": { "code": -32601, "message": "Method not found" }
+}</pre>
+              </div>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">Notification · no id, no reply</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'Notification')">Copy</button>
+                </div>
+                <pre>{
+  "jsonrpc": "2.0",
+  "method": "notifications/initialized"
+}</pre>
+              </div>
+
+              <h4>Field reference</h4>
+              <table class="spec-table">
+                <thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
+                <tbody>
+                  <tr><td>jsonrpc</td><td>string</td><td>Always <code>"2.0"</code>.</td></tr>
+                  <tr><td>id</td><td>string / number</td><td>Correlates a response to its request. Omit it to send a notification.</td></tr>
+                  <tr><td>method</td><td>string</td><td>The operation to invoke, e.g. <code>tools/call</code>.</td></tr>
+                  <tr><td>params</td><td>object</td><td>Arguments for the method (an object in MCP).</td></tr>
+                  <tr><td>result</td><td>any</td><td>Present on success — mutually exclusive with <code>error</code>.</td></tr>
+                  <tr><td>error</td><td>object</td><td>Present on failure: <code>{ code, message, data? }</code>.</td></tr>
+                </tbody>
+              </table>
+
+              <h4>Error codes</h4>
+              <table class="spec-table">
+                <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+                <tbody>
+                  <tr><td>-32700</td><td>Parse error — invalid JSON.</td></tr>
+                  <tr><td>-32600</td><td>Invalid Request.</td></tr>
+                  <tr><td>-32601</td><td>Method not found.</td></tr>
+                  <tr><td>-32602</td><td>Invalid params.</td></tr>
+                  <tr><td>-32603</td><td>Internal error.</td></tr>
+                  <tr><td>-32000…-32099</td><td>Server-defined. This gateway uses <code>-32001</code> unauthorized, <code>-32003</code> forbidden, <code>-32029</code> rate-limited, <code>-32004</code> upstream timeout.</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- TAB: Lifecycle & methods -->
+            <div x-show="state.helpTab === 'lifecycle'">
+              <div class="tldr">
+                <span aria-hidden="true">💡</span>
+                <span><strong>In one line:</strong> A session always begins with an <code>initialize</code> handshake; then the client discovers and uses the server’s primitives.</span>
+              </div>
+
+              <h4>Session lifecycle</h4>
+              <div class="flow">
+                <div class="flow-step">
+                  <span class="flow-num">1</span>
+                  <div><strong>Client → <code>initialize</code></strong><p>Sends its <code>protocolVersion</code>, its <code>capabilities</code>, and <code>clientInfo</code>.</p></div>
+                </div>
+                <div class="flow-step">
+                  <span class="flow-num">2</span>
+                  <div><strong>Server → result</strong><p>Replies with its <code>protocolVersion</code>, <code>capabilities</code>, and <code>serverInfo</code>.</p></div>
+                </div>
+                <div class="flow-step">
+                  <span class="flow-num">3</span>
+                  <div><strong>Client → <code>notifications/initialized</code></strong><p>Confirms the handshake; normal operation may begin.</p></div>
+                </div>
+                <div class="flow-step">
+                  <span class="flow-num">4</span>
+                  <div><strong>Operate</strong><p>List/call tools, read resources, get prompts. Either side may send notifications.</p></div>
+                </div>
+              </div>
+
+              <h4>Common protocol methods</h4>
+              <table class="spec-table">
+                <thead><tr><th>Method</th><th>Purpose</th></tr></thead>
+                <tbody>
+                  <tr><td>initialize</td><td>Negotiate version &amp; capabilities (the first call).</td></tr>
+                  <tr><td>tools/list</td><td>Discover available tools and their JSON-Schema inputs.</td></tr>
+                  <tr><td>tools/call</td><td>Execute a tool by name with arguments.</td></tr>
+                  <tr><td>resources/list · resources/read</td><td>Browse and fetch data resources.</td></tr>
+                  <tr><td>prompts/list · prompts/get</td><td>Browse and render prompt templates.</td></tr>
+                  <tr><td>ping</td><td>Liveness check.</td></tr>
+                  <tr><td>notifications/tools/list_changed</td><td>Server → client: “the catalog changed, re-list.”</td></tr>
+                </tbody>
+              </table>
+
+              <h4>This gateway’s methods</h4>
+              <p>The gateway speaks a focused subset at <code>POST /rpc</code>:</p>
+              <table class="spec-table">
+                <thead><tr><th>Method</th><th>Params</th></tr></thead>
+                <tbody>
+                  <tr><td>tools/list</td><td>Optional <code>query</code> returns a ranked shortlist instead of the full catalog.</td></tr>
+                  <tr><td>tools/call</td><td><code>server</code>, <code>name</code>, <code>arguments</code>, optional <code>confirmation_id</code>.</td></tr>
+                  <tr><td>tools/search</td><td><code>query</code>, <code>limit</code>, <code>mode</code> (<code>hybrid</code> · <code>vector</code> · <code>text</code>).</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- TAB: Examples -->
+            <div x-show="state.helpTab === 'examples'">
+              <div class="tldr">
+                <span aria-hidden="true">💡</span>
+                <span><strong>Copy any message below.</strong> The first set is canonical MCP; the last shows this gateway’s <code>/rpc</code> endpoint.</span>
+              </div>
+
+              <h4>1 · Initialize handshake</h4>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">initialize · request</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'initialize request')">Copy</button>
+                </div>
+                <pre>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2025-06-18",
+    "capabilities": { "tools": {} },
+    "clientInfo": { "name": "demo-client", "version": "1.0.0" }
+  }
+}</pre>
+              </div>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">initialize · response</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'initialize response')">Copy</button>
+                </div>
+                <pre>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": "2025-06-18",
+    "capabilities": { "tools": { "listChanged": true } },
+    "serverInfo": { "name": "mdb-mcp-gateway", "version": "1.0.0" }
+  }
+}</pre>
+              </div>
+
+              <h4>2 · Discover tools</h4>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">tools/list · response</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'tools/list response')">Copy</button>
+                </div>
+                <pre>{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "tools": [
+      {
+        "name": "get_weather",
+        "description": "Current weather for a city",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "city": { "type": "string" } },
+          "required": ["city"]
+        }
+      }
+    ]
+  }
+}</pre>
+              </div>
+
+              <h4>3 · Call a tool</h4>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">tools/call · request</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'tools/call request')">Copy</button>
+                </div>
+                <pre>{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "get_weather",
+    "arguments": { "city": "Lisbon" }
+  }
+}</pre>
+              </div>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">tools/call · result</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'tools/call result')">Copy</button>
+                </div>
+                <pre>{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "content": [
+      { "type": "text", "text": "Lisbon: 24°C, clear skies" }
+    ],
+    "isError": false
+  }
+}</pre>
+              </div>
+
+              <h4>4 · Try it against this gateway</h4>
+              <p>The gateway exposes JSON-RPC at <code>POST /rpc</code>. It needs an authenticated session (cookie or bearer) and a selected tenant — and note its <code>tools/call</code> takes both <code>server</code> and <code>name</code>.</p>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">curl · /rpc</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'curl example')">Copy</button>
+                </div>
+                <pre>curl -X POST http://localhost:8000/rpc \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "server": "weather",
+      "name": "get_weather",
+      "arguments": { "city": "Lisbon" }
+    }
+  }'</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </body>
 </html>

@@ -60,46 +60,6 @@ services:
       - kms_config:/kms-config
     restart: "no"
 
-  weather:
-    build:
-      context: .
-    command: ["uvicorn", "servers.weather.server:app", "--host", "0.0.0.0", "--port", "8101"]
-    depends_on:
-      mongodb:
-        condition: service_healthy
-    environment:
-      MONGODB_URI: mongodb://mongodb:27017/?directConnection=true
-      MONGODB_DB_NAME: mcp_gateway
-    # The base image HEALTHCHECK probes :8000; this server listens on :8101, so
-    # override it with a port-listen check to avoid a false "unhealthy" status.
-    healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8101), 2).close()"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    ports:
-      - "8101:8101"
-
-  orders:
-    build:
-      context: .
-    command: ["uvicorn", "servers.orders.server:app", "--host", "0.0.0.0", "--port", "8102"]
-    depends_on:
-      mongodb:
-        condition: service_healthy
-    environment:
-      MONGODB_URI: mongodb://mongodb:27017/?directConnection=true
-      MONGODB_DB_NAME: mcp_gateway
-    healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8102), 2).close()"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    ports:
-      - "8102:8102"
-
   bootstrap:
     build:
       context: .
@@ -113,10 +73,6 @@ services:
         condition: service_healthy
       kms-init:
         condition: service_completed_successfully
-      weather:
-        condition: service_started
-      orders:
-        condition: service_started
     environment:
       MONGODB_URI: mongodb://mongodb:27017/?directConnection=true
       MONGODB_DB_NAME: mcp_gateway
@@ -140,6 +96,7 @@ services:
       EMBEDDING_SECRET_FILE: /gateway-secrets/embedding_secret
       TENANT_DB_PREFIX: tenant_
       FUSION_STRATEGY: rank_fusion
+      CODE_TOOL_EXECUTION_ENABLED: "true"
       # Tenant embedding API keys are wrapped with per-tenant DEKs, each wrapped
       # by this shared CMK via LocalStack KMS (or AWS KMS in non-local envs).
       QE_ENABLED: "true"
@@ -173,10 +130,6 @@ services:
         condition: service_healthy
       kms-init:
         condition: service_completed_successfully
-      weather:
-        condition: service_started
-      orders:
-        condition: service_started
       bootstrap:
         condition: service_completed_successfully
     environment:
@@ -206,6 +159,8 @@ services:
       JWKS_LOCAL_PATH: /app/config/dev-jwks.json
       JWKS_CACHE_TTL_SECONDS: 300
       FUSION_STRATEGY: rank_fusion
+      # Local demo defaults to running transport=code tools inside wasm sandbox.
+      CODE_TOOL_EXECUTION_ENABLED: "true"
       ENABLE_METRICS: "true"
       LOG_JSON: "true"
       REQUEST_MAX_BYTES: 262144

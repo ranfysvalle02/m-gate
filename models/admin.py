@@ -52,6 +52,22 @@ class ServerPatchRequest(BaseModel):
     tools: list[ToolDocument] | None = None
 
 
+class CodeToolTestRequest(BaseModel):
+    tenant_id: str | None = None
+    raw_code: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    requirements: list[str] = Field(default_factory=list)
+    action_type: Literal["read", "write", "destructive"] = "read"
+    requires_confirmation: bool = False
+
+
+class CodeToolTestResponse(BaseModel):
+    ok: bool
+    result: dict[str, Any] | None = None
+    elapsed_ms: float | None = None
+    error: str | None = None
+
+
 class CacheMigrateRequest(BaseModel):
     tenant_id: str | None = None
     mode: Literal["status", "purge", "reembed"] = "status"
@@ -201,6 +217,10 @@ class CatalogItemResponse(BaseModel):
     name: str
     description: str = ""
     scopes: list[str] = Field(default_factory=list)
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    transport: str | None = None
+    action_type: str | None = None
     updated_at: datetime | None = None
 
 

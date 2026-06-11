@@ -146,6 +146,36 @@ fusion was computed:
 > runbook), **[docs/API.md](docs/API.md)** (REST + JSON-RPC reference), and
 > **[docs/QUERYABLE-ENCRYPTION.md](docs/QUERYABLE-ENCRYPTION.md)** (QE setup and operations).
 
+### Demo in 60s -> production in 5 steps
+
+1. **Start the stack**
+   ```bash
+   docker compose up --build
+   ```
+2. **Verify gateway health**
+   ```bash
+   curl http://localhost:8000/health
+   ```
+3. **Open the Admin Studio**
+   - `http://localhost:8000/ui` (`demo@demo.com` / `demo`)
+4. **Call seeded tools**
+   - Code servers: `weather`, `orders`, `utilities`
+   - Public server: `deepwiki` (requires outbound HTTPS to `mcp.deepwiki.com`)
+5. **Graduate to production posture**
+   - Use the hardening path in this README, then follow
+     [DEPLOYMENT.md](DEPLOYMENT.md), [PRODUCTION.md](PRODUCTION.md),
+     [SECURITY.md](SECURITY.md), and [NETWORK-SECURITY.md](NETWORK-SECURITY.md).
+
+Important first-run note:
+
+- Bootstrap now performs an **embedding preflight** and fails loudly if your
+  embedding provider is unreachable.
+- With default Compose settings this means Ollama must be running on your host
+  and `nomic-embed-text` must be pulled before bootstrap:
+  ```bash
+  ollama pull nomic-embed-text
+  ```
+
 This repository now includes a working end-to-end MCP Gateway with:
 
 - FastAPI + FastMCP gateway mounted at `http://localhost:8000/mcp`
@@ -163,7 +193,7 @@ This repository now includes a working end-to-end MCP Gateway with:
 - **Layered guardrails**: regex floor + optional semantic injection classifier over a versioned `guardrail_signatures` vector corpus, plus optional Presidio NER redaction
 - **Semantic cache model provenance**: cache entries are stamped with `embedding_model` / `embedding_dim` / `embedding_version`, with version-aware lookups and migration tooling
 - Default Ollama embeddings (`nomic-embed-text`) through `http://host.docker.internal:11434`
-- Demo downstream MCP servers: weather and orders
+- Demo defaults: code-powered `weather`, `orders`, and `utilities` servers (wasm sandbox execution) plus a prewired public `deepwiki` server
 - **Observability**: request IDs, JSON logs, Prometheus `/metrics`, prebuilt Prometheus alert rules, a provisioned Grafana dashboard (`http://localhost:3000`), OpenTelemetry tracing (`ENABLE_TRACING=true`) with spans around RPC handling and downstream hops, and health split (`/health/live`, `/health/ready`)
 - **Delivery artifacts**: k8s manifests, Helm chart, CI workflow (lint + format + types + 82% coverage gate), pre-commit, Ruff, and MyPy configuration
 
@@ -197,6 +227,11 @@ The KMS key ARN is written to a shared volume and loaded through
 Compose also runs `secrets-init` once and writes stable file-backed secrets for
 `EMBEDDING_SECRET_FILE` and `ADMIN_SESSION_SECRET_FILE` into the
 `gateway_secrets` volume (instead of relying on fallback secrets).
+The demo stack enables `CODE_TOOL_EXECUTION_ENABLED=true`, so seeded code tools
+run immediately inside the wasm sandbox.
+Queryable Encryption is still demonstrated through encrypted routing fields and
+authored function source/secrets at rest — without the old non-functional
+`secure-stdio` fixture server.
 
 To use a local master key instead of LocalStack KMS:
 
@@ -581,9 +616,9 @@ actually needed, so steady-state calls never contend on the broker. Tokens are n
 logged. Configure via `DOWNSTREAM_JWT_*` and `DOWNSTREAM_TOKEN_*` settings; the bundled
 dev key is rejected in `ENVIRONMENT=production` so it can never sign real traffic.
 
-For the bundled demo servers (`servers/weather`, `servers/orders`), enable bearer
-verification with `DOWNSTREAM_JWT_VERIFY=true` (and optional `DOWNSTREAM_JWKS_PATH`,
-`DOWNSTREAM_JWT_ISSUER`, `DOWNSTREAM_JWT_AUDIENCE`).
+For downstream HTTP/SSE integrations (for example `deepwiki`), bearer verification
+is configured per target server and can be tightened with `DOWNSTREAM_JWT_*`
+settings (issuer, audience, JWKS/private-key inputs).
 
 ### From the blog post to this repo
 
