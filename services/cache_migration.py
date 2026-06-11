@@ -7,6 +7,7 @@ from config.settings import Settings, get_settings
 from database.mongo import get_tenant_database
 from services.cache_manager import SemanticCacheManager, semantic_cache_index_name
 from services.embeddings import EmbeddingService, embedding_version_for, get_embedding_service
+from services.metrics import observe_cache_event
 
 MigrationMode = Literal["status", "purge", "reembed"]
 
@@ -49,6 +50,7 @@ class SemanticCacheMigrationService:
             "purged_entries": 0,
             "reembedded_entries": 0,
             "skipped_entries": 0,
+            "remaining_entries": 0,
         }
         for tenant_id in tenant_ids:
             summary = await self._migrate_tenant(
@@ -56,6 +58,7 @@ class SemanticCacheMigrationService:
                 mode=mode,
                 batch_size=batch_size,
             )
+            observe_cache_event(f"migrate_{mode}")
             summaries.append(summary)
             for key in totals:
                 totals[key] += int(summary.get(key, 0))
@@ -98,6 +101,7 @@ class SemanticCacheMigrationService:
             "purged_entries": 0,
             "reembedded_entries": 0,
             "skipped_entries": 0,
+            "remaining_entries": len(stale_docs),
         }
         if mode == "status":
             return summary
@@ -106,6 +110,7 @@ class SemanticCacheMigrationService:
             summary["purged_entries"] = await self._purge_stale_entries(
                 collection, stale_docs=stale_docs
             )
+            summary["remaining_entries"] = max(0, summary["stale_entries"] - summary["purged_entries"])
             return summary
 
         reembedded, skipped = await self._reembed_stale_entries(
@@ -116,6 +121,7 @@ class SemanticCacheMigrationService:
         )
         summary["reembedded_entries"] = reembedded
         summary["skipped_entries"] = skipped
+        summary["remaining_entries"] = max(0, summary["stale_entries"] - reembedded - skipped)
         return summary
 
     async def _semantic_cache_index_names(self, collection: Any) -> set[str]:
@@ -149,23 +155,26 @@ class SemanticCacheMigrationService:
     ) -> tuple[int, int]:
         reembedded = 0
         skipped = 0
-        for doc in stale_docs[: max(1, batch_size)]:
-            tool_name = doc.get("tool_name")
-            arguments = doc.get("arguments")
-            if not isinstance(tool_name, str) or not isinstance(arguments, dict):
-                skipped += 1
-                continue
+        chunk_size = max(1, batch_size)
+        for idx in range(0, len(stale_docs), chunk_size):
+            chunk = stale_docs[idx : idx + chunk_size]
+            for doc in chunk:
+                tool_name = doc.get("tool_name")
+                arguments = doc.get("arguments")
+                if not isinstance(tool_name, str) or not isinstance(arguments, dict):
+                    skipped += 1
+                    continue
 
-            ttl_seconds = self._remaining_ttl_seconds(doc.get("expires_at"))
-            await self.cache_manager.store(
-                tool_name,
-                arguments,
-                doc.get("result"),
-                tenant_id=tenant_id,
-                ttl_seconds=ttl_seconds,
-            )
-            await collection.delete_many(self._stale_doc_query(doc))
-            reembedded += 1
+                ttl_seconds = self._remaining_ttl_seconds(doc.get("expires_at"))
+                await self.cache_manager.store(
+                    tool_name,
+                    arguments,
+                    doc.get("result"),
+                    tenant_id=tenant_id,
+                    ttl_seconds=ttl_seconds,
+                )
+                await collection.delete_many(self._stale_doc_query(doc))
+                reembedded += 1
 
         return reembedded, skipped
 

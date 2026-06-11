@@ -151,6 +151,15 @@ class Settings(BaseSettings):
     # Directory for the serialized, compiled python.wasm module so respawned
     # workers warm up via deserialize instead of recompiling. Empty => disabled.
     sandbox_module_cache_path: str = "vendor/.wasm-cache"
+    # Enable the tenant-scoped virtual database bridge (`context.db`) for code
+    # tools. The sandbox remains network-isolated; DB access is relayed through
+    # the host process and scoped to the caller tenant.
+    sandbox_db_bridge_enabled: bool = False
+    # Hard bounds for host-side DB RPCs initiated by a single code-tool run.
+    sandbox_db_max_docs: int = 100
+    sandbox_db_query_timeout_ms: int = 1000
+    sandbox_db_max_calls_per_invocation: int = 25
+    sandbox_db_max_result_bytes: int = 131072
     # When a request arrives for a tenant that has never been provisioned, create
     # its database + indexes on first use. Disable in environments where tenant
     # ids come from untrusted callers and provisioning must be an explicit step.

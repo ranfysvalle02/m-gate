@@ -199,9 +199,9 @@ per tenant, exactly which hosts/networks the gateway may reach:
   ignored so an over-limit write fails the *job* not the worker, and a descriptor cap), and
   any worker that times out, crashes, overruns the frame buffer, or hits an unexpected error
   is **always** killed and replaced — never returned to serve a later caller.
-- **Tenant secret injection:** per-tenant sandbox secrets are stored encrypted in the
-  tenant DB (`sandbox_secrets`) and injected only into the sandbox job payload, never
-  into gateway process environment variables.
+- **Server env injection:** per-server code-tool env values are stored encrypted in the
+  tenant DB (`server_secrets`) and injected into sandbox runtime as `context.env`,
+  never into gateway process environment variables.
 - **Dependency installation is deny-by-default:** a code tool's pinned `requirements`
   are installed with host `pip` *before* the wasm jail, so a source build could execute
   `setup.py` on the host. The executor therefore (a) refuses any distribution not in the

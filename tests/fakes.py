@@ -91,9 +91,35 @@ class FakeCollection:
                 return dict(doc)
         return None
 
-    def find(self, query: dict[str, Any] | None = None) -> _FakeCursor:
+    def find(
+        self, query: dict[str, Any] | None = None, projection: dict[str, Any] | None = None
+    ) -> _FakeCursor:
         query = query or {}
-        return _FakeCursor([dict(d) for d in self.docs if _matches(d, query)])
+        docs = [dict(d) for d in self.docs if _matches(d, query)]
+        if isinstance(projection, dict) and projection:
+            keys = {k for k, v in projection.items() if v}
+            if keys:
+                docs = [{k: d.get(k) for k in keys if k in d} for d in docs]
+        return _FakeCursor(docs)
+
+    async def count_documents(self, query: dict[str, Any] | None = None, **_kwargs: Any) -> int:
+        query = query or {}
+        return len([d for d in self.docs if _matches(d, query)])
+
+    async def distinct(self, field: str, query: dict[str, Any] | None = None, **_kwargs: Any) -> list[Any]:
+        query = query or {}
+        values = []
+        seen = set()
+        for doc in self.docs:
+            if not _matches(doc, query):
+                continue
+            value = doc.get(field)
+            marker = repr(value)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            values.append(value)
+        return values
 
     async def insert_one(self, doc: dict[str, Any]) -> Any:
         self.docs.append(dict(doc))
@@ -307,6 +333,9 @@ class FakeMongoClient:
         if name not in self._databases:
             self._databases[name] = FakeDatabase()
         return self._databases[name]
+
+    async def drop_database(self, name: str) -> None:
+        self._databases.pop(name, None)
 
 
 class FakeEmbeddingService:

@@ -96,6 +96,34 @@ async def test_cache_migration_reembed_updates_stale_entries(patch_mongo, fake_e
     out = await service.migrate(tenant_ids=[tenant], mode="reembed", batch_size=10)
     summary = out["tenants"][0]
     assert summary["reembedded_entries"] == 1
+    assert summary["remaining_entries"] == 0
     versions = {doc.get("embedding_version") for doc in coll.docs}
     assert service.active_embedding_version in versions
     assert "prev-model:8" not in versions
+
+
+@pytest.mark.asyncio
+async def test_cache_migration_reembed_processes_all_stale_docs_over_batch_size(
+    patch_mongo, fake_embeddings
+):
+    service = SemanticCacheMigrationService(embedding_service=fake_embeddings)
+    tenant = "local-dev"
+    coll = get_tenant_database(tenant)["semantic_cache"]
+    for idx in range(5):
+        coll.docs.append(
+            _seed_cache_doc(
+                tenant_id=tenant,
+                tool_name="find_order",
+                version="prev-model:8",
+                suffix=f"stale-{idx}",
+            )
+        )
+
+    out = await service.migrate(tenant_ids=[tenant], mode="reembed", batch_size=2)
+    summary = out["tenants"][0]
+    assert summary["stale_entries"] == 5
+    assert summary["reembedded_entries"] == 5
+    assert summary["skipped_entries"] == 0
+    assert summary["remaining_entries"] == 0
+    assert out["totals"]["reembedded_entries"] == 5
+    assert out["totals"]["remaining_entries"] == 0

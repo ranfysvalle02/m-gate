@@ -47,13 +47,13 @@ require the `platform-admin` role.
 - **Tenants**
   - `POST /admin/tenants`
   - `GET /admin/tenants`
-  - `GET /admin/tenants/{tenant_id}/sandbox-secrets` — list configured secret keys
-    for code-tool sandbox execution (values are always redacted).
-  - `PUT /admin/tenants/{tenant_id}/sandbox-secrets` — upsert per-tenant sandbox
-    secrets (`{"values":{"KEY":"value"}}`, empty string clears a key). Platform-admin
-    may target any tenant; tenant-admins are scoped to their own tenant.
+  - `DELETE /admin/tenants/{tenant_id}` — permanently deprovision a tenant
+    (drops tenant DB and removes control-plane tenant record); platform-admin only.
   - `GET /admin/tenants/{tenant_id}/usage` — per-period metered usage (`calls`,
     `sandbox_ms`) with effective quota and remaining budget.
+  - `GET /admin/tenants/{tenant_id}/usage/events` — per-period billing-event
+    rollup (`totals_by_kind`) plus recent raw events (`kind`, `amount`, `ts`,
+    metadata) for auditing and cost attribution.
   - `PUT /admin/tenants/{tenant_id}/quota` — set tenant quota ceilings
     (`calls_limit`, `sandbox_seconds_limit`); platform-admin only.
   - `POST /admin/tenants/{tenant_id}/suspend` — abuse kill-switch: block the tenant
@@ -85,6 +85,11 @@ require the `platform-admin` role.
   - `GET /admin/servers/{server_name}`
   - `PATCH /admin/servers/{server_name}`
   - `DELETE /admin/servers/{server_name}`
+  - `GET /admin/servers/{server_name}/env` — list configured per-server env keys
+    for code-tool sandbox execution (values are always redacted; optional `tenant_id` query).
+  - `PUT /admin/servers/{server_name}/env` — upsert per-server encrypted env
+    values (`{"values":{"KEY":"value"}}`, empty string clears a key). Platform-admin
+    may target any tenant via `tenant_id`; tenant-admins are scoped to their own tenant.
   - **Code-backed tools** (`transport="code"`): a server may host user-authored
     Python functions instead of a downstream endpoint. Each entry in `tools[]`
     carries `raw_code`, pinned `requirements[]` (`name==version`), and
@@ -95,7 +100,16 @@ require the `platform-admin` role.
     `GET /admin/servers/{server_name}` decrypts it for the editor. Code tools are
     discoverable via `tools/list`/search. When `CODE_TOOL_EXECUTION_ENABLED=true`,
     `tools/call` executes them in the WebAssembly sandbox runtime (`CODE_EXECUTOR=wasm`);
-    when false, the call returns `"code_execution_not_enabled"`.
+    when false, the call returns `"code_execution_not_enabled"`. Runtime now
+    supports a tenant-scoped virtual DB bridge (`context.db[...]`) that relays
+    through the host process (sandbox remains network-isolated), with host-side
+    operation allowlists enforced by `metadata.action_type`.
+  - `GET /admin/explore/collections` — list tenant collections (excluding
+    `system.*`) for the code-tool authoring assistant.
+  - `POST /admin/explore/sample` — return bounded sample docs + inferred field
+    types + a generated `context.db[...]` snippet.
+  - `POST /admin/explore/query` — execute read-only `find` / `aggregate` via the
+    same host-side bridge policy and return results + copy/paste snippet.
 - **Users** (admin principal required; tenant-admins are scoped to their own tenant)
   - `POST /admin/users` — create a user (`email`, `password`, optional `tenant_id`,
     `roles`, `scopes`, `status`). Only `platform-admin` may grant the `platform-admin`
@@ -111,7 +125,7 @@ require the `platform-admin` role.
     `new_password`); unavailable for the env bootstrap admin.
 - **Catalog and telemetry**
   - `GET /admin/catalog`
-  - `POST /admin/search`
+  - `POST /admin/search` (optional `server` filter for selected-server workspace search)
   - `GET /admin/telemetry`
   - `GET /admin/stats`
 - **Identity**
@@ -146,6 +160,11 @@ Supported methods:
 - `tools/list`
 - `tools/search`
 - `tools/call`
+
+Server-scope authorization model:
+
+- discovery (`tools/list`, `tools/search`) is filtered by `server:<name>` scopes
+- invocation (`tools/call`) requires `server:<server>` or `server:*` in caller scopes
 
 ### `initialize`
 
@@ -201,7 +220,13 @@ For `transport="code"` catalog entries:
 - `CODE_TOOL_EXECUTION_ENABLED=false` -> JSON-RPC error
   `{"reason":"code_execution_not_enabled"}`.
 - `CODE_TOOL_EXECUTION_ENABLED=true` + `CODE_EXECUTOR=wasm` -> executes inside a
-  throwaway WebAssembly sandbox worker with per-call CPU/memory/wall/output limits.
+  WebAssembly sandbox worker with per-call CPU/memory/wall/output limits
+  (throwaway worker or warm pooled worker depending on `SANDBOX_POOL_SIZE`).
+- When `SANDBOX_DB_BRIDGE_ENABLED=true`, code tools can call `context.db` from
+  sandboxed Python. DB operations remain tenant-scoped and host-enforced by
+  action type (`read`/`write`/`destructive`).
+- Per-server encrypted env values are injected into sandboxed code as
+  `context.env["KEY"]` / `context.env.get("KEY")`.
 - For any tool call, tenant quota is enforced in-band. When exceeded, `tools/call`
   returns JSON-RPC `RATE_LIMITED` (`-32029`) with
   `{"reason":"quota_exceeded","usage":...,"quota":...}`.

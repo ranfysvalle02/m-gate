@@ -37,8 +37,30 @@ def _normalize_scopes(allowed_scopes: list[str] | None) -> list[str] | None:
     return cleaned or None
 
 
-def _scope_filter(scopes: list[str]) -> dict[str, Any]:
-    return {"scopes": {"$in": scopes}}
+def _scope_filter(scopes: list[str], *, server: str | None = None) -> dict[str, Any]:
+    match: dict[str, Any] = {}
+    tool_scopes = [scope for scope in scopes if not scope.startswith("server:")]
+    if tool_scopes:
+        match["scopes"] = {"$in": tool_scopes}
+
+    if server:
+        match["server"] = server
+        return match
+
+    if "server:*" in scopes:
+        return match
+
+    allowed_servers = sorted(
+        {
+            scope.split(":", 1)[1]
+            for scope in scopes
+            if scope.startswith("server:")
+            and scope != "server:*"
+            and scope.split(":", 1)[1]
+        }
+    )
+    match["server"] = {"$in": allowed_servers} if allowed_servers else {"$in": []}
+    return match
 
 
 def build_vector_pipeline(
@@ -47,6 +69,7 @@ def build_vector_pipeline(
     num_candidates: int,
     output_limit: int,
     allowed_scopes: list[str] | None = None,
+    server: str | None = None,
 ) -> list[dict[str, Any]]:
     """Semantic-only retrieval ($vectorSearch). Great at intent, blind to exact tokens."""
     scopes = _normalize_scopes(allowed_scopes)
@@ -58,7 +81,9 @@ def build_vector_pipeline(
         "limit": output_limit,
     }
     if scopes is not None:
-        vector_stage["filter"] = _scope_filter(scopes)
+        vector_stage["filter"] = _scope_filter(scopes, server=server)
+    elif server:
+        vector_stage["filter"] = {"server": server}
     return [
         {"$vectorSearch": vector_stage},
         {"$project": {**_BASE_PROJECTION, "score": {"$meta": "vectorSearchScore"}}},
@@ -70,6 +95,7 @@ def build_text_pipeline(
     query: str,
     output_limit: int,
     allowed_scopes: list[str] | None = None,
+    server: str | None = None,
 ) -> list[dict[str, Any]]:
     """Lexical-only retrieval ($search / BM25). Great at exact tokens, blind to intent."""
     scopes = _normalize_scopes(allowed_scopes)
@@ -85,7 +111,9 @@ def build_text_pipeline(
         },
     ]
     if scopes is not None:
-        pipeline.append({"$match": _scope_filter(scopes)})
+        pipeline.append({"$match": _scope_filter(scopes, server=server)})
+    elif server:
+        pipeline.append({"$match": {"server": server}})
     pipeline.append({"$project": {**_BASE_PROJECTION, "score": {"$meta": "searchScore"}}})
     pipeline.append({"$limit": output_limit})
     return pipeline
@@ -102,6 +130,7 @@ def build_rank_fusion_pipeline(
     output_limit: int,
     include_score_details: bool,
     allowed_scopes: list[str] | None = None,
+    server: str | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid retrieval: fuse the vector and lexical arms with Reciprocal Rank Fusion.
 
@@ -121,7 +150,9 @@ def build_rank_fusion_pipeline(
     }
     if scopes is not None:
         # Identity narrows the candidate set before meaning ranks it.
-        vector_stage["filter"] = _scope_filter(scopes)
+        vector_stage["filter"] = _scope_filter(scopes, server=server)
+    elif server:
+        vector_stage["filter"] = {"server": server}
 
     full_text_pipeline: list[dict[str, Any]] = [
         {
@@ -135,7 +166,9 @@ def build_rank_fusion_pipeline(
         },
     ]
     if scopes is not None:
-        full_text_pipeline.append({"$match": _scope_filter(scopes)})
+        full_text_pipeline.append({"$match": _scope_filter(scopes, server=server)})
+    elif server:
+        full_text_pipeline.append({"$match": {"server": server}})
     full_text_pipeline.append({"$limit": pipeline_limit})
 
     projection: dict[str, Any] = {**_BASE_PROJECTION, "score": {"$meta": "score"}}
@@ -187,6 +220,7 @@ class HybridSearchService:
         text_weight: float | None = None,
         allowed_scopes: list[str] | None = None,
         mode: str | None = None,
+        server: str | None = None,
     ) -> list[dict[str, Any]]:
         effective_limit = limit or self.settings.hybrid_output_limit
         mode = (mode or SEARCH_MODE_HYBRID).lower()
@@ -199,6 +233,7 @@ class HybridSearchService:
                 query=query,
                 output_limit=effective_limit,
                 allowed_scopes=allowed_scopes,
+                server=server,
             )
             cursor = await collection.aggregate(pipeline)
             return await cursor.to_list(length=effective_limit)
@@ -214,6 +249,7 @@ class HybridSearchService:
                 query=query,
                 output_limit=effective_limit,
                 allowed_scopes=allowed_scopes,
+                server=server,
             )
             cursor = await collection.aggregate(pipeline)
             return await cursor.to_list(length=effective_limit)
@@ -224,6 +260,7 @@ class HybridSearchService:
                 num_candidates=self.settings.hybrid_num_candidates,
                 output_limit=effective_limit,
                 allowed_scopes=allowed_scopes,
+                server=server,
             )
             cursor = await collection.aggregate(pipeline)
             return await cursor.to_list(length=effective_limit)
@@ -237,6 +274,7 @@ class HybridSearchService:
                 vector_weight=vector_weight or self.settings.hybrid_vector_weight,
                 text_weight=text_weight or self.settings.hybrid_text_weight,
                 allowed_scopes=allowed_scopes,
+                server=server,
             )
 
         pipeline = build_rank_fusion_pipeline(
@@ -249,6 +287,7 @@ class HybridSearchService:
             output_limit=effective_limit,
             include_score_details=self.settings.include_score_details,
             allowed_scopes=allowed_scopes,
+            server=server,
         )
         try:
             cursor = await collection.aggregate(pipeline)
@@ -263,6 +302,7 @@ class HybridSearchService:
                 vector_weight=vector_weight or self.settings.hybrid_vector_weight,
                 text_weight=text_weight or self.settings.hybrid_text_weight,
                 allowed_scopes=allowed_scopes,
+                server=server,
             )
 
     async def list_tools(
@@ -272,6 +312,7 @@ class HybridSearchService:
         allowed_scopes: list[str] | None = None,
         limit: int | None = None,
         offset: int = 0,
+        server: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return the catalog (optionally scope-filtered) with no ranking.
 
@@ -279,7 +320,13 @@ class HybridSearchService:
         discovery still respects identity-bound scope even without a search.
         """
         scopes = _normalize_scopes(allowed_scopes)
-        match: dict[str, Any] = _scope_filter(scopes) if scopes is not None else {}
+        match: dict[str, Any]
+        if scopes is not None:
+            match = _scope_filter(scopes, server=server)
+        elif server:
+            match = {"server": server}
+        else:
+            match = {}
         pipeline = [
             {"$match": match},
             {"$project": dict(_BASE_PROJECTION)},
@@ -302,17 +349,20 @@ class HybridSearchService:
         vector_weight: float,
         text_weight: float,
         allowed_scopes: list[str] | None,
+        server: str | None,
     ) -> list[dict[str, Any]]:
         vector_pipeline = build_vector_pipeline(
             query_vector=query_vector,
             num_candidates=self.settings.hybrid_num_candidates,
             output_limit=self.settings.hybrid_pipeline_limit,
             allowed_scopes=allowed_scopes,
+            server=server,
         )
         text_pipeline = build_text_pipeline(
             query=query,
             output_limit=self.settings.hybrid_pipeline_limit,
             allowed_scopes=allowed_scopes,
+            server=server,
         )
         vector_cursor = await collection.aggregate(vector_pipeline)
         text_cursor = await collection.aggregate(text_pipeline)

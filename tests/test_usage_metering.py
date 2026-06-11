@@ -113,3 +113,22 @@ async def test_check_quota_blocks_when_sandbox_limit_exceeded(patch_mongo):
     assert reason == "sandbox_seconds_limit_exceeded"
     assert usage["sandbox_ms"] == 1_000
     assert quota["sandbox_seconds_limit"] == 1
+
+
+@pytest.mark.asyncio
+async def test_summarize_billing_events_rolls_up_by_kind_and_sorts_latest_first(patch_mongo):
+    await usage_metering.emit_billing_event(
+        "local-dev", kind="calls", amount=2, period="2026-06", metadata={"a": 1}
+    )
+    await usage_metering.emit_billing_event(
+        "local-dev", kind="sandbox_ms", amount=300, period="2026-06", metadata={"b": 2}
+    )
+    await usage_metering.emit_billing_event("local-dev", kind="calls", amount=1, period="2026-06")
+
+    summary = await usage_metering.summarize_billing_events("local-dev", period="2026-06", limit=2)
+    assert summary["tenant_id"] == "local-dev"
+    assert summary["period"] == "2026-06"
+    assert summary["totals_by_kind"] == {"calls": 3, "sandbox_ms": 300}
+    assert summary["total_amount"] == 303
+    assert len(summary["events"]) == 2
+    assert summary["events"][0]["ts"] >= summary["events"][1]["ts"]

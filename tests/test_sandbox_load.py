@@ -22,7 +22,7 @@ def _request(tenant_id: str, *, limits: SandboxLimits) -> ExecRequest:
         raw_code="def run() -> dict[str, bool]:\n    return {'ok': True}\n",
         requirements=[],
         arguments={},
-        secrets={},
+        env={},
         limits=limits,
     )
 
@@ -47,8 +47,16 @@ class _GatedProcess:
         self.returncode = 0
         self.killed = False
         self._frame = b'{"ok": true, "result": {"ok": true}, "stdout": "", "stderr": ""}\n'
+        self.stderr = _FakeStreamReader(self)  # placeholder for read()
+        self.stdin = _FakeStreamWriter(self)
+        self.stdout = _FakeStreamReader(self)
+        self._done = asyncio.Event()
+        self._sent = False
 
-    async def communicate(self) -> tuple[bytes, bytes]:
+    async def readline(self) -> bytes:
+        if self._sent:
+            self._done.set()
+            return b""
         self.active["now"] += 1
         self.active["max"] = max(self.active["max"], self.active["now"])
         if self.by_tenant is not None and self.by_tenant_max is not None:
@@ -60,11 +68,24 @@ class _GatedProcess:
         if self.by_tenant is not None and self.by_tenant_max is not None:
             self.by_tenant[self.tenant_id] -= 1
         self.active["now"] -= 1
-        return self._frame, b""
+        self._sent = True
+        self._done.set()
+        return self._frame
+
+    async def read(self) -> bytes:
+        return b""
+
+    def feed(self, _data: bytes) -> None:
+        return None
 
     def kill(self) -> None:
         self.killed = True
         self.returncode = -9
+        self._done.set()
+
+    async def wait(self) -> int:
+        await self._done.wait()
+        return self.returncode
 
 
 class _FakeStreamWriter:
@@ -87,7 +108,16 @@ class _FakeStreamReader:
         self._proc = proc
 
     async def readline(self) -> bytes:
-        return await self._proc.next_line()
+        if hasattr(self._proc, "next_line"):
+            return await self._proc.next_line()
+        if hasattr(self._proc, "readline"):
+            return await self._proc.readline()
+        return b""
+
+    async def read(self) -> bytes:
+        if hasattr(self._proc, "read"):
+            return await self._proc.read()
+        return b""
 
 
 class _FakeServeProcess:

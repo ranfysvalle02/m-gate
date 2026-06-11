@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +92,7 @@ class WorkerPool:
         job_dir: Path,
         limits: dict[str, int],
         timeout_ms: int,
+        dispatch: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     ) -> dict[str, Any]:
         if self._closed:
             raise SandboxError("Sandbox pool is closed.")
@@ -98,16 +100,35 @@ class WorkerPool:
             await self.start()
 
         acquire_timeout = self._acquire_timeout(timeout_ms)
-        try:
-            worker = await asyncio.wait_for(self._free.get(), timeout=acquire_timeout)
-        except TimeoutError as exc:
+        deadline = asyncio.get_running_loop().time() + acquire_timeout
+        worker: _PooledWorker | None = None
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            try:
+                candidate = await asyncio.wait_for(self._free.get(), timeout=remaining)
+            except TimeoutError:
+                break
+            if getattr(candidate.process, "returncode", None) is not None:
+                # A worker can die while idle in the queue; recycle it and keep
+                # waiting (within the same acquire budget) for a live replacement.
+                observe_sandbox_pool_event("dead_on_acquire")
+                self._discard(candidate)
+                continue
+            worker = candidate
+            break
+
+        if worker is None:
             observe_sandbox_pool_event("acquire_timeout")
             raise SandboxError(
                 "No warm sandbox worker became available before the acquire timeout."
-            ) from exc
+            )
 
         try:
-            frame = await self._run_on_worker(worker, job_dir, limits, timeout_ms)
+            frame = await self._run_on_worker(
+                worker, job_dir, limits, timeout_ms, dispatch=dispatch
+            )
         except BaseException:
             # Any failure (timeout, protocol breach, cancellation, or an
             # unexpected error) leaves the worker mid-job/poisoned. Always
@@ -206,6 +227,8 @@ class WorkerPool:
         job_dir: Path,
         limits: dict[str, int],
         timeout_ms: int,
+        *,
+        dispatch: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     ) -> dict[str, Any]:
         request = json.dumps({"job_dir": str(job_dir), "limits": limits}) + "\n"
         try:
@@ -215,27 +238,40 @@ class WorkerPool:
             raise SandboxError("Sandbox worker stdin is closed.") from exc
 
         read_timeout = max(0.05, timeout_ms / 1000 + _READ_GRACE_SECONDS)
-        try:
-            line = await asyncio.wait_for(worker.process.stdout.readline(), timeout=read_timeout)
-        except TimeoutError as exc:
-            raise SandboxTimeoutError(
-                "Code tool exceeded its deadline inside the warm sandbox worker."
-            ) from exc
-        except (ValueError, asyncio.LimitOverrunError) as exc:
-            # The worker bounds its own frame, so an over-limit line means a
-            # protocol breach; fail closed and let the caller recycle the worker.
-            raise SandboxProtocolError(
-                "Sandbox worker frame exceeded the read buffer limit."
-            ) from exc
-        if not line:
-            raise SandboxError("Sandbox worker exited before returning a result.")
-        try:
-            frame = json.loads(line.decode("utf-8", errors="replace"))
-        except json.JSONDecodeError as exc:
-            raise SandboxProtocolError("Sandbox worker returned a malformed frame.") from exc
-        if not isinstance(frame, dict):
-            raise SandboxProtocolError("Sandbox worker frame was not a JSON object.")
-        return frame
+        deadline = asyncio.get_running_loop().time() + read_timeout
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise SandboxTimeoutError(
+                    "Code tool exceeded its deadline inside the warm sandbox worker."
+                )
+            try:
+                line = await asyncio.wait_for(worker.process.stdout.readline(), timeout=remaining)
+            except TimeoutError as exc:
+                raise SandboxTimeoutError(
+                    "Code tool exceeded its deadline inside the warm sandbox worker."
+                ) from exc
+            except (ValueError, asyncio.LimitOverrunError) as exc:
+                # The worker bounds its own frame, so an over-limit line means a
+                # protocol breach; fail closed and let the caller recycle the worker.
+                raise SandboxProtocolError(
+                    "Sandbox worker frame exceeded the read buffer limit."
+                ) from exc
+            if not line:
+                raise SandboxError("Sandbox worker exited before returning a result.")
+            try:
+                frame = json.loads(line.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError as exc:
+                raise SandboxProtocolError("Sandbox worker returned a malformed frame.") from exc
+            if not isinstance(frame, dict):
+                raise SandboxProtocolError("Sandbox worker frame was not a JSON object.")
+            if frame.get("type") != "db_rpc":
+                return frame
+            if dispatch is None:
+                raise SandboxProtocolError("Sandbox worker requested DB RPC when bridge is disabled.")
+            response = await dispatch(frame)
+            worker.process.stdin.write((json.dumps(response) + "\n").encode("utf-8"))
+            await worker.process.stdin.drain()
 
     def _acquire_timeout(self, timeout_ms: int) -> float:
         configured = self.settings.sandbox_pool_acquire_timeout_ms

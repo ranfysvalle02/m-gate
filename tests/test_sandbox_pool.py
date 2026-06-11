@@ -74,6 +74,10 @@ class FakeServeProcess:
             if not line:
                 continue
             request = json.loads(line)
+            if request.get("type") == "db_rpc_result":
+                if self.job_behavior == "rpc":
+                    self._out.put_nowait(json.dumps(self.frame).encode() + b"\n")
+                continue
             if request.get("ping"):
                 payload = {"ok": True, "pong": True} if self.pong else {"ok": False}
                 self._out.put_nowait(json.dumps(payload).encode() + b"\n")
@@ -83,6 +87,10 @@ class FakeServeProcess:
                 self.jobs_seen += 1
                 if self.job_behavior == "ok":
                     self._out.put_nowait(json.dumps(self.frame).encode() + b"\n")
+                elif self.job_behavior == "rpc":
+                    self._out.put_nowait(
+                        b'{"type":"db_rpc","id":1,"op":"find","collection":"users","args":[{}],"kwargs":{"limit":1}}\n'
+                    )
                 elif self.job_behavior == "crash":
                     self._exit()
                 elif self.job_behavior == "overrun":
@@ -162,6 +170,32 @@ async def test_submit_returns_frame_and_returns_worker(monkeypatch):
     assert out["result"] == {"sum": 3}
     assert pool._free.qsize() == 1
     assert procs[0].jobs_seen == 1
+    await pool.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_submit_handles_db_rpc_frames(monkeypatch):
+    procs: list = []
+    frame = {"ok": True, "result": {"sum": 3}, "stdout": "", "stderr": ""}
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_exec", _spawn_factory(procs, job_behavior="rpc", frame=frame)
+    )
+    pool = WorkerPool(_settings(sandbox_pool_size=1), python_bin="python")
+    await pool.start()
+    seen: list[dict] = []
+
+    async def _dispatch(rpc_frame):
+        seen.append(rpc_frame)
+        return {"type": "db_rpc_result", "id": rpc_frame["id"], "ok": True, "result": []}
+
+    out = await pool.submit(
+        job_dir=Path("/tmp/x"),
+        limits={"wall_timeout_ms": 1000},
+        timeout_ms=1000,
+        dispatch=_dispatch,
+    )
+    assert seen and seen[0]["type"] == "db_rpc"
+    assert out["result"] == {"sum": 3}
     await pool.shutdown()
 
 
@@ -253,6 +287,26 @@ async def test_acquire_timeout_when_no_worker_free(monkeypatch):
     pool._free.get_nowait()  # drain the only worker so acquire must time out
     with pytest.raises(SandboxError, match="acquire"):
         await pool.submit(job_dir=Path("/tmp/x"), limits={}, timeout_ms=5000)
+    await pool.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_submit_skips_dead_idle_worker_and_uses_replacement(monkeypatch):
+    procs: list = []
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn_factory(procs))
+    pool = WorkerPool(_settings(sandbox_pool_size=1), python_bin="python")
+    await pool.start()
+    # Simulate an idle worker dying before it is acquired by a request.
+    procs[0]._exit()  # noqa: SLF001 - test-only whitebox helper
+
+    out = await pool.submit(job_dir=Path("/tmp/x"), limits={}, timeout_ms=1000)
+    assert out["result"] == {"v": 1}
+    for _ in range(50):
+        if len(procs) >= 2:
+            break
+        await asyncio.sleep(0.01)
+    assert len(procs) == 2
+    assert procs[0].killed is True
     await pool.shutdown()
 
 
@@ -371,8 +425,8 @@ class _FakePool:
     async def shutdown(self) -> None:
         self.closed = True
 
-    async def submit(self, *, job_dir, limits, timeout_ms):
-        self.submitted.append((job_dir, limits, timeout_ms))
+    async def submit(self, *, job_dir, limits, timeout_ms, dispatch=None):
+        self.submitted.append((job_dir, limits, timeout_ms, dispatch))
         return self.frame
 
 
@@ -384,7 +438,7 @@ def _request(*, limits: SandboxLimits | None = None) -> ExecRequest:
         raw_code="def add(a, b):\n    return a + b\n",
         requirements=[],
         arguments={"a": 1, "b": 2},
-        secrets={},
+        env={},
         limits=limits,
     )
 

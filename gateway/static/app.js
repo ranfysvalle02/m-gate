@@ -7,10 +7,8 @@ window.adminConsole = function adminConsole(config) {
       { key: "tenants", label: "Tenants", icon: "🏢" },
       { key: "users", label: "Users", icon: "👥" },
       { key: "approvals", label: "Approvals", icon: "✅" },
-      { key: "servers", label: "Servers", icon: "🧰" },
-      { key: "catalog", label: "Tool Catalog", icon: "🗂️" },
+      { key: "servers", label: "MCP Servers", icon: "🧰" },
       { key: "telemetry", label: "Telemetry", icon: "📈" },
-      { key: "search", label: "Search Playground", icon: "🔎" },
       { key: "embeddings", label: "Embeddings · Platform", icon: "🧠" },
       { key: "tenantEmbeddings", label: "Embeddings · Tenant", icon: "🪪" },
       { key: "account", label: "Account", icon: "🧑" },
@@ -55,6 +53,10 @@ window.adminConsole = function adminConsole(config) {
         query: "",
         mode: "hybrid",
         limit: 10,
+      },
+      serverEnv: {
+        key: "",
+        value: "",
       },
       catalog: {
         query: "",
@@ -118,16 +120,37 @@ window.adminConsole = function adminConsole(config) {
       helpOpen: false,
       helpTab: "mcp",
       toolTestResults: {},
+      toolValidation: {},
       tenantConnectOpen: false,
       tenantConnectTenant: "",
       tenantConnectEgress: null,
       tenantConnectSaving: false,
+      serverComposerOpen: false,
+      serverComposerMode: "create",
+      serverWorkspace: {
+        open: false,
+        server: "",
+        tab: "tools",
+      },
+      serverEnv: {
+        keys: [],
+        updated_at: null,
+        updated_by: null,
+      },
+      serverEnvLoading: false,
+      serverEnvSaving: false,
+      exploreCollections: [],
+      exploreCollectionsTenant: "",
+      exploreCollectionsLoading: false,
+      workspaceExplore: null,
+      workspaceExploreTargetId: null,
     },
     _embeddingPoll: null,
     _tenantEmbeddingPoll: null,
     _toastSeq: 0,
     _toolSeq: 1,
     _codeEditors: {},
+    _validateTimers: {},
 
     async init() {
       this.initTheme();
@@ -147,7 +170,10 @@ window.adminConsole = function adminConsole(config) {
       if (includeTenant && this.state.tenantId) {
         url.searchParams.set("tenant_id", this.state.tenantId);
       }
-      const headers = { Accept: "application/json", ...(options.headers || {}) };
+      const headers = {
+        Accept: "application/json",
+        ...(options.headers || {}),
+      };
       if (body !== null) {
         headers["Content-Type"] = "application/json";
         const csrfToken = this.readCookie(config.csrfCookieName);
@@ -192,7 +218,8 @@ window.adminConsole = function adminConsole(config) {
     },
 
     setError(error) {
-      const message = error instanceof Error ? error.message : String(error || "");
+      const message =
+        error instanceof Error ? error.message : String(error || "");
       this.state.errorMessage = message;
       if (message) {
         this.pushToast(message, "error", 6500);
@@ -208,7 +235,12 @@ window.adminConsole = function adminConsole(config) {
       if (!text) return null;
       const id = ++this._toastSeq;
       const icons = { success: "✓", error: "!", warning: "⚠", info: "›" };
-      this.state.toasts.push({ id, message: text, type, icon: icons[type] || icons.info });
+      this.state.toasts.push({
+        id,
+        message: text,
+        type,
+        icon: icons[type] || icons.info,
+      });
       if (timeout > 0) {
         setTimeout(() => this.dismissToast(id), timeout);
       }
@@ -234,7 +266,9 @@ window.adminConsole = function adminConsole(config) {
     },
 
     async openTenantConnect(tenantId) {
-      this.state.tenantConnectTenant = String(tenantId || this.state.tenantId || "").trim();
+      this.state.tenantConnectTenant = String(
+        tenantId || this.state.tenantId || "",
+      ).trim();
       this.state.tenantConnectOpen = true;
       await this.loadTenantEgressAllowlist(this.state.tenantConnectTenant);
     },
@@ -255,16 +289,18 @@ window.adminConsole = function adminConsole(config) {
     recommendedScopes() {
       const scopes = (this.state.whoami?.scopes || []).filter(Boolean);
       if (scopes.length > 0) return scopes.join(",");
-      return "weather,readonly";
+      return "weather,readonly,server:weather";
     },
 
     tokenMintCommand() {
-      const tenantId = this.state.tenantConnectTenant || this.state.tenantId || "local-dev";
-      return `python -m scripts.mint_token --tenant-id ${tenantId} --groups weather readonly --roles tool:invoke`;
+      const tenantId =
+        this.state.tenantConnectTenant || this.state.tenantId || "local-dev";
+      return `python -m scripts.mint_token --tenant-id ${tenantId} --groups weather readonly server:weather --roles tool:invoke`;
     },
 
     rpcCurlSample() {
-      const tenantId = this.state.tenantConnectTenant || this.state.tenantId || "local-dev";
+      const tenantId =
+        this.state.tenantConnectTenant || this.state.tenantId || "local-dev";
       if (this.authModeLabel() === "disabled") {
         return [
           "curl -X POST " + this.rpcEndpoint() + " \\",
@@ -274,7 +310,7 @@ window.adminConsole = function adminConsole(config) {
           '    \"jsonrpc\":\"2.0\",',
           '    \"id\":\"list-1\",',
           '    \"method\":\"tools/list\",',
-          "    \"params\":{}",
+          '    "params":{}',
           "  }'",
         ].join("\n");
       }
@@ -323,7 +359,9 @@ window.adminConsole = function adminConsole(config) {
           { includeTenant: false },
         );
         this.state.tenantConnectEgress = payload;
-        this.forms.tenantConnect.allowlist = (payload.allowlist || []).join("\n");
+        this.forms.tenantConnect.allowlist = (payload.allowlist || []).join(
+          "\n",
+        );
       } catch (error) {
         this.state.tenantConnectEgress = null;
         this.forms.tenantConnect.allowlist = "";
@@ -350,7 +388,9 @@ window.adminConsole = function adminConsole(config) {
           },
         );
         this.state.tenantConnectEgress = payload;
-        this.forms.tenantConnect.allowlist = (payload.allowlist || []).join("\n");
+        this.forms.tenantConnect.allowlist = (payload.allowlist || []).join(
+          "\n",
+        );
         this.notify(`Updated egress allowlist for '${tenantId}'.`);
       } catch (error) {
         this.setError(error);
@@ -428,13 +468,22 @@ window.adminConsole = function adminConsole(config) {
     },
 
     checklistCountCompleted() {
-      return ["tenant", "function", "connect"].filter((step) => this.checklistDone(step)).length;
+      return ["tenant", "function", "connect"].filter((step) =>
+        this.checklistDone(step),
+      ).length;
     },
 
     goToChecklistStep(step) {
       if (step === "tenant") this.switchSection("tenants");
       if (step === "function") this.switchSection("servers");
-      if (step === "connect") this.switchSection("search");
+      if (step === "connect") {
+        this.switchSection("servers");
+        if (this.state.serverWorkspace.open) {
+          this.setWorkspaceTab("search");
+        } else if ((this.state.servers || []).length > 0) {
+          this.openServerWorkspace(this.state.servers[0], "search");
+        }
+      }
     },
 
     switchSection(section) {
@@ -444,6 +493,13 @@ window.adminConsole = function adminConsole(config) {
 
     async refreshActiveSection() {
       this.clearError();
+      if (
+        this.state.exploreCollectionsTenant &&
+        this.state.exploreCollectionsTenant !== this.state.tenantId
+      ) {
+        this.state.exploreCollectionsTenant = "";
+        this.state.exploreCollections = [];
+      }
       try {
         if (this.activeSection === "dashboard") await this.loadStats();
         if (this.activeSection === "tenants") await this.loadTenants();
@@ -451,12 +507,27 @@ window.adminConsole = function adminConsole(config) {
         if (this.activeSection === "approvals") await this.loadPendingActions();
         if (this.activeSection === "servers") {
           await this.loadServers();
-          this.$nextTick(() => this.refreshCodeEditors());
+          if (
+            this.state.serverWorkspace.open &&
+            String(this.state.serverWorkspace.server || "").trim()
+          ) {
+            const selected = this.state.servers.find(
+              (item) => String(item.server || "") === String(this.state.serverWorkspace.server || ""),
+            );
+            if (!selected) {
+              this.closeServerWorkspace();
+            }
+          }
+          if (this.state.serverComposerOpen) {
+            this.$nextTick(() => this.refreshCodeEditors());
+          } else {
+            this._teardownCodeEditors();
+          }
         }
-        if (this.activeSection === "catalog") await this.loadCatalog();
         if (this.activeSection === "telemetry") await this.loadTelemetry();
         if (this.activeSection === "embeddings") await this.loadEmbedding();
-        if (this.activeSection === "tenantEmbeddings") await this.loadTenantEmbedding();
+        if (this.activeSection === "tenantEmbeddings")
+          await this.loadTenantEmbedding();
       } catch (error) {
         this.setError(error);
       }
@@ -464,7 +535,9 @@ window.adminConsole = function adminConsole(config) {
 
     async loadWhoAmI() {
       try {
-        this.state.whoami = await this.apiRequest("/admin/whoami", { includeTenant: false });
+        this.state.whoami = await this.apiRequest("/admin/whoami", {
+          includeTenant: false,
+        });
       } catch (error) {
         this.setError(error);
         throw error;
@@ -474,7 +547,9 @@ window.adminConsole = function adminConsole(config) {
     async loadStats() {
       this.clearError();
       try {
-        this.state.stats = await this.apiRequest("/admin/stats", { includeTenant: false });
+        this.state.stats = await this.apiRequest("/admin/stats", {
+          includeTenant: false,
+        });
       } catch (error) {
         this.setError(error);
       }
@@ -483,7 +558,9 @@ window.adminConsole = function adminConsole(config) {
     async loadTenants() {
       this.clearError();
       try {
-        this.state.tenants = await this.apiRequest("/admin/tenants", { includeTenant: false });
+        this.state.tenants = await this.apiRequest("/admin/tenants", {
+          includeTenant: false,
+        });
         const ids = this.state.tenants.map((t) => t.tenant_id);
         if (ids.length > 0) {
           this.state.tenantOptions = ids;
@@ -519,18 +596,26 @@ window.adminConsole = function adminConsole(config) {
       const suspend = tenant.status !== "suspended";
       let reason = null;
       if (suspend) {
-        reason = window.prompt(`Suspend tenant '${tenant.tenant_id}'? Optional reason:`, "");
+        reason = window.prompt(
+          `Suspend tenant '${tenant.tenant_id}'? Optional reason:`,
+          "",
+        );
         if (reason === null) return;
       }
       try {
         const action = suspend ? "suspend" : "resume";
-        await this.apiRequest(`/admin/tenants/${encodeURIComponent(tenant.tenant_id)}/${action}`, {
-          method: "POST",
-          includeTenant: false,
-          body: suspend ? { reason } : {},
-        });
+        await this.apiRequest(
+          `/admin/tenants/${encodeURIComponent(tenant.tenant_id)}/${action}`,
+          {
+            method: "POST",
+            includeTenant: false,
+            body: suspend ? { reason } : {},
+          },
+        );
         await this.loadTenants();
-        this.notify(`Tenant '${tenant.tenant_id}' ${suspend ? "suspended" : "resumed"}.`);
+        this.notify(
+          `Tenant '${tenant.tenant_id}' ${suspend ? "suspended" : "resumed"}.`,
+        );
       } catch (error) {
         this.setError(error);
       }
@@ -617,7 +702,9 @@ window.adminConsole = function adminConsole(config) {
           body: { status: nextStatus },
         });
         await this.loadUsers();
-        this.notify(`User '${user.email}' ${nextStatus === "active" ? "enabled" : "disabled"}.`);
+        this.notify(
+          `User '${user.email}' ${nextStatus === "active" ? "enabled" : "disabled"}.`,
+        );
       } catch (error) {
         this.setError(error);
       }
@@ -687,9 +774,12 @@ window.adminConsole = function adminConsole(config) {
       if (!window.confirm(`Approve '${action.server}/${action.tool}'?`)) return;
       this.clearError();
       try {
-        await this.apiRequest(`/admin/actions/${encodeURIComponent(action.action_id)}/approve`, {
-          method: "POST",
-        });
+        await this.apiRequest(
+          `/admin/actions/${encodeURIComponent(action.action_id)}/approve`,
+          {
+            method: "POST",
+          },
+        );
         await this.loadPendingActions();
         this.notify(`Approved '${action.server}/${action.tool}'.`);
       } catch (error) {
@@ -701,9 +791,12 @@ window.adminConsole = function adminConsole(config) {
       if (!window.confirm(`Reject '${action.server}/${action.tool}'?`)) return;
       this.clearError();
       try {
-        await this.apiRequest(`/admin/actions/${encodeURIComponent(action.action_id)}/reject`, {
-          method: "POST",
-        });
+        await this.apiRequest(
+          `/admin/actions/${encodeURIComponent(action.action_id)}/reject`,
+          {
+            method: "POST",
+          },
+        );
         await this.loadPendingActions();
         this.notify(`Rejected '${action.server}/${action.tool}'.`, "warning");
       } catch (error) {
@@ -716,9 +809,105 @@ window.adminConsole = function adminConsole(config) {
       try {
         const payload = await this.apiRequest("/admin/servers");
         this.state.servers = payload.items || [];
+        if (this.state.servers.length === 0 && !this.state.serverComposerOpen) {
+          this.state.serverComposerOpen = true;
+          this.state.serverComposerMode = "create";
+          this.$nextTick(() => this.refreshCodeEditors());
+        }
       } catch (error) {
         this.setError(error);
       }
+    },
+
+    selectedWorkspaceServer() {
+      const selectedName = String(this.state.serverWorkspace.server || "").trim();
+      if (!selectedName) return null;
+      return (
+        this.state.servers.find(
+          (item) => String(item.server || "").trim() === selectedName,
+        ) || null
+      );
+    },
+
+    workspaceServerName() {
+      return (
+        String(this.state.serverWorkspace.server || "").trim() ||
+        String(this.forms.server.server || "").trim()
+      );
+    },
+
+    async openServerWorkspace(server, tab = "tools") {
+      if (!server || !String(server.server || "").trim()) return;
+      this.activeSection = "servers";
+      this.state.serverWorkspace = {
+        open: true,
+        server: String(server.server || "").trim(),
+        tab: tab || "tools",
+      };
+      await this.editServer(server);
+      await this.loadServerEnv();
+      this.resetWorkspaceExplore();
+    },
+
+    closeServerWorkspace() {
+      this.state.serverWorkspace = { open: false, server: "", tab: "tools" };
+      this.resetServerForm();
+      this.state.serverComposerOpen = false;
+      this.state.serverComposerMode = "create";
+      this.state.serverEnv = { keys: [], updated_at: null, updated_by: null };
+      this.forms.serverEnv = { key: "", value: "" };
+      this.state.serverEnvLoading = false;
+      this.state.serverEnvSaving = false;
+      this.state.workspaceExplore = null;
+      this.state.workspaceExploreTargetId = null;
+      this.state.searchResults = [];
+    },
+
+    setWorkspaceTab(tab) {
+      if (!this.state.serverWorkspace.open) return;
+      this.state.serverWorkspace = {
+        ...this.state.serverWorkspace,
+        tab,
+      };
+      if (tab === "exploreDb") {
+        this.ensureWorkspaceExplore();
+      }
+      if (tab === "search") {
+        this.state.searchResults = [];
+      }
+      if (tab === "secrets") {
+        this.loadServerEnv();
+      }
+    },
+
+    workspaceTabIs(tab) {
+      return (
+        this.state.serverWorkspace.open &&
+        String(this.state.serverWorkspace.tab || "") === String(tab || "")
+      );
+    },
+
+    openServerComposer(kind = "code") {
+      this.resetServerForm();
+      this.state.serverComposerOpen = true;
+      this.state.serverComposerMode = "create";
+      this.state.serverWorkspace = {
+        open: true,
+        server: "",
+        tab: "tools",
+      };
+      if (kind === "connect") {
+        this.chooseServerKind("connect");
+      } else {
+        this.chooseServerKind("code");
+      }
+      this.$nextTick(() => this._focusServerComposer());
+    },
+
+    closeServerComposer() {
+      this.state.serverComposerOpen = false;
+      this.state.serverComposerMode = "create";
+      this.resetServerForm();
     },
 
     _nextToolId() {
@@ -739,15 +928,32 @@ window.adminConsole = function adminConsole(config) {
         input_schema: "{}",
         test_arguments: "{}",
         expanded: true,
+        explore_open: false,
+        explore_collection: "",
+        explore_mode: "find",
+        explore_filter: "{}",
+        explore_pipeline: "[]",
+        explore_limit: 20,
+        explore_snippet: "",
+        explore_sample_docs: [],
+        explore_field_types: {},
+        explore_results: [],
+        explore_error: "",
+        explore_loading: false,
       };
     },
 
     normalizeToolForm(tool = {}) {
       const meta = tool.metadata || {};
-      const requirements = Array.isArray(tool.requirements) ? tool.requirements.join("\n") : "";
+      const requirements = Array.isArray(tool.requirements)
+        ? tool.requirements.join("\n")
+        : "";
       const scopes = Array.isArray(tool.scopes) ? tool.scopes.join(", ") : "";
       return {
-        local_id: typeof tool.local_id === "number" ? tool.local_id : this._nextToolId(),
+        local_id:
+          typeof tool.local_id === "number"
+            ? tool.local_id
+            : this._nextToolId(),
         name: tool.name || "",
         description: tool.description || "",
         action_type: meta.action_type || "read",
@@ -758,6 +964,18 @@ window.adminConsole = function adminConsole(config) {
         input_schema: JSON.stringify(tool.input_schema || {}, null, 2),
         test_arguments: "{}",
         expanded: false,
+        explore_open: false,
+        explore_collection: "",
+        explore_mode: "find",
+        explore_filter: "{}",
+        explore_pipeline: "[]",
+        explore_limit: 20,
+        explore_snippet: "",
+        explore_sample_docs: [],
+        explore_field_types: {},
+        explore_results: [],
+        explore_error: "",
+        explore_loading: false,
       };
     },
 
@@ -771,13 +989,176 @@ window.adminConsole = function adminConsole(config) {
         tools: [this.emptyToolForm()],
       };
       this.state.toolTestResults = {};
+      this.state.toolValidation = {};
+      this.resetWorkspaceExplore();
       this._teardownCodeEditors();
       this.$nextTick(() => this.refreshCodeEditors());
+    },
+
+    resetWorkspaceExplore() {
+      this.state.workspaceExplore = {
+        explore_collection: "",
+        explore_mode: "find",
+        explore_filter: "{}",
+        explore_pipeline: "[]",
+        explore_limit: 20,
+        explore_snippet: "",
+        explore_sample_docs: [],
+        explore_results: [],
+        explore_error: "",
+        explore_loading: false,
+      };
+      const firstTool = (this.forms.server.tools || [])[0];
+      this.state.workspaceExploreTargetId = firstTool ? firstTool.local_id : null;
+    },
+
+    ensureWorkspaceExplore() {
+      if (!this.state.workspaceExplore) {
+        this.resetWorkspaceExplore();
+      }
+      this.ensureExploreCollections(false)
+        .then(() => {
+          if (
+            !this.state.workspaceExplore.explore_collection &&
+            this.state.exploreCollections.length > 0
+          ) {
+            this.state.workspaceExplore.explore_collection = this.state.exploreCollections[0];
+          }
+        })
+        .catch((error) => {
+          this.state.workspaceExplore.explore_error =
+            error instanceof Error ? error.message : String(error || "Failed to load collections.");
+        });
+    },
+
+    async loadWorkspaceExploreSample() {
+      if (!this.state.workspaceExplore) this.resetWorkspaceExplore();
+      await this.loadExploreSample(this.state.workspaceExplore);
+    },
+
+    async runWorkspaceExploreQuery() {
+      if (!this.state.workspaceExplore) this.resetWorkspaceExplore();
+      await this.runExploreQuery(this.state.workspaceExplore);
+    },
+
+    async copyWorkspaceExploreSnippet() {
+      if (!this.state.workspaceExplore) return;
+      await this.copyExploreSnippet(this.state.workspaceExplore);
+    },
+
+    insertWorkspaceExploreSnippet() {
+      if (!this.state.workspaceExplore) return;
+      const targetId = this.state.workspaceExploreTargetId;
+      const target = (this.forms.server.tools || []).find(
+        (tool) => String(tool.local_id) === String(targetId),
+      );
+      if (!target) {
+        this.notify("Choose a target function before inserting.", "warning");
+        return;
+      }
+      target.expanded = true;
+      target.explore_snippet = String(this.state.workspaceExplore.explore_snippet || "");
+      this.insertExploreSnippet(target);
+      this.$nextTick(() => this.refreshCodeEditors());
+    },
+
+    async loadServerEnv() {
+      const serverName = String(this.state.serverWorkspace.server || "").trim();
+      if (!serverName) return;
+      this.state.serverEnvLoading = true;
+      try {
+        const payload = await this.apiRequest(
+          `/admin/servers/${encodeURIComponent(serverName)}/env`,
+        );
+        this.state.serverEnv = {
+          keys: Array.isArray(payload.keys) ? payload.keys : [],
+          updated_at: payload.updated_at || null,
+          updated_by: payload.updated_by || null,
+        };
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.serverEnvLoading = false;
+      }
+    },
+
+    async saveServerEnvEntry() {
+      const serverName = String(this.state.serverWorkspace.server || "").trim();
+      const key = String(this.forms.serverEnv.key || "").trim();
+      const value = String(this.forms.serverEnv.value || "");
+      if (!serverName) {
+        this.setError("Select a server first.");
+        return;
+      }
+      if (!key) {
+        this.setError("Environment key is required.");
+        return;
+      }
+      this.state.serverEnvSaving = true;
+      try {
+        const payload = await this.apiRequest(
+          `/admin/servers/${encodeURIComponent(serverName)}/env`,
+          {
+            method: "PUT",
+            body: { values: { [key]: value } },
+          },
+        );
+        this.state.serverEnv = {
+          keys: Array.isArray(payload.keys) ? payload.keys : [],
+          updated_at: payload.updated_at || null,
+          updated_by: payload.updated_by || null,
+        };
+        this.forms.serverEnv.value = "";
+        this.notify(`Saved env key '${key}'.`, "success");
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.serverEnvSaving = false;
+      }
+    },
+
+    editServerEnvKey(key) {
+      this.forms.serverEnv.key = String(key || "");
+      this.forms.serverEnv.value = "";
+    },
+
+    async deleteServerEnvKey(key) {
+      const normalized = String(key || "").trim();
+      if (!normalized) return;
+      const serverName = String(this.state.serverWorkspace.server || "").trim();
+      if (!serverName) return;
+      this.state.serverEnvSaving = true;
+      try {
+        const payload = await this.apiRequest(
+          `/admin/servers/${encodeURIComponent(serverName)}/env`,
+          {
+            method: "PUT",
+            body: { values: { [normalized]: "" } },
+          },
+        );
+        this.state.serverEnv = {
+          keys: Array.isArray(payload.keys) ? payload.keys : [],
+          updated_at: payload.updated_at || null,
+          updated_by: payload.updated_by || null,
+        };
+        if (this.forms.serverEnv.key === normalized) {
+          this.forms.serverEnv.key = "";
+          this.forms.serverEnv.value = "";
+        }
+        this.notify(`Deleted env key '${normalized}'.`, "warning");
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.serverEnvSaving = false;
+      }
     },
 
     addToolToServer() {
       const tool = this.emptyToolForm();
       this.forms.server.tools.push(tool);
+      if (!this.state.workspaceExploreTargetId) {
+        this.state.workspaceExploreTargetId = tool.local_id;
+      }
       this.$nextTick(() => this.refreshCodeEditors());
     },
 
@@ -816,6 +1197,147 @@ window.adminConsole = function adminConsole(config) {
       return name || `Function ${idx + 1}`;
     },
 
+    _setToolSource(tool, nextSource) {
+      const next = String(nextSource || "");
+      tool.raw_code = next;
+      const view = this._codeEditors[String(tool.local_id)];
+      if (view) {
+        const current = view.state.doc.toString();
+        if (current !== next) {
+          view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next } });
+        }
+      }
+      this.scheduleToolValidate(tool);
+    },
+
+    async ensureExploreCollections(force = false) {
+      const tenantId = String(this.state.tenantId || "");
+      if (!tenantId) return;
+      if (
+        !force &&
+        this.state.exploreCollectionsTenant === tenantId &&
+        (this.state.exploreCollections || []).length > 0
+      ) {
+        return;
+      }
+      this.state.exploreCollectionsLoading = true;
+      try {
+        const payload = await this.apiRequest("/admin/explore/collections", {
+          includeTenant: false,
+        });
+        this.state.exploreCollections = Array.isArray(payload.collections)
+          ? payload.collections
+          : [];
+        this.state.exploreCollectionsTenant = tenantId;
+      } finally {
+        this.state.exploreCollectionsLoading = false;
+      }
+    },
+
+    async toggleExplore(tool) {
+      if (!tool) return;
+      tool.explore_open = !tool.explore_open;
+      tool.explore_error = "";
+      if (!tool.explore_open) return;
+      try {
+        await this.ensureExploreCollections(false);
+        if (!tool.explore_collection && this.state.exploreCollections.length > 0) {
+          tool.explore_collection = this.state.exploreCollections[0];
+        }
+      } catch (error) {
+        tool.explore_error =
+          error instanceof Error ? error.message : String(error || "Failed to load collections.");
+      }
+    },
+
+    async loadExploreSample(tool) {
+      if (!tool || !String(tool.explore_collection || "").trim()) {
+        tool.explore_error = "Choose a collection first.";
+        return;
+      }
+      tool.explore_error = "";
+      tool.explore_loading = true;
+      try {
+        const payload = await this.apiRequest("/admin/explore/sample", {
+          method: "POST",
+          includeTenant: false,
+          body: {
+            tenant_id: this.state.tenantId,
+            collection: String(tool.explore_collection || "").trim(),
+            limit: Number(tool.explore_limit || 20),
+          },
+        });
+        tool.explore_field_types = payload.field_types || {};
+        tool.explore_sample_docs = payload.sample_docs || [];
+        tool.explore_snippet = String(payload.snippet || "");
+        tool.explore_results = [];
+        if (!String(tool.explore_filter || "").trim()) {
+          tool.explore_filter = "{}";
+        }
+      } catch (error) {
+        tool.explore_error =
+          error instanceof Error ? error.message : String(error || "Failed to sample collection.");
+      } finally {
+        tool.explore_loading = false;
+      }
+    },
+
+    async runExploreQuery(tool) {
+      if (!tool || !String(tool.explore_collection || "").trim()) {
+        tool.explore_error = "Choose a collection first.";
+        return;
+      }
+      tool.explore_error = "";
+      tool.explore_loading = true;
+      try {
+        const mode = tool.explore_mode === "aggregate" ? "aggregate" : "find";
+        const body = {
+          tenant_id: this.state.tenantId,
+          collection: String(tool.explore_collection || "").trim(),
+          mode,
+          limit: Number(tool.explore_limit || 20),
+        };
+        if (mode === "aggregate") {
+          body.pipeline = this.parseJsonArray(tool.explore_pipeline, "Aggregate pipeline");
+        } else {
+          body.filter = this.parseJsonObject(tool.explore_filter, "Find filter");
+        }
+        const payload = await this.apiRequest("/admin/explore/query", {
+          method: "POST",
+          includeTenant: false,
+          body,
+        });
+        tool.explore_results = payload.results || [];
+        tool.explore_snippet = String(payload.snippet || "");
+      } catch (error) {
+        tool.explore_error =
+          error instanceof Error ? error.message : String(error || "Explore query failed.");
+      } finally {
+        tool.explore_loading = false;
+      }
+    },
+
+    async copyExploreSnippet(tool) {
+      const snippet = String(tool?.explore_snippet || "").trim();
+      if (!snippet) return;
+      try {
+        await navigator.clipboard.writeText(snippet);
+        this.notify("Copied query snippet.", "success");
+      } catch (_) {
+        this.notify("Clipboard permission denied. Copy manually.", "warning");
+      }
+    },
+
+    insertExploreSnippet(tool) {
+      const snippet = String(tool?.explore_snippet || "").trim();
+      if (!snippet) return;
+      const current = String(tool.raw_code || "").trimEnd();
+      const next = current ? `${current}\n\n${snippet}\n` : `${snippet}\n`;
+      this._setToolSource(tool, next);
+      tool.expanded = true;
+      this.notify("Inserted query snippet into function source.", "success");
+    },
+
     // One-click "see the magic": drop in a complete, sandbox-safe function the
     // operator can immediately run in the sandbox and save as a real MCP tool.
     loadExampleTool() {
@@ -827,7 +1349,9 @@ window.adminConsole = function adminConsole(config) {
       example.input_schema = JSON.stringify(
         {
           type: "object",
-          properties: { text: { type: "string", description: "Text to analyze" } },
+          properties: {
+            text: { type: "string", description: "Text to analyze" },
+          },
           required: ["text"],
         },
         null,
@@ -840,7 +1364,9 @@ window.adminConsole = function adminConsole(config) {
         '    return {"words": len(words), "characters": len(text)}',
         "",
       ].join("\n");
-      example.test_arguments = JSON.stringify({ text: "hello brave new world" });
+      example.test_arguments = JSON.stringify({
+        text: "hello brave new world",
+      });
       example.expanded = true;
 
       const tools = this.forms.server.tools || [];
@@ -854,6 +1380,7 @@ window.adminConsole = function adminConsole(config) {
       } else {
         this.forms.server.tools.push(example);
       }
+      this.state.workspaceExploreTargetId = example.local_id;
       if (!String(this.forms.server.server || "").trim()) {
         this.forms.server.server = "my-tools";
       }
@@ -869,11 +1396,22 @@ window.adminConsole = function adminConsole(config) {
       this.forms.server.tools = (this.forms.server.tools || []).filter(
         (tool) => tool.local_id !== localId,
       );
+      if (String(this.state.workspaceExploreTargetId) === String(localId)) {
+        const first = (this.forms.server.tools || [])[0];
+        this.state.workspaceExploreTargetId = first ? first.local_id : null;
+      }
       this._teardownCodeEditor(localId);
       this.$nextTick(() => this.refreshCodeEditors());
     },
 
     async editServer(server) {
+      this.state.serverComposerOpen = true;
+      this.state.serverComposerMode = "edit";
+      this.state.serverWorkspace = {
+        open: true,
+        server: String(server.server || "").trim(),
+        tab: this.state.serverWorkspace?.tab || "tools",
+      };
       this.forms.server = {
         server: server.server || "",
         transport: server.transport || "streamable_http",
@@ -891,19 +1429,43 @@ window.adminConsole = function adminConsole(config) {
         const detail = await this.apiRequest(
           `/admin/servers/${encodeURIComponent(server.server)}`,
         );
-        const tools = (detail.tools || []).map((tool) => this.normalizeToolForm(tool));
+        const tools = (detail.tools || []).map((tool) =>
+          this.normalizeToolForm(tool),
+        );
         if (tools.length > 0) {
           // Open the first function so the editor is visible right away; the
           // rest stay collapsed for a clean, scannable manifest.
           tools[0].expanded = true;
           this.forms.server.tools = tools;
+          this.state.workspaceExploreTargetId = tools[0].local_id;
         } else {
           this.forms.server.tools = [this.emptyToolForm()];
+          this.state.workspaceExploreTargetId = this.forms.server.tools[0].local_id;
         }
         this.state.toolTestResults = {};
+        this.state.toolValidation = {};
+        this.resetWorkspaceExplore();
         this.$nextTick(() => this.refreshCodeEditors());
+        // Surface the contract status for loaded functions right away.
+        for (const tool of this.forms.server.tools) this.scheduleToolValidate(tool);
       } catch (error) {
         this.setError(error);
+      }
+    },
+
+    async startServerEdit(server) {
+      await this.openServerWorkspace(server, "tools");
+      this.$nextTick(() => this._focusServerComposer());
+    },
+
+    _focusServerComposer() {
+      const form = document.querySelector(".server-composer");
+      if (form) {
+        form.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      const input = document.querySelector('[x-model="forms.server.server"]');
+      if (input && typeof input.focus === "function") {
+        input.focus();
       }
     },
 
@@ -922,19 +1484,31 @@ window.adminConsole = function adminConsole(config) {
       return parsed;
     },
 
+    parseJsonArray(raw, fieldName) {
+      const source = String(raw || "").trim();
+      if (!source) return [];
+      const parsed = JSON.parse(source);
+      if (!Array.isArray(parsed)) {
+        throw new Error(`${fieldName} must be a JSON array.`);
+      }
+      return parsed;
+    },
+
     async _loadCodeMirror() {
       if (this._cmLib) return this._cmLib;
       if (this._cmLoadPromise) return this._cmLoadPromise;
       this._cmLoadPromise = (async () => {
         // Bare specifiers resolve through the import map in base.html, which pins a
         // single @codemirror/state instance across every package (see comment there).
-        const [stateMod, viewMod, commandsMod, languageMod, pythonMod] = await Promise.all([
-          import("@codemirror/state"),
-          import("@codemirror/view"),
-          import("@codemirror/commands"),
-          import("@codemirror/language"),
-          import("@codemirror/lang-python"),
-        ]);
+        const [stateMod, viewMod, commandsMod, languageMod, pythonMod, highlightMod] =
+          await Promise.all([
+            import("@codemirror/state"),
+            import("@codemirror/view"),
+            import("@codemirror/commands"),
+            import("@codemirror/language"),
+            import("@codemirror/lang-python"),
+            import("@lezer/highlight"),
+          ]);
         this._cmLib = {
           EditorState: stateMod.EditorState,
           EditorView: viewMod.EditorView,
@@ -953,6 +1527,9 @@ window.adminConsole = function adminConsole(config) {
           indentOnInput: languageMod.indentOnInput,
           syntaxHighlighting: languageMod.syntaxHighlighting,
           defaultHighlightStyle: languageMod.defaultHighlightStyle,
+          // classHighlighter tags tokens with stable `tok-*` classes so the palette
+          // lives in styles.css and follows the active theme (see .code-editor-host).
+          classHighlighter: highlightMod.classHighlighter,
           bracketMatching: languageMod.bracketMatching,
           foldGutter: languageMod.foldGutter,
           foldKeymap: languageMod.foldKeymap,
@@ -984,7 +1561,9 @@ window.adminConsole = function adminConsole(config) {
     },
 
     _toolById(toolId) {
-      return (this.forms.server.tools || []).find((item) => String(item.local_id) === String(toolId));
+      return (this.forms.server.tools || []).find(
+        (item) => String(item.local_id) === String(toolId),
+      );
     },
 
     async refreshCodeEditors() {
@@ -1017,8 +1596,12 @@ window.adminConsole = function adminConsole(config) {
         if (!tool.expanded) continue;
         const toolId = String(tool.local_id);
         if (this._codeEditors[toolId]) continue;
-        const host = document.querySelector(`[data-code-editor-host="${toolId}"]`);
-        const fallback = document.querySelector(`[data-code-editor-fallback="${toolId}"]`);
+        const host = document.querySelector(
+          `[data-code-editor-host="${toolId}"]`,
+        );
+        const fallback = document.querySelector(
+          `[data-code-editor-fallback="${toolId}"]`,
+        );
         if (!host || !fallback) continue;
         const startCode = String(tool.raw_code || "");
         const saveBinding = cm.keymap.of([
@@ -1046,7 +1629,9 @@ window.adminConsole = function adminConsole(config) {
               cm.foldGutter(),
               cm.rectangularSelection(),
               cm.highlightActiveLine(),
-              cm.syntaxHighlighting(cm.defaultHighlightStyle, { fallback: true }),
+              cm.syntaxHighlighting(cm.classHighlighter || cm.defaultHighlightStyle, {
+                fallback: true,
+              }),
               cm.keymap.of([
                 ...cm.defaultKeymap,
                 ...cm.historyKeymap,
@@ -1061,6 +1646,13 @@ window.adminConsole = function adminConsole(config) {
                 const matched = this._toolById(tool.local_id);
                 if (matched) {
                   matched.raw_code = next;
+                  // Self-heal: a brand-new function with no name yet inherits the
+                  // name you type, so the tool name and function name can't drift.
+                  if (!String(matched.name || "").trim()) {
+                    const detected = this.detectFunctionName(next);
+                    if (detected) matched.name = detected;
+                  }
+                  this.scheduleToolValidate(matched);
                 }
               }),
             ],
@@ -1086,7 +1678,9 @@ window.adminConsole = function adminConsole(config) {
       for (const tool of this.forms.server.tools || []) {
         const id = String(tool.local_id);
         const host = document.querySelector(`[data-code-editor-host="${id}"]`);
-        const fallback = document.querySelector(`[data-code-editor-fallback="${id}"]`);
+        const fallback = document.querySelector(
+          `[data-code-editor-fallback="${id}"]`,
+        );
         if (host) host.style.display = "none";
         if (fallback) {
           fallback.style.display = "";
@@ -1122,28 +1716,384 @@ window.adminConsole = function adminConsole(config) {
       });
     },
 
+    // Instant, regex-based preview lint. Intentionally a subset of the server's
+    // AST validator (it can't catch syntax errors) — its job is sub-millisecond
+    // feedback while typing and to gate the Save button. The authoritative result
+    // comes from validateTool() / the pre-save server check.
     lintHintsForTool(tool) {
       const code = String(tool?.raw_code || "");
       const hints = [];
-      const bannedImports = /\b(import|from)\s+(os|sys|subprocess|socket|shutil|ctypes|multiprocessing|importlib|marshal|pickle|builtins|resource|signal|pty)\b/;
+      const bannedImports =
+        /\b(import|from)\s+(os|sys|subprocess|socket|shutil|ctypes|multiprocessing|importlib|marshal|pickle|builtins|resource|signal|pty)\b/;
       if (bannedImports.test(code)) {
-        hints.push("Uses an import blocked by sandbox policy.");
+        hints.push("Uses an import blocked by sandbox policy (os/sys/subprocess/…).");
       }
-      const bannedCalls = /\b(eval|exec|compile|__import__|globals|locals|vars|open|breakpoint)\s*\(/;
+      const bannedCalls =
+        /\b(eval|exec|compile|__import__|globals|locals|vars|open|breakpoint)\s*\(/;
       if (bannedCalls.test(code)) {
-        hints.push("Uses a blocked function call (eval/exec/open/etc).");
+        hints.push("Uses a blocked function call (eval/exec/open/…).");
       }
-      if (code.length > 64 * 1024) {
+      const bannedAttrs =
+        /\.(__globals__|__builtins__|__subclasses__|__bases__|__mro__|__code__|__dict__|__getattribute__|__reduce__)\b/;
+      if (bannedAttrs.test(code)) {
+        hints.push("Accesses a blocked dunder attribute (sandbox-escape pattern).");
+      }
+      if (new Blob([code]).size > 64 * 1024) {
         hints.push("Source exceeds the 64KB sandbox limit.");
       }
-      if (tool?.name && !new RegExp(`\\bdef\\s+${tool.name}\\s*\\(`).test(code)) {
-        hints.push("Function name should match the tool name.");
+      const name = String(tool?.name || "").trim();
+      if (
+        name &&
+        code.trim() &&
+        !new RegExp(`(\\bdef\\s+${name}\\s*\\()|(^\\s*${name}\\s*=)`, "m").test(code)
+      ) {
+        hints.push(`Define a function named '${name}' — it must match the tool name.`);
+      }
+      for (const req of this._requirementLines(tool)) {
+        if (!/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?(?:\[[A-Za-z0-9,._-]+\])?==[A-Za-z0-9][A-Za-z0-9.\-_+!]*$/.test(req)) {
+          hints.push(`Requirement '${req}' must be pinned like 'package==1.2.3'.`);
+        }
+      }
+      const schemaRaw = String(tool?.input_schema ?? "").trim();
+      if (schemaRaw) {
+        try {
+          const parsed = JSON.parse(schemaRaw);
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            hints.push("Input schema must be a JSON object.");
+          }
+        } catch (_) {
+          hints.push("Input schema is not valid JSON.");
+        }
       }
       return hints;
     },
 
+    _parsedInputSchema(tool) {
+      const raw = String(tool?.input_schema ?? "").trim();
+      if (!raw) return {};
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed;
+        }
+      } catch (_) {
+        // Invalid JSON is flagged separately by lintHintsForTool.
+      }
+      return {};
+    },
+
+    _requirementLines(tool) {
+      return String(tool?.requirements || "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+    },
+
     hasLintHints(tool) {
       return this.lintHintsForTool(tool).length > 0;
+    },
+
+    // Best-effort detection of the callable a tool defines: the first top-level
+    // `def NAME(` (or `async def`), else a top-level `NAME =` binding. Top-level
+    // only — indented defs won't match `^def`.
+    detectFunctionName(code) {
+      const src = String(code || "");
+      const def = src.match(/^(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/m);
+      if (def) return def[1];
+      const assign = src.match(/^([A-Za-z_]\w*)\s*=(?!=)/m);
+      return assign ? assign[1] : "";
+    },
+
+    applyToolNameFix(tool) {
+      const detected = this.detectFunctionName(tool.raw_code);
+      if (!detected) return;
+      tool.name = detected;
+      this.notify(`Tool renamed to '${detected}' to match your function.`, "success");
+      this.scheduleToolValidate(tool);
+    },
+
+    focusToolLine(tool, line) {
+      const view = this._codeEditors[String(tool.local_id)];
+      if (!view || !line) return;
+      try {
+        const target = Math.max(1, Math.min(line, view.state.doc.lines));
+        const lineInfo = view.state.doc.line(target);
+        view.dispatch({
+          selection: { anchor: lineInfo.from },
+          scrollIntoView: true,
+        });
+        view.focus();
+      } catch (_) {
+        // Editor may be collapsed/unmounted; nothing to focus.
+      }
+    },
+
+    // ---- Authoritative server-side validation (AST lint, no execution) -------
+    getToolValidation(toolId) {
+      return (this.state.toolValidation || {})[String(toolId)] || null;
+    },
+
+    _setToolValidation(toolId, next) {
+      this.state.toolValidation = {
+        ...(this.state.toolValidation || {}),
+        [String(toolId)]: next,
+      };
+    },
+
+    async validateTool(tool) {
+      if (!tool) return { ok: true, issues: [] };
+      const toolId = tool.local_id;
+      this._setToolValidation(toolId, {
+        ...(this.getToolValidation(toolId) || {}),
+        validating: true,
+      });
+      try {
+        const response = await this.apiRequest("/admin/code-tools/validate", {
+          method: "POST",
+          includeTenant: false,
+          body: {
+            name: String(tool.name || "").trim(),
+            raw_code: String(tool.raw_code || ""),
+            requirements: this._requirementLines(tool),
+            action_type: tool.action_type || "read",
+            input_schema: this._parsedInputSchema(tool),
+          },
+        });
+        this._setToolValidation(toolId, {
+          validating: false,
+          ok: Boolean(response.ok),
+          issues: Array.isArray(response.issues) ? response.issues : [],
+          suggested_schema: response.suggested_schema || null,
+        });
+        return response;
+      } catch (error) {
+        // Network/validate failure must not silently green-light a save: record a
+        // soft error but let the pre-save server check be the hard gate.
+        this._setToolValidation(toolId, {
+          validating: false,
+          ok: false,
+          issues: [
+            {
+              severity: "error",
+              message:
+                error instanceof Error
+                  ? `Validation unavailable: ${error.message}`
+                  : "Validation unavailable.",
+              line: null,
+            },
+          ],
+        });
+        return { ok: false, issues: [] };
+      }
+    },
+
+    scheduleToolValidate(tool) {
+      if (!tool) return;
+      const toolId = String(tool.local_id);
+      if (this._validateTimers[toolId]) {
+        window.clearTimeout(this._validateTimers[toolId]);
+      }
+      // Empty source: clear stale results, nothing to lint yet.
+      if (!String(tool.raw_code || "").trim()) {
+        this._setToolValidation(toolId, { validating: false, ok: false, issues: [] });
+        return;
+      }
+      this._validateTimers[toolId] = window.setTimeout(() => {
+        delete this._validateTimers[toolId];
+        const live = this._toolById(tool.local_id);
+        if (live) this.validateTool(live);
+      }, 450);
+    },
+
+    // Merged, de-duplicated issues for display: authoritative server issues when
+    // available, otherwise the instant client preview.
+    toolIssues(tool) {
+      if (!tool) return [];
+      const validation = this.getToolValidation(tool.local_id);
+      if (validation && Array.isArray(validation.issues) && !validation.validating) {
+        return validation.issues;
+      }
+      return this.lintHintsForTool(tool).map((message) => ({
+        severity: "error",
+        message,
+        line: null,
+      }));
+    },
+
+    toolErrorCount(tool) {
+      return this.toolIssues(tool).filter((i) => i.severity === "error").length;
+    },
+
+    toolWarningCount(tool) {
+      return this.toolIssues(tool).filter((i) => i.severity === "warning").length;
+    },
+
+    // The name-mismatch error carries a one-click fix when we can detect the
+    // function the author actually wrote.
+    issueFixName(tool, issue) {
+      if (!issue || !String(issue.message || "").includes("must match the tool name")) {
+        return "";
+      }
+      return this.detectFunctionName(tool.raw_code);
+    },
+
+    toolSuggestedSchema(tool) {
+      return this.getToolValidation(tool?.local_id)?.suggested_schema || null;
+    },
+
+    toolHasSchemaWarning(tool) {
+      return this.toolIssues(tool).some(
+        (issue) => issue.severity === "warning" && /schema/i.test(issue.message),
+      );
+    },
+
+    // Offer the sync affordance whenever the signature implies a schema that
+    // differs from what's authored (covers both "empty schema" and "drift").
+    canSyncSchema(tool) {
+      const suggested = this.toolSuggestedSchema(tool);
+      if (!suggested) return false;
+      const current = this._parsedInputSchema(tool);
+      return JSON.stringify(current) !== JSON.stringify(this._mergeSchema(current, suggested));
+    },
+
+    // Merge the signature-derived schema over the current one, preserving any
+    // human-authored property descriptions/extras the author already wrote.
+    _mergeSchema(current, suggested) {
+      const curProps = (current && current.properties) || {};
+      const properties = {};
+      for (const [key, value] of Object.entries(suggested.properties || {})) {
+        properties[key] = { ...(curProps[key] || {}), ...value };
+      }
+      const merged = { type: "object", properties };
+      if (Array.isArray(suggested.required) && suggested.required.length) {
+        merged.required = suggested.required;
+      }
+      return merged;
+    },
+
+    applySuggestedSchema(tool) {
+      const suggested = this.toolSuggestedSchema(tool);
+      if (!suggested) return;
+      const merged = this._mergeSchema(this._parsedInputSchema(tool), suggested);
+      tool.input_schema = JSON.stringify(merged, null, 2);
+      const count = Object.keys(merged.properties || {}).length;
+      this.notify(
+        `Input schema synced from signature (${count} field${count === 1 ? "" : "s"}).`,
+        "success",
+      );
+      this.scheduleToolValidate(tool);
+    },
+
+    // ---- Test-argument seeding ---------------------------------------------
+    _sampleValue(def) {
+      const d = def || {};
+      if (Array.isArray(d.enum) && d.enum.length) return d.enum[0];
+      if (d.default !== undefined) return d.default;
+      switch (d.type) {
+        case "integer":
+        case "number":
+          return 1;
+        case "boolean":
+          return true;
+        case "array":
+          return [];
+        case "object":
+          return {};
+        case "string":
+        default:
+          return "example";
+      }
+    },
+
+    // A representative argument object from the schema (or, if the schema is
+    // empty, the signature-derived suggestion) so "Run" has inputs to work with.
+    _sampleArgsFor(tool) {
+      let schema = this._parsedInputSchema(tool);
+      if (!schema || !schema.properties || !Object.keys(schema.properties).length) {
+        schema = this.toolSuggestedSchema(tool) || {};
+      }
+      const props = (schema && schema.properties) || {};
+      const out = {};
+      for (const [key, def] of Object.entries(props)) {
+        out[key] = this._sampleValue(def);
+      }
+      return out;
+    },
+
+    canFillTestArgs(tool) {
+      return Object.keys(this._sampleArgsFor(tool)).length > 0;
+    },
+
+    fillTestArgsFromSchema(tool) {
+      const sample = this._sampleArgsFor(tool);
+      const count = Object.keys(sample).length;
+      if (!count) {
+        this.notify("No input fields to fill — add an input schema first.", "warning");
+        return;
+      }
+      tool.test_arguments = JSON.stringify(sample, null, 2);
+      this.notify(`Filled ${count} test argument${count === 1 ? "" : "s"} from schema.`, "success");
+    },
+
+    // True when a tool has problems that must block the save: instant client
+    // errors, or an authoritative server validation that found errors.
+    toolHasBlockingProblem(tool) {
+      if (this.toolBlockingHints(tool).length > 0) return true;
+      const validation = this.getToolValidation(tool.local_id);
+      return Boolean(validation && !validation.validating && validation.ok === false);
+    },
+
+    // Presence + instant-lint problems that should block saving. Used to disable
+    // the Save button immediately (no round-trip needed for the obvious cases).
+    toolBlockingHints(tool) {
+      const hints = [];
+      if (!String(tool?.name || "").trim()) hints.push("Function needs a name.");
+      if (!String(tool?.raw_code || "").trim())
+        hints.push("Function needs Python source.");
+      for (const hint of this.lintHintsForTool(tool)) hints.push(hint);
+      return hints;
+    },
+
+    canSaveServer() {
+      if (!String(this.forms.server.server || "").trim()) return false;
+      if (!this.serverKindIsCode()) {
+        return Boolean(
+          String(this.forms.server.endpoint || "").trim() ||
+            String(this.forms.server.command || "").trim(),
+        );
+      }
+      const tools = this.forms.server.tools || [];
+      if (tools.length === 0) return false;
+      return tools.every((tool) => !this.toolHasBlockingProblem(tool));
+    },
+
+    saveBlockedReason() {
+      if (!String(this.forms.server.server || "").trim()) {
+        return "Set a server name to save.";
+      }
+      if (!this.serverKindIsCode()) {
+        if (
+          !String(this.forms.server.endpoint || "").trim() &&
+          !String(this.forms.server.command || "").trim()
+        ) {
+          return "Set an endpoint or command to save.";
+        }
+        return "";
+      }
+      const tools = this.forms.server.tools || [];
+      if (tools.length === 0) return "Add at least one function to save.";
+      const broken = tools.filter((tool) => this.toolHasBlockingProblem(tool));
+      if (broken.length === 0) return "";
+      const first = broken[0];
+      const label = String(first.name || "").trim() || "Unnamed function";
+      const hints = this.toolBlockingHints(first);
+      let message = hints[0];
+      if (!message) {
+        const validation = this.getToolValidation(first.local_id);
+        const firstError = (validation?.issues || []).find((i) => i.severity === "error");
+        message = firstError ? firstError.message : "resolve validation issues";
+      }
+      return `Fix '${label}': ${message}`;
     },
 
     _setToolTestResult(toolId, next) {
@@ -1171,10 +2121,23 @@ window.adminConsole = function adminConsole(config) {
       }
       let argumentsPayload = {};
       try {
-        argumentsPayload = this.parseJsonObject(tool.test_arguments, "Test arguments");
+        argumentsPayload = this.parseJsonObject(
+          tool.test_arguments,
+          "Test arguments",
+        );
       } catch (error) {
         this.setError(error);
         return;
+      }
+      // "Run" with no arguments would fail any function that takes inputs. Seed
+      // sample values from the schema so a fresh function runs out of the box.
+      if (Object.keys(argumentsPayload).length === 0) {
+        const sample = this._sampleArgsFor(tool);
+        if (Object.keys(sample).length > 0) {
+          argumentsPayload = sample;
+          tool.test_arguments = JSON.stringify(sample, null, 2);
+          this.notify("Filled test arguments from schema for this run.", "info");
+        }
       }
       this._setToolTestResult(tool.local_id, { running: true });
       try {
@@ -1205,7 +2168,10 @@ window.adminConsole = function adminConsole(config) {
       } catch (error) {
         this._setToolTestResult(tool.local_id, {
           ok: false,
-          error: error instanceof Error ? error.message : String(error || "Unknown error"),
+          error:
+            error instanceof Error
+              ? error.message
+              : String(error || "Unknown error"),
         });
         this.setError(error);
       }
@@ -1225,8 +2191,39 @@ window.adminConsole = function adminConsole(config) {
               throw new Error("Every function needs a name.");
             }
             if (!String(tool.raw_code || "").trim()) {
-              throw new Error(`Function '${tool.name || "unnamed"}' needs Python source.`);
+              throw new Error(
+                `Function '${tool.name || "unnamed"}' needs Python source.`,
+              );
             }
+          }
+          // Hard gate: run the authoritative server validator on every function
+          // before we attempt the save, so a broken tool is caught here with
+          // line-accurate messages instead of failing the whole POST opaquely.
+          const validations = await Promise.all(
+            tools.map((tool) => this.validateTool(tool)),
+          );
+          const blockers = [];
+          tools.forEach((tool, index) => {
+            const issues = (validations[index]?.issues || []).filter(
+              (issue) => issue.severity === "error",
+            );
+            for (const issue of issues) {
+              const where = issue.line ? ` (line ${issue.line})` : "";
+              blockers.push(
+                `'${String(tool.name || "unnamed")}': ${issue.message}${where}`,
+              );
+            }
+          });
+          if (blockers.length > 0) {
+            this.forms.server.tools.forEach((tool) => {
+              if (this.toolErrorCount(tool) > 0) tool.expanded = true;
+            });
+            this.$nextTick(() => this.refreshCodeEditors());
+            throw new Error(
+              `Fix ${blockers.length} validation ${blockers.length === 1 ? "issue" : "issues"} before saving — ` +
+                blockers.slice(0, 4).join("; ") +
+                (blockers.length > 4 ? "; …" : ""),
+            );
           }
         }
         const payload = {
@@ -1241,9 +2238,20 @@ window.adminConsole = function adminConsole(config) {
           payload.tools = this.buildCodeTools();
         }
         const serverName = this.forms.server.server;
-        await this.apiRequest("/admin/servers", { method: "POST", body: payload });
-        this.resetServerForm();
+        await this.apiRequest("/admin/servers", {
+          method: "POST",
+          body: payload,
+        });
         await this.loadServers();
+        const saved = this.state.servers.find(
+          (item) => String(item.server || "").trim() === String(serverName || "").trim(),
+        );
+        if (saved) {
+          await this.openServerWorkspace(saved, "tools");
+        } else {
+          this.state.serverComposerOpen = false;
+          this.state.serverComposerMode = "create";
+        }
         this.notify(`Server '${serverName}' saved.`);
       } catch (error) {
         this.setError(error);
@@ -1254,12 +2262,17 @@ window.adminConsole = function adminConsole(config) {
       this.clearError();
       try {
         const willEnable = !server.enabled;
-        await this.apiRequest(`/admin/servers/${encodeURIComponent(server.server)}`, {
-          method: "PATCH",
-          body: { tenant_id: this.state.tenantId, enabled: willEnable },
-        });
+        await this.apiRequest(
+          `/admin/servers/${encodeURIComponent(server.server)}`,
+          {
+            method: "PATCH",
+            body: { tenant_id: this.state.tenantId, enabled: willEnable },
+          },
+        );
         await this.loadServers();
-        this.notify(`Server '${server.server}' ${willEnable ? "enabled" : "disabled"}.`);
+        this.notify(
+          `Server '${server.server}' ${willEnable ? "enabled" : "disabled"}.`,
+        );
       } catch (error) {
         this.setError(error);
       }
@@ -1269,10 +2282,16 @@ window.adminConsole = function adminConsole(config) {
       if (!window.confirm(`Delete server '${serverName}'?`)) return;
       this.clearError();
       try {
-        await this.apiRequest(`/admin/servers/${encodeURIComponent(serverName)}`, {
-          method: "DELETE",
-        });
+        await this.apiRequest(
+          `/admin/servers/${encodeURIComponent(serverName)}`,
+          {
+            method: "DELETE",
+          },
+        );
         await this.loadServers();
+        if (String(this.state.serverWorkspace.server || "") === String(serverName || "")) {
+          this.closeServerWorkspace();
+        }
         this.notify(`Server '${serverName}' deleted.`, "warning");
       } catch (error) {
         this.setError(error);
@@ -1305,7 +2324,9 @@ window.adminConsole = function adminConsole(config) {
       return Array.from(map.entries())
         .map(([server, items]) => ({
           server,
-          items: items.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))),
+          items: items.sort((a, b) =>
+            String(a.name || "").localeCompare(String(b.name || "")),
+          ),
         }))
         .sort((a, b) => a.server.localeCompare(b.server));
     },
@@ -1347,8 +2368,7 @@ window.adminConsole = function adminConsole(config) {
     },
 
     async openCatalogTool(item) {
-      this.activeSection = "servers";
-      await this.editServer({
+      await this.openServerWorkspace({
         server: item.server,
         transport: item.transport || "code",
         endpoint: null,
@@ -1369,19 +2389,28 @@ window.adminConsole = function adminConsole(config) {
 
     async runSearch() {
       this.clearError();
+      const serverName = String(this.state.serverWorkspace.server || "").trim();
+      if (!serverName) {
+        this.setError("Select an MCP server before using Search.");
+        return;
+      }
       try {
         const payload = await this.apiRequest("/admin/search", {
           method: "POST",
           includeTenant: false,
           body: {
             tenant_id: this.state.tenantId,
+            server: serverName,
             query: this.forms.search.query,
             mode: this.forms.search.mode,
             limit: this.forms.search.limit,
           },
         });
         this.state.searchResults = payload.items || [];
-        this.notify(`${this.state.searchResults.length} match(es) found.`, "info");
+        this.notify(
+          `${this.state.searchResults.length} match(es) found.`,
+          "info",
+        );
       } catch (error) {
         this.setError(error);
       }
@@ -1415,8 +2444,10 @@ window.adminConsole = function adminConsole(config) {
       if (form.api_key) payload.api_key = form.api_key;
       if (this.providerIsAzure(form.provider)) {
         if (form.azure_endpoint) payload.azure_endpoint = form.azure_endpoint;
-        if (form.azure_api_version) payload.azure_api_version = form.azure_api_version;
-        if (form.azure_deployment) payload.azure_deployment = form.azure_deployment;
+        if (form.azure_api_version)
+          payload.azure_api_version = form.azure_api_version;
+        if (form.azure_deployment)
+          payload.azure_deployment = form.azure_deployment;
       }
       return payload;
     },
@@ -1450,11 +2481,14 @@ window.adminConsole = function adminConsole(config) {
       this.clearError();
       this.state.embeddingTest = null;
       try {
-        this.state.embeddingTest = await this.apiRequest("/admin/embedding/test", {
-          method: "POST",
-          includeTenant: false,
-          body: this._embeddingPayload(),
-        });
+        this.state.embeddingTest = await this.apiRequest(
+          "/admin/embedding/test",
+          {
+            method: "POST",
+            includeTenant: false,
+            body: this._embeddingPayload(),
+          },
+        );
       } catch (error) {
         this.setError(error);
       }
@@ -1489,9 +2523,12 @@ window.adminConsole = function adminConsole(config) {
 
     async refreshEmbeddingStatus() {
       try {
-        this.state.embeddingStatus = await this.apiRequest("/admin/embedding/status", {
-          includeTenant: false,
-        });
+        this.state.embeddingStatus = await this.apiRequest(
+          "/admin/embedding/status",
+          {
+            includeTenant: false,
+          },
+        );
       } catch (error) {
         this.setError(error);
       }
@@ -1536,17 +2573,23 @@ window.adminConsole = function adminConsole(config) {
       this.clearError();
       this.state.tenantEmbeddingTest = null;
       try {
-        this.state.tenantEmbedding = await this.apiRequest(this._tenantEmbeddingBasePath(), {
-          includeTenant: false,
-        });
-        this.state.tenantEmbeddingStatus = this.state.tenantEmbedding.reprovision || null;
+        this.state.tenantEmbedding = await this.apiRequest(
+          this._tenantEmbeddingBasePath(),
+          {
+            includeTenant: false,
+          },
+        );
+        this.state.tenantEmbeddingStatus =
+          this.state.tenantEmbedding.reprovision || null;
         const cfg = this.state.tenantEmbedding;
         this.forms.tenantEmbedding.provider = cfg.provider || "ollama";
         this.forms.tenantEmbedding.model = cfg.model || "";
         this.forms.tenantEmbedding.base_url = cfg.base_url || "";
         this.forms.tenantEmbedding.azure_endpoint = cfg.azure_endpoint || "";
-        this.forms.tenantEmbedding.azure_api_version = cfg.azure_api_version || "";
-        this.forms.tenantEmbedding.azure_deployment = cfg.azure_deployment || "";
+        this.forms.tenantEmbedding.azure_api_version =
+          cfg.azure_api_version || "";
+        this.forms.tenantEmbedding.azure_deployment =
+          cfg.azure_deployment || "";
         this.forms.tenantEmbedding.api_key = "";
         if (this.tenantEmbeddingIsRunning()) this._startTenantEmbeddingPoll();
       } catch (error) {
@@ -1578,12 +2621,16 @@ window.adminConsole = function adminConsole(config) {
       try {
         const payload = this._embeddingPayloadFrom(this.forms.tenantEmbedding);
         payload.reprovision = this.forms.tenantEmbedding.reprovision;
-        this.state.tenantEmbedding = await this.apiRequest(this._tenantEmbeddingBasePath(), {
-          method: "PUT",
-          includeTenant: false,
-          body: payload,
-        });
-        this.state.tenantEmbeddingStatus = this.state.tenantEmbedding.reprovision || null;
+        this.state.tenantEmbedding = await this.apiRequest(
+          this._tenantEmbeddingBasePath(),
+          {
+            method: "PUT",
+            includeTenant: false,
+            body: payload,
+          },
+        );
+        this.state.tenantEmbeddingStatus =
+          this.state.tenantEmbedding.reprovision || null;
         this.forms.tenantEmbedding.api_key = "";
         if (this.tenantEmbeddingIsRunning()) this._startTenantEmbeddingPoll();
         this.notify(`Embedding override saved for '${this.state.tenantId}'.`);
@@ -1607,7 +2654,9 @@ window.adminConsole = function adminConsole(config) {
       this.state.tenantEmbeddingTest = null;
       this.state.tenantEmbeddingSaving = true;
       try {
-        const reprovision = this.forms.tenantEmbedding.reprovision ? "true" : "false";
+        const reprovision = this.forms.tenantEmbedding.reprovision
+          ? "true"
+          : "false";
         await this.apiRequest(
           `${this._tenantEmbeddingBasePath()}?reprovision=${reprovision}`,
           { method: "DELETE", includeTenant: false },
@@ -1615,7 +2664,10 @@ window.adminConsole = function adminConsole(config) {
         // Reload so the cards, badge, and form fields reflect the now-inherited
         // platform default, and pick up any reprovision that was kicked off.
         await this.loadTenantEmbedding();
-        this.notify(`'${this.state.tenantId}' reset to the platform default.`, "warning");
+        this.notify(
+          `'${this.state.tenantId}' reset to the platform default.`,
+          "warning",
+        );
       } catch (error) {
         this.setError(error);
       } finally {

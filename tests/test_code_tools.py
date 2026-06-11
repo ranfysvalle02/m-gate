@@ -9,6 +9,8 @@ from services.code_tools import (
     encrypt_raw_code,
     is_encrypted_token,
     lint_code_tool,
+    suggest_input_schema,
+    validate_code_tool,
 )
 
 _GOOD_CODE = "def add(a: int, b: int) -> int:\n    return a + b\n"
@@ -102,6 +104,110 @@ def test_lint_rejects_bad_requirements(requirement):
 def test_lint_rejects_unknown_action_type():
     with pytest.raises(CodeToolValidationError, match="action_type"):
         lint_code_tool(_tool(metadata={"action_type": "nuke"}))
+
+
+def test_lint_rejects_function_name_mismatch():
+    # Tool named "add" but the source defines "subtract" -> the runner's
+    # namespace.get("add") would fail at call time, so save must reject it.
+    code = "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    with pytest.raises(CodeToolValidationError, match="must match the tool name"):
+        lint_code_tool(_tool(name="add", raw_code=code))
+
+
+def test_lint_accepts_top_level_lambda_binding():
+    # A top-level binding (not only a def) also satisfies the runner contract.
+    code = "add = lambda a, b: a + b\n"
+    lint_code_tool(_tool(name="add", raw_code=code))  # should not raise
+
+
+def test_validate_returns_empty_for_clean_tool():
+    assert validate_code_tool(_tool()) == []
+
+
+def test_validate_reports_severity_and_line_numbers():
+    code = "def add(a, b):\n    import os\n    return os.getcwd()\n"
+    issues = validate_code_tool(_tool(raw_code=code))
+    assert any(i["severity"] == "error" for i in issues)
+    banned = next(i for i in issues if "not allowed" in i["message"])
+    assert banned["line"] == 2
+
+
+def test_validate_reports_syntax_error_line():
+    issues = validate_code_tool(_tool(raw_code="def broken(:\n    pass\n"))
+    assert len(issues) == 1
+    assert issues[0]["severity"] == "error"
+    assert issues[0]["line"] == 1
+
+
+def test_validate_never_raises_on_empty_code():
+    issues = validate_code_tool(_tool(raw_code=""))
+    assert any("non-empty" in i["message"] for i in issues)
+
+
+def test_validate_warns_on_signature_schema_drift():
+    code = "def add(a):\n    return a\n"
+    schema = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+    issues = validate_code_tool(_tool(raw_code=code, input_schema=schema))
+    warnings = [i for i in issues if i["severity"] == "warning"]
+    assert any("Input schema requires 'city'" in i["message"] for i in warnings)
+    assert any("Parameter 'a'" in i["message"] for i in warnings)
+    # Warnings are advisory: the hard lint gate must NOT raise on them.
+    lint_code_tool(_tool(raw_code=code, input_schema=schema))
+
+
+def test_validate_no_signature_warnings_when_aligned():
+    code = "def add(a, b):\n    return a + b\n"
+    schema = {"type": "object", "properties": {"a": {}, "b": {}}, "required": ["a", "b"]}
+    issues = validate_code_tool(_tool(raw_code=code, input_schema=schema))
+    assert [i for i in issues if i["severity"] == "warning"] == []
+
+
+def test_validate_kwargs_suppresses_missing_param_warning():
+    code = "def add(a, **kwargs):\n    return a\n"
+    schema = {"type": "object", "properties": {"a": {}, "city": {}}, "required": ["a", "city"]}
+    issues = validate_code_tool(_tool(raw_code=code, input_schema=schema))
+    assert not any("no such parameter" in i["message"] for i in issues)
+
+
+def test_validate_ignores_empty_schema():
+    code = "def add(a):\n    return a\n"
+    issues = validate_code_tool(_tool(raw_code=code, input_schema={}))
+    assert [i for i in issues if i["severity"] == "warning"] == []
+
+
+def test_suggest_schema_infers_types_and_required():
+    code = (
+        "def fetch(city: str, days: int = 3, verbose: bool = False) -> dict:\n"
+        "    return {}\n"
+    )
+    schema = suggest_input_schema(code, "fetch")
+    assert schema == {
+        "type": "object",
+        "properties": {
+            "city": {"type": "string"},
+            "days": {"type": "integer"},
+            "verbose": {"type": "boolean"},
+        },
+        "required": ["city"],
+    }
+
+
+def test_suggest_schema_unwraps_optional_params():
+    code = (
+        "from typing import Optional\n"
+        "def f(name: str, nick: Optional[str] = None, secrets: dict = {}) -> dict:\n"
+        "    return {}\n"
+    )
+    schema = suggest_input_schema(code, "f")
+    assert schema["properties"]["secrets"] == {"type": "object"}
+    assert schema["properties"]["nick"] == {"type": "string"}
+    assert schema["required"] == ["name"]  # Optional -> not required
+
+
+def test_suggest_schema_returns_none_without_params_or_function():
+    assert suggest_input_schema("def f():\n    return 1\n", "f") is None
+    assert suggest_input_schema("x = 1\n", "f") is None
+    assert suggest_input_schema("def broken(:\n", "f") is None
 
 
 @pytest.mark.asyncio

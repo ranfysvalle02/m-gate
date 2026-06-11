@@ -136,7 +136,8 @@ fusion was computed:
 
 ## Quick Start (Implemented)
 
-> Deploying for real? See **[DEPLOYMENT.md](DEPLOYMENT.md)** for Docker Compose,
+> Deploying for real? See **[ARCHITECTURE.md](ARCHITECTURE.md)** for a complete
+> as-built system map, then **[DEPLOYMENT.md](DEPLOYMENT.md)** for Docker Compose,
 > single-container, Kubernetes, and Helm paths, plus an embeddings setup and
 > production hardening checklist. For going live, also read
 > **[PRODUCTION.md](PRODUCTION.md)** (operations & hardening),
@@ -145,6 +146,8 @@ fusion was computed:
 > at the perimeter), **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** (failure-mode
 > runbook), **[docs/API.md](docs/API.md)** (REST + JSON-RPC reference), and
 > **[docs/QUERYABLE-ENCRYPTION.md](docs/QUERYABLE-ENCRYPTION.md)** (QE setup and operations).
+> For function-author ergonomics and runtime capabilities, see
+> **[CONTEXT.md](CONTEXT.md)**.
 
 ### Demo in 60s -> production in 5 steps
 
@@ -159,7 +162,7 @@ fusion was computed:
 3. **Open the Admin Studio**
    - `http://localhost:8000/ui` (`demo@demo.com` / `demo`)
 4. **Call seeded tools**
-   - Code servers: `weather`, `orders`, `utilities`
+   - Code servers: `weather`, `orders`, `utilities`, `analytics`
    - Public server: `deepwiki` (requires outbound HTTPS to `mcp.deepwiki.com`)
 5. **Graduate to production posture**
    - Use the hardening path in this README, then follow
@@ -181,7 +184,7 @@ This repository now includes a working end-to-end MCP Gateway with:
 - FastAPI + FastMCP gateway mounted at `http://localhost:8000/mcp`
 - MongoDB Atlas Local (`mongod` + `mongot`) via Docker Compose
 - **Semantic `tools/list` discovery**: a task query (`X-MCP-Query` header) returns a curated, ranked shortlist instead of the full catalog — the "route by meaning" front door
-- **Identity-bound scope on both discovery and invocation**: scope filtering in search/list and explicit authorization checks in `tools/call`
+- **Identity-bound scope on both discovery and invocation**: scope filtering in search/list and explicit authorization checks in `tools/call`, including required `server:<name>` scopes
 - Hybrid tool search (`$rankFusion`: vector + full-text) over `tool_catalog`
 - **GA-safe hybrid fallback**: application-side RRF keeps hybrid retrieval working when `$rankFusion` preview features are unavailable
 - **Resiliency**: a hard downstream deadline (`DOWNSTREAM_TIMEOUT_MS`, default 2000ms) with protocol-safe JSON-RPC error frames
@@ -193,7 +196,14 @@ This repository now includes a working end-to-end MCP Gateway with:
 - **Layered guardrails**: regex floor + optional semantic injection classifier over a versioned `guardrail_signatures` vector corpus, plus optional Presidio NER redaction
 - **Semantic cache model provenance**: cache entries are stamped with `embedding_model` / `embedding_dim` / `embedding_version`, with version-aware lookups and migration tooling
 - Default Ollama embeddings (`nomic-embed-text`) through `http://host.docker.internal:11434`
-- Demo defaults: code-powered `weather`, `orders`, and `utilities` servers (wasm sandbox execution) plus a prewired public `deepwiki` server
+- Demo defaults: code-powered `weather`, `orders`, `utilities`, and `analytics` servers (wasm sandbox execution) plus a prewired public `deepwiki` server
+- **Tenant-scoped virtual DB bridge** for code tools: `context.db[...]` queries
+  relay through the host process (no sandbox network access or DB credentials),
+  gated by each tool's `action_type` (`read` / `write` / `destructive`)
+- **Per-server encrypted runtime env**: code tools read `context.env["KEY"]`; values are managed from Admin Studio Secrets and never returned after write
+- **Explore Database authoring assistant** in Admin Studio: browse tenant
+  collections, sample documents, run read-only queries, and insert/copy
+  generated `context.db[...]` snippets directly into function source
 - **Observability**: request IDs, JSON logs, Prometheus `/metrics`, prebuilt Prometheus alert rules, a provisioned Grafana dashboard (`http://localhost:3000`), OpenTelemetry tracing (`ENABLE_TRACING=true`) with spans around RPC handling and downstream hops, and health split (`/health/live`, `/health/ready`)
 - **Delivery artifacts**: k8s manifests, Helm chart, CI workflow (lint + format + types + 82% coverage gate), pre-commit, Ruff, and MyPy configuration
 
@@ -227,8 +237,9 @@ The KMS key ARN is written to a shared volume and loaded through
 Compose also runs `secrets-init` once and writes stable file-backed secrets for
 `EMBEDDING_SECRET_FILE` and `ADMIN_SESSION_SECRET_FILE` into the
 `gateway_secrets` volume (instead of relying on fallback secrets).
-The demo stack enables `CODE_TOOL_EXECUTION_ENABLED=true`, so seeded code tools
-run immediately inside the wasm sandbox.
+The demo stack enables `CODE_TOOL_EXECUTION_ENABLED=true` and
+`SANDBOX_DB_BRIDGE_ENABLED=true`, so seeded code tools (including the click-tracker
+analytics demo) run immediately inside the wasm sandbox with `context.db`.
 Queryable Encryption is still demonstrated through encrypted routing fields and
 authored function source/secrets at rest — without the old non-functional
 `secure-stdio` fixture server.
@@ -628,7 +639,7 @@ in the code, so the post and the implementation stay honest with each other.
 | Blog concept | Where it lives in this repo |
 | --- | --- |
 | Route by meaning (curated `tools/list`) | `tools/list` + `X-MCP-Query` in `gateway/routers/rpc.py` → `HybridSearchService.search_tools` |
-| Identity-bound scope (`scopes` metadata filter on `$vectorSearch`) | `build_rank_fusion_pipeline(allowed_scopes=...)` in `services/hybrid_search.py`; `scopes` filter field in `database/indexes.py` |
+| Identity-bound scope (`scopes` + server namespace filters on `$vectorSearch`) | `build_rank_fusion_pipeline(allowed_scopes=...)` in `services/hybrid_search.py`; `scopes` + `server` filter fields in `database/indexes.py` |
 | Verified claim → search filter | `gateway/middleware/auth.py` (claims `groups`/`scopes`, `X-MCP-Scopes` header) threaded into the RPC router |
 | Hybrid search (lexical + vector fusion) | `$rankFusion` (RRF) is the **core** retrieval in `services/hybrid_search.py`; `mode=hybrid\|vector\|text` lets you compare the arms |
 | One control plane on MongoDB | `tool_catalog`, `routing_registry`, `semantic_cache`, `audit_telemetry` on one engine |

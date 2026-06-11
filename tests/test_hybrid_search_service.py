@@ -104,7 +104,10 @@ async def test_rankfusion_operationfailure_falls_back_to_app_side(patch_mongo, f
 
 @pytest.mark.asyncio
 async def test_list_tools_scope_filter(service):
-    results = await service.list_tools(allowed_scopes=["weather"], limit=10)
+    results = await service.list_tools(
+        allowed_scopes=["weather", "server:weather"],
+        limit=10,
+    )
     names = {r["name"] for r in results}
     assert "get_forecast" in names
     assert "find_order" not in names

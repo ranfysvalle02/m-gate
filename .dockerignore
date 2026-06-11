@@ -1,0 +1,15 @@
+# Keep the build context small and deterministic. The compiled wasm module
+# cache is rebuilt inside the image (see Dockerfile); never ship stale host
+# artifacts, and never copy the local virtualenv or VCS metadata.
+.git
+.gitignore
+.venv
+venv
+vendor/.wasm-cache/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+*.log

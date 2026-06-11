@@ -80,6 +80,9 @@ async def ensure_tool_catalog_indexes(
             # $vectorSearch can narrow candidates by the caller's groups before
             # ranking by meaning (Section 1 of the blog).
             {"type": "filter", "path": "scopes"},
+            # Server namespaces are enforced at discovery time too
+            # (`server:<name>` scopes), so `server` must be vector-filterable.
+            {"type": "filter", "path": "server"},
         ]
     }
     text_definition = {"mappings": {"dynamic": True}}

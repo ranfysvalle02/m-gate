@@ -74,7 +74,18 @@ body {
   --shadow-sm: 0 2px 8px -2px rgba(0, 0, 0, 0.55);
   --shadow-md: 0 10px 30px -12px rgba(0, 8, 6, 0.65);
   --shadow-lg: 0 26px 55px -22px rgba(0, 10, 8, 0.8);
-  --shadow-glow: 0 0 0 1px rgba(0, 237, 100, 0.28), 0 10px 34px -10px rgba(0, 237, 100, 0.4);
+  --shadow-glow:
+    0 0 0 1px rgba(0, 237, 100, 0.28), 0 10px 34px -10px rgba(0, 237, 100, 0.4);
+  /* Code editor syntax palette — high-contrast on the dark teal editor surface. */
+  --syntax-comment: #7d978f;
+  --syntax-keyword: #ff84b8;
+  --syntax-string: #59d7a0;
+  --syntax-number: #ffce7b;
+  --syntax-def: #82c7ff;
+  --syntax-type: #5fdede;
+  --syntax-property: #a5d8ff;
+  --syntax-operator: #c0cecb;
+  --syntax-punctuation: #93a9af;
   color-scheme: dark;
 }
 
@@ -102,7 +113,18 @@ body {
   --shadow-sm: 0 2px 8px -3px rgba(0, 50, 42, 0.16);
   --shadow-md: 0 12px 30px -14px rgba(0, 50, 42, 0.22);
   --shadow-lg: 0 28px 55px -26px rgba(0, 50, 42, 0.3);
-  --shadow-glow: 0 0 0 1px rgba(0, 104, 74, 0.22), 0 8px 28px -10px rgba(0, 104, 74, 0.28);
+  --shadow-glow:
+    0 0 0 1px rgba(0, 104, 74, 0.22), 0 8px 28px -10px rgba(0, 104, 74, 0.28);
+  /* Code editor syntax palette — high-contrast on the white editor surface. */
+  --syntax-comment: #6a7a74;
+  --syntax-keyword: #b5179e;
+  --syntax-string: #0a7d3f;
+  --syntax-number: #b45309;
+  --syntax-def: #1d4ed8;
+  --syntax-type: #0e7490;
+  --syntax-property: #1d4ed8;
+  --syntax-operator: #475569;
+  --syntax-punctuation: #64748b;
   color-scheme: light;
 }
 
@@ -218,7 +240,11 @@ body {
   height: 46vw;
   top: -14vw;
   left: -8vw;
-  background: radial-gradient(circle at center, var(--aurora-1), transparent 68%);
+  background: radial-gradient(
+    circle at center,
+    var(--aurora-1),
+    transparent 68%
+  );
   animation: drift-a 22s var(--ease-inout) infinite alternate;
 }
 
@@ -565,7 +591,12 @@ body {
   position: absolute;
   inset: 0 0 auto 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, var(--border-strong), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--border-strong),
+    transparent
+  );
 }
 
 .card:hover {
@@ -658,25 +689,148 @@ textarea.field-input {
   color: var(--text-primary);
 }
 
+.code-editor-host .cm-editor.cm-focused {
+  outline: none;
+}
+
 .code-editor-host .cm-scroller {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.84rem;
-  line-height: 1.55;
-}
-
-.code-editor-host .cm-gutters {
-  background: color-mix(in srgb, var(--surface) 80%, transparent);
-  border-right: 1px solid var(--border);
-  color: var(--text-secondary);
-}
-
-.code-editor-host .cm-activeLineGutter,
-.code-editor-host .cm-activeLine {
-  background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+  font-family:
+    "JetBrains Mono", "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.875rem;
+  line-height: 1.65;
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: auto;
 }
 
 .code-editor-host .cm-content {
   caret-color: var(--accent);
+  padding: 0.55rem 0;
+}
+
+.code-editor-host .cm-line {
+  padding: 0 0.9rem;
+}
+
+.code-editor-host .cm-gutters {
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border-right: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.code-editor-host .cm-lineNumbers .cm-gutterElement {
+  padding: 0 0.55rem 0 0.75rem;
+  color: color-mix(in srgb, var(--text-secondary) 72%, transparent);
+}
+
+.code-editor-host .cm-activeLineGutter {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-primary);
+}
+
+.code-editor-host .cm-activeLine {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.code-editor-host .cm-cursor,
+.code-editor-host .cm-dropCursor {
+  border-left-color: var(--accent);
+  border-left-width: 2px;
+}
+
+.code-editor-host .cm-selectionBackground,
+.code-editor-host .cm-content ::selection {
+  background: color-mix(in srgb, var(--accent) 24%, transparent) !important;
+}
+
+.code-editor-host.cm-focused .cm-selectionBackground {
+  background: color-mix(in srgb, var(--accent) 32%, transparent) !important;
+}
+
+.code-editor-host .cm-matchingBracket {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  color: inherit !important;
+}
+
+/* --------------------------------------------------------------------------- */
+/*  Code editor syntax palette                                                 */
+/*  classHighlighter emits stable `tok-*` classes; colours come from the       */
+/*  per-theme --syntax-* vars so highlighting follows dark/light instantly.    */
+/* --------------------------------------------------------------------------- */
+.code-editor-host .cm-content .tok-comment,
+.code-editor-host .cm-content .tok-lineComment,
+.code-editor-host .cm-content .tok-blockComment,
+.code-editor-host .cm-content .tok-docComment,
+.code-editor-host .cm-content .tok-meta {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+
+.code-editor-host .cm-content .tok-keyword,
+.code-editor-host .cm-content .tok-modifier,
+.code-editor-host .cm-content .tok-controlKeyword,
+.code-editor-host .cm-content .tok-operatorKeyword,
+.code-editor-host .cm-content .tok-definitionKeyword,
+.code-editor-host .cm-content .tok-moduleKeyword {
+  color: var(--syntax-keyword);
+  font-weight: 600;
+}
+
+.code-editor-host .cm-content .tok-string,
+.code-editor-host .cm-content .tok-string2,
+.code-editor-host .cm-content .tok-character,
+.code-editor-host .cm-content .tok-docString {
+  color: var(--syntax-string);
+}
+
+.code-editor-host .cm-content .tok-number,
+.code-editor-host .cm-content .tok-integer,
+.code-editor-host .cm-content .tok-float,
+.code-editor-host .cm-content .tok-bool,
+.code-editor-host .cm-content .tok-atom,
+.code-editor-host .cm-content .tok-null {
+  color: var(--syntax-number);
+}
+
+.code-editor-host .cm-content .tok-variableName.tok-definition,
+.code-editor-host .cm-content .tok-propertyName.tok-definition,
+.code-editor-host .cm-content .tok-macroName,
+.code-editor-host .cm-content .tok-function {
+  color: var(--syntax-def);
+}
+
+.code-editor-host .cm-content .tok-typeName,
+.code-editor-host .cm-content .tok-className,
+.code-editor-host .cm-content .tok-namespace {
+  color: var(--syntax-type);
+}
+
+.code-editor-host .cm-content .tok-propertyName,
+.code-editor-host .cm-content .tok-attributeName {
+  color: var(--syntax-property);
+}
+
+.code-editor-host .cm-content .tok-operator,
+.code-editor-host .cm-content .tok-derefOperator,
+.code-editor-host .cm-content .tok-arithmeticOperator,
+.code-editor-host .cm-content .tok-logicOperator,
+.code-editor-host .cm-content .tok-compareOperator {
+  color: var(--syntax-operator);
+}
+
+.code-editor-host .cm-content .tok-punctuation,
+.code-editor-host .cm-content .tok-separator,
+.code-editor-host .cm-content .tok-bracket,
+.code-editor-host .cm-content .tok-paren,
+.code-editor-host .cm-content .tok-brace,
+.code-editor-host .cm-content .tok-squareBracket {
+  color: var(--syntax-punctuation);
+}
+
+.code-editor-host .cm-content .tok-invalid {
+  color: var(--danger);
+  text-decoration: underline wavy var(--danger);
 }
 
 /* --------------------------------------------------------------------------- */
@@ -688,6 +842,14 @@ textarea.field-input {
   background: var(--surface-soft);
   padding: 1.2rem;
   box-shadow: var(--shadow-sm);
+}
+
+.server-browse-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  flex-wrap: wrap;
 }
 
 .studio-intro {
@@ -721,6 +883,175 @@ textarea.field-input {
   color: var(--text-primary);
 }
 
+/* --- Sandbox contract reference ------------------------------------------ */
+.contract-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-soft) 38%, transparent);
+  padding: 0.8rem 0.95rem;
+}
+
+.contract-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+
+.contract-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.contract-sub {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.contract-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem 1.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (max-width: 860px) {
+  .contract-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.contract-grid li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.contract-key {
+  font-size: 0.7rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--accent) 72%, var(--text-primary));
+}
+
+.contract-val {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.contract-val code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  padding: 0.03rem 0.32rem;
+  border-radius: 0.34rem;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-primary);
+}
+
+.contract-val em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Always-visible import cheatsheet directly under the code editor so the
+   sandbox contract never scrolls out of reach while writing code. */
+.editor-imports {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem 0.5rem;
+  margin: 0.45rem 0 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 0.5rem);
+  background: color-mix(in srgb, var(--accent-soft) 30%, transparent);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.editor-imports .ei-key {
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: color-mix(in srgb, var(--accent) 72%, var(--text-primary));
+}
+
+.editor-imports .ei-sep {
+  color: var(--border);
+}
+
+.editor-imports strong {
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.editor-imports code {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+  font-size: 0.68rem;
+  padding: 0.02rem 0.3rem;
+  border-radius: 0.32rem;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-primary);
+}
+
+.explore-drawer {
+  margin-top: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-soft) 35%, transparent);
+  padding: 0.65rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.explore-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.explore-title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--accent) 78%, var(--text-primary));
+}
+
+.explore-error {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--danger) 85%, var(--text-primary));
+}
+
+.explore-snippet-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-elevated);
+  padding: 0.45rem 0.5rem;
+}
+
+.explore-snippet {
+  margin: 0;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+  font-size: 0.73rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+
 .fn-card {
   position: relative;
   border: 1px solid var(--border);
@@ -743,7 +1074,12 @@ textarea.field-input {
   position: absolute;
   inset: 0 0 auto 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, var(--border-strong), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--border-strong),
+    transparent
+  );
 }
 
 .fn-card:hover {
@@ -813,13 +1149,18 @@ textarea.field-input {
 }
 
 .lint-hints {
-  border: 1px solid color-mix(in srgb, var(--warning) 48%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--danger) 48%, var(--border));
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--warning) 13%, transparent);
+  background: color-mix(in srgb, var(--danger) 11%, transparent);
   padding: 0.65rem 0.82rem;
   font-size: 0.79rem;
   line-height: 1.5;
-  color: color-mix(in srgb, var(--warning) 82%, var(--text-primary));
+  color: var(--text-primary);
+}
+
+.lint-hints-advisory {
+  border-color: color-mix(in srgb, var(--warning) 48%, var(--border));
+  background: color-mix(in srgb, var(--warning) 11%, transparent);
 }
 
 .lint-hints .lint-title {
@@ -827,10 +1168,140 @@ textarea.field-input {
   margin-bottom: 0.3rem;
 }
 
+.lint-hints .lint-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.lint-count {
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 0.02rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 26%, transparent);
+  color: var(--text-primary);
+}
+
+.lint-hints-advisory .lint-count {
+  background: color-mix(in srgb, var(--warning) 28%, transparent);
+}
+
 .lint-hints ul {
   margin: 0;
-  padding-left: 1.15rem;
-  list-style: disc;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.lint-hints li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.lint-dot {
+  flex: none;
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  align-self: center;
+}
+
+.lint-dot-err {
+  background: var(--danger);
+}
+
+.lint-dot-warn {
+  background: var(--warning);
+}
+
+.lint-msg {
+  flex: 1;
+}
+
+.lint-line {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.02rem 0.36rem;
+  border-radius: 0.34rem;
+  background: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.lint-line:hover {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.lint-fix {
+  flex: none;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.lint-fix:hover {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.schema-sync {
+  flex: none;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.12rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: color-mix(in srgb, var(--accent) 80%, var(--text-primary));
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.schema-sync:hover {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  transform: translateY(-1px);
+}
+
+.lint-ok {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--success) 78%, var(--text-primary));
+}
+
+.save-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.save-blocked {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--warning) 86%, var(--text-primary));
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.save-blocked::before {
+  content: "⚠";
 }
 
 /* --- Servers: hero + demystify ------------------------------------------- */
@@ -978,6 +1449,54 @@ textarea.field-input {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+.server-workspace {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.workspace-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.workspace-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.workspace-tab {
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 0.3rem 0.72rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+
+.workspace-tab:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.workspace-tab-active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-primary);
 }
 
 .manifest-row {
@@ -1130,6 +1649,21 @@ textarea.field-input {
   background: color-mix(in srgb, var(--warning) 14%, transparent);
 }
 
+.fn-status-err {
+  color: color-mix(in srgb, var(--danger) 88%, var(--text-primary));
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+}
+
+.fn-status-checking {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
 .fn-summary-tools {
   display: flex;
   align-items: center;
@@ -1215,7 +1749,12 @@ textarea.field-input {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(120deg, transparent 20%, rgba(255, 255, 255, 0.4), transparent 80%);
+  background: linear-gradient(
+    120deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.4),
+    transparent 80%
+  );
   transform: translateX(-130%);
   transition: transform var(--dur-slow) var(--ease-out);
 }

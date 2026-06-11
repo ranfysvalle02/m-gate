@@ -40,7 +40,11 @@ async def test_admin_override_allows_anything(service, patch_mongo):
 @pytest.mark.asyncio
 async def test_tool_with_no_scopes_is_open(service, patch_mongo):
     _seed(patch_mongo, name="t", scopes=[])
-    result = await service.authorize_tool_call(server="orders", name="t", caller_scopes=None)
+    result = await service.authorize_tool_call(
+        server="orders",
+        name="t",
+        caller_scopes=["server:orders"],
+    )
     assert result.allowed is True
     assert result.reason == "no_scope_required"
 
@@ -48,16 +52,20 @@ async def test_tool_with_no_scopes_is_open(service, patch_mongo):
 @pytest.mark.asyncio
 async def test_missing_caller_scope_is_denied(service, patch_mongo):
     _seed(patch_mongo, name="t", scopes=["orders:write"])
-    result = await service.authorize_tool_call(server="orders", name="t", caller_scopes=None)
+    result = await service.authorize_tool_call(
+        server="orders",
+        name="t",
+        caller_scopes=["server:orders"],
+    )
     assert result.allowed is False
-    assert result.reason == "missing_scope"
+    assert result.reason == "scope_mismatch"
 
 
 @pytest.mark.asyncio
 async def test_scope_intersection_allows(service, patch_mongo):
     _seed(patch_mongo, name="t", scopes=["orders:write", "orders:admin"])
     result = await service.authorize_tool_call(
-        server="orders", name="t", caller_scopes=["orders:write"]
+        server="orders", name="t", caller_scopes=["orders:write", "server:orders"]
     )
     assert result.allowed is True
     assert result.reason == "scope_match"
@@ -67,7 +75,19 @@ async def test_scope_intersection_allows(service, patch_mongo):
 async def test_scope_disjoint_denies(service, patch_mongo):
     _seed(patch_mongo, name="t", scopes=["orders:write"])
     result = await service.authorize_tool_call(
-        server="orders", name="t", caller_scopes=["orders:read"]
+        server="orders", name="t", caller_scopes=["orders:read", "server:orders"]
     )
     assert result.allowed is False
     assert result.reason == "scope_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_server_scope_is_required(service, patch_mongo):
+    _seed(patch_mongo, name="t", scopes=[])
+    result = await service.authorize_tool_call(
+        server="orders",
+        name="t",
+        caller_scopes=["orders"],
+    )
+    assert result.allowed is False
+    assert result.reason == "server_scope_required"

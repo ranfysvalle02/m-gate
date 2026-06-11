@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -24,6 +26,27 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ui"])
 templates = Jinja2Templates(directory="gateway/templates")
+
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+
+def _asset_version() -> str:
+    """Cache-busting token derived from static asset mtimes.
+
+    Browsers aggressively cache ``/static/app.js`` and ``/static/styles.css``. Without
+    a changing query string the user keeps running a stale bundle after a redeploy --
+    e.g. the template calls a method that only exists in the new JS, so Alpine throws
+    ``X is not defined``. Recomputed per render (it only stats a handful of small
+    files) so any edit is reflected on the very next page load, while unchanged assets
+    still hit the browser cache.
+    """
+    try:
+        mtimes = sorted(p.stat().st_mtime_ns for p in _STATIC_DIR.glob("*") if p.is_file())
+    except OSError:  # pragma: no cover - defensive: static dir missing
+        mtimes = []
+    if not mtimes:
+        return "0"
+    return hashlib.sha1(repr(mtimes).encode("utf-8")).hexdigest()[:12]
 
 
 async def _resolve_login_principal(email: str, password: str) -> dict[str, Any] | None:
@@ -90,6 +113,7 @@ async def ui_home(request: Request) -> Response:
             "default_tenant_id": settings.default_tenant_id,
             "csrf_cookie_name": ADMIN_CSRF_COOKIE,
             "logged_in_email": str(claims.get("sub", "")),
+            "asset_version": _asset_version(),
         },
     )
 
@@ -105,6 +129,7 @@ async def ui_login(request: Request) -> Response:
         {
             "ui_path": settings.admin_ui_path,
             "error": None,
+            "asset_version": _asset_version(),
         },
     )
 
@@ -133,6 +158,7 @@ async def ui_login_post(request: Request) -> Response:
             {
                 "ui_path": _ui_home_path(),
                 "error": "Invalid email or password.",
+                "asset_version": _asset_version(),
             },
             status_code=401,
         )

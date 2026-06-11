@@ -47,6 +47,7 @@ async def test_run_reprovision_reembeds_catalog_and_guardrails(patch_mongo):
     assert status["totals"]["guardrail_signatures"] == 12
     assert status["totals"]["tenants"] >= 2
     assert status["target_version"] == "probe-model:8"
+    assert status["progress"]["completed"] == status["progress"]["total"]
 
     # Catalog embeddings were rewritten to the active provider's width.
     assert all(len(doc["embedding"]) == 8 for doc in catalog.docs)
@@ -75,6 +76,32 @@ async def test_run_reprovision_recreates_vector_index(patch_mongo):
     rebuilt = catalog._search_indexes["hybrid-vector-search"]
     dims = rebuilt["definition"]["fields"][0]["numDimensions"]
     assert dims == 16
+
+
+@pytest.mark.asyncio
+async def test_run_reprovision_emits_incremental_progress(patch_mongo, monkeypatch):
+    from services import embedding_reprovision as er
+
+    _activate_fake(8)
+    control = get_control_database()
+    await control["tenants"].insert_one({"tenant_id": "local-dev"})
+    await control["tenants"].insert_one({"tenant_id": "tenant-b"})
+
+    progress_states: list[tuple[int, int]] = []
+    original_write_status = er._write_status
+
+    async def _spy_write_status(**fields):
+        progress = fields.get("progress")
+        if isinstance(progress, dict):
+            progress_states.append((int(progress.get("completed", -1)), int(progress.get("total", -1))))
+        await original_write_status(**fields)
+
+    monkeypatch.setattr(er, "_write_status", _spy_write_status)
+    status = await er.run_reprovision(started_by="admin@example.com")
+    assert status["state"] == "completed"
+    assert (0, 2) in progress_states
+    assert (1, 2) in progress_states
+    assert (2, 2) in progress_states
 
 
 @pytest.mark.asyncio
@@ -148,6 +175,7 @@ async def test_trigger_tenant_reprovision_runs_and_records_tenant_status(patch_m
 
     status = await trigger_tenant_reprovision("tenant-a", started_by="admin@example.com")
     assert status["state"] == "running"
+    assert status["progress"] == {"completed": 0, "total": 1}
 
     await asyncio.gather(*list(er._background_tasks), return_exceptions=True)
     done = await get_tenant_reprovision_status("tenant-a")
@@ -155,6 +183,7 @@ async def test_trigger_tenant_reprovision_runs_and_records_tenant_status(patch_m
     assert done["tenant_id"] == "tenant-a"
     assert done["totals"]["tenants"] == 1
     assert done["totals"]["catalog_reembedded"] == 1
+    assert done["progress"] == {"completed": 1, "total": 1}
 
 
 @pytest.mark.asyncio

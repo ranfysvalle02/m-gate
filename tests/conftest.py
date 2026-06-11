@@ -109,6 +109,7 @@ def patch_mongo(monkeypatch, fake_db):
         "services.embedding_config",
         "services.embedding_reprovision",
         "services.guardrails",
+        "services.sandbox_db_bridge",
         "services.users",
         "services.pending_actions",
         "services.usage_metering",

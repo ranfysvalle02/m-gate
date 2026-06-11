@@ -82,7 +82,9 @@ async def test_scope_filter_excludes_unauthorized_tools(live_search):
     # A caller scoped only to weather must never see orders tools, even for an
     # orders-flavored query.
     results = await live_search.search_tools(
-        query="find my order", mode=SEARCH_MODE_HYBRID, allowed_scopes=["weather"]
+        query="find my order",
+        mode=SEARCH_MODE_HYBRID,
+        allowed_scopes=["weather", "server:weather"],
     )
     for r in results:
         assert "orders" not in (r.get("scopes") or []) or "weather" in (r.get("scopes") or [])
@@ -91,7 +93,10 @@ async def test_scope_filter_excludes_unauthorized_tools(live_search):
 
 
 async def test_list_tools_respects_scope_without_query(live_search):
-    weather_only = await live_search.list_tools(allowed_scopes=["weather"], limit=50)
+    weather_only = await live_search.list_tools(
+        allowed_scopes=["weather", "server:weather"],
+        limit=50,
+    )
     names = {r["name"] for r in weather_only}
     assert "get_forecast" in names
     assert "update_order_status" not in names

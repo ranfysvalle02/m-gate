@@ -114,7 +114,7 @@ _ORDERS_LIST_CODE = """def list_customer_orders(customer_id: str, limit: int = 1
     return {"customer_id": normalized, "count": len(orders), "orders": orders, "source": "sandbox-code"}
 """
 
-_ORDERS_UPDATE_CODE = """def update_order_status(order_id: str, status: str, secrets: dict | None = None) -> dict:
+_ORDERS_UPDATE_CODE = """def update_order_status(order_id: str, status: str) -> dict:
     normalized_order = (order_id or "").strip()
     normalized_status = (status or "").strip().lower()
     if not normalized_order:
@@ -127,10 +127,10 @@ _ORDERS_UPDATE_CODE = """def update_order_status(order_id: str, status: str, sec
         raise ValueError(f"status must be one of: {', '.join(sorted(allowed))}")
 
     actor = "sandbox-demo"
-    if isinstance(secrets, dict):
-        candidate = secrets.get("OPS_ACTOR")
-        if isinstance(candidate, str) and candidate.strip():
-            actor = candidate.strip()
+    if hasattr(context, "env") and isinstance(context.env.get("OPS_ACTOR"), str):
+        candidate = context.env.get("OPS_ACTOR", "").strip()
+        if candidate:
+            actor = candidate
 
     return {
         "order_id": normalized_order,
@@ -194,6 +194,37 @@ _UTIL_REGEX_EXTRACT_CODE = """def regex_extract(text: str, pattern: str, max_mat
             }
         )
     return {"count": len(matches), "matches": matches, "source": "sandbox-code"}
+"""
+
+_ANALYTICS_TRACK_CLICK_CODE = """def track_click(target: str, source: str = "web") -> dict:
+    item = (target or "").strip()
+    if not item:
+        raise ValueError("target is required")
+    actor = context.env.get("CLICK_LABEL", "anonymous")
+    stamp = context.utcnow()
+    context.db.clicks.insert_one(
+        {
+            "target": item,
+            "source": (source or "web").strip() or "web",
+            "label": actor,
+            "created_at": stamp,
+        }
+    )
+    total = context.db.clicks.count_documents({"target": item})
+    return {"target": item, "count": int(total), "label": actor, "source": "sandbox-code"}
+"""
+
+_ANALYTICS_GET_STATS_CODE = """def get_click_stats(limit: int = 5) -> dict:
+    cap = max(1, min(int(limit or 5), 25))
+    rows = context.db.clicks.aggregate(
+        [
+            {"$group": {"_id": "$target", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": cap},
+        ]
+    )
+    top = [{"target": row.get("_id"), "count": row.get("count", 0)} for row in rows]
+    return {"top_targets": top, "source": "sandbox-code"}
 """
 
 
@@ -528,6 +559,59 @@ def routing_registry_seed(tenant_id: str | None = None) -> list[dict]:
                 },
             ],
         },
+        {
+            "_id": "analytics",
+            "tenant_id": resolved_tenant,
+            "origin": "platform",
+            "server": "analytics",
+            "transport": CODE_TRANSPORT,
+            "endpoint": None,
+            "cwd": None,
+            "enabled": True,
+            "metadata": {"domain": "analytics", "runtime": "wasm"},
+            "tools": [
+                {
+                    "server": "analytics",
+                    "name": "track_click",
+                    "description": "Record a click event and return running totals for a target.",
+                    "scopes": ["analytics", "server:analytics"],
+                    "raw_code": _ANALYTICS_TRACK_CLICK_CODE,
+                    "requirements": [],
+                    "metadata": {
+                        "cacheable": False,
+                        "cache_ttl_seconds": 0,
+                        "invalidates": ["get_click_stats"],
+                        "action_type": "write",
+                    },
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "target": {"type": "string"},
+                            "source": {"type": "string"},
+                        },
+                        "required": ["target"],
+                    },
+                },
+                {
+                    "server": "analytics",
+                    "name": "get_click_stats",
+                    "description": "Return most-clicked targets from the click tracker collection.",
+                    "scopes": ["analytics", "server:analytics", "readonly"],
+                    "raw_code": _ANALYTICS_GET_STATS_CODE,
+                    "requirements": [],
+                    "metadata": {
+                        "cacheable": False,
+                        "cache_ttl_seconds": 0,
+                        "invalidates": [],
+                        "action_type": "read",
+                    },
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 25}},
+                    },
+                },
+            ],
+        },
     ]
 
 
@@ -673,8 +757,14 @@ async def seed_bootstrap_data() -> None:
                     "orders",
                     "utilities",
                     "deepwiki",
+                    "analytics",
                     "readonly",
                     "orders:write",
+                    "server:weather",
+                    "server:orders",
+                    "server:utilities",
+                    "server:deepwiki",
+                    "server:analytics",
                 ],
                 "expires_at": datetime.now(UTC) + timedelta(days=30),
             }

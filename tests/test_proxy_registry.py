@@ -576,8 +576,8 @@ async def test_call_tool_code_transport_executes_via_executor(patch_mongo):
                 ],
             }
         )
-        tenant_db["sandbox_secrets"].docs.append(
-            {"_id": "sandbox", "values": {"API_KEY": encrypted_secret}}
+        tenant_db["server_secrets"].docs.append(
+            {"_id": "my-funcs", "values": {"API_KEY": encrypted_secret}}
         )
         result = await registry.call_tool("my-funcs", "add", {"a": 1, "b": 2})
     finally:
@@ -587,7 +587,7 @@ async def test_call_tool_code_transport_executes_via_executor(patch_mongo):
     assert executor.captured is not None
     assert executor.captured.tool == "add"
     assert executor.captured.arguments == {"a": 1, "b": 2}
-    assert executor.captured.secrets["API_KEY"] == "token-123"
+    assert executor.captured.env["API_KEY"] == "token-123"
     usage = await usage_metering.get_usage("local-dev")
     assert usage["sandbox_ms"] == 1
 

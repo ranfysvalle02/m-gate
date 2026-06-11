@@ -2,7 +2,48 @@
 
 ## Unreleased
 
+### Server Workspace, Server-Scoped Auth, and Per-Server `context.env`
+- Refactored Admin Studio around a per-MCP-server workspace with tabs for Tools,
+  Search, Explore DB, and Secrets. Search and Explore flows now run within the
+  selected server workspace instead of a global top-level section.
+- Enforced server-namespaced authorization on `tools/call`: callers now require
+  `server:<server>` (or `server:*`) in addition to tool-level scopes.
+- Applied server-scope filtering to discovery (`tools/list` and hybrid search)
+  so callers only see tools for allowed servers.
+- Replaced per-tenant sandbox secrets with per-server encrypted env storage
+  (`server_secrets`) and exposed values in sandbox runtime as `context.env`.
+  This intentionally removes legacy `secrets` argument / `SECRETS` compatibility.
+- Replaced admin endpoints `GET/PUT /admin/tenants/{tenant}/sandbox-secrets`
+  with `GET/PUT /admin/servers/{server}/env` (key names only in responses).
+- Seeded an `analytics` demo server with `track_click` (write) and
+  `get_click_stats` (read), demonstrating `context.db` + `context.env`.
+- Enabled `SANDBOX_DB_BRIDGE_ENABLED=true` in local dev defaults
+  (`.env.example` / Compose) so the click-tracker demo works out-of-the-box,
+  while production remains an explicit policy choice.
+
+### Virtual DB bridge and authoring UX
+- Added a tenant-scoped virtual DB bridge for sandboxed code tools:
+  `context.db[...]` now executes host-relayed MongoDB operations without exposing
+  network access or database credentials inside the wasm sandbox.
+- Added host-side DB operation policy enforcement keyed to each tool's
+  `metadata.action_type` (`read` / `write` / `destructive`), including collection
+  validation, aggregation stage hardening, and bridge call/result limits.
+- Added the Admin Studio **Explore Database** experience (collections, samples,
+  read-only query runner, and generated `context.db[...]` snippet insertion/copy)
+  backed by new endpoints:
+  `GET /admin/explore/collections`, `POST /admin/explore/sample`,
+  `POST /admin/explore/query`.
+- Added bridge configuration settings:
+  `SANDBOX_DB_BRIDGE_ENABLED`, `SANDBOX_DB_MAX_DOCS`,
+  `SANDBOX_DB_QUERY_TIMEOUT_MS`, `SANDBOX_DB_MAX_CALLS_PER_INVOCATION`,
+  `SANDBOX_DB_MAX_RESULT_BYTES`.
+- Refreshed stale code-tool docs/comments to reflect current runtime behavior
+  (code tools are executable in wasm when enabled; no longer "storage-only").
+
 ### Observability and docs
+- Added `ARCHITECTURE.md` as the canonical as-built system map (component flow,
+  control-vs-tenant data plane, `tools/call` lifecycle, subsystem deep dives,
+  and roadmap gaps), and linked it from the main README deploy path.
 - Added a turnkey observability stack for local demos: Prometheus scrape config,
   Prometheus alert rules, Grafana provisioning, and a prebuilt gateway dashboard
   wired into `docker-compose.yml`.
@@ -78,6 +119,10 @@
   cross-model false positives after embedding model upgrades.
 - Added semantic cache migration operations (status / purge / reembed) in both
   admin API (`POST /admin/cache/migrate`) and CLI (`scripts/migrate_cache.py`).
+- Fixed semantic-cache `reembed` migration completeness: stale entries are now
+  processed across all batches (not capped to one `batch_size` slice), and
+  migration summaries now include `remaining_entries` for explicit operator
+  visibility.
 - Eliminated index/filter drift risk by centralizing semantic-cache and
   guardrail-signature vector index specs beside their query filters and adding
   Docker-free contract tests that ensure filter keys are index-declared.
@@ -89,11 +134,21 @@
   (`AUTO_PROVISION_TENANTS=true`, cached per process) or returns a clear
   `tenant_not_provisioned` JSON-RPC error instead of failing as a silent empty
   result. Disable auto-provisioning where tenant ids are untrusted.
+- Added explicit tenant deprovisioning support: `deprovision_tenant()` drops the
+  tenant database, deletes the control-plane tenant record, and evicts in-process
+  readiness caches; exposed as `DELETE /admin/tenants/{tenant_id}` (platform-admin).
+- Added usage-event rollup access via
+  `GET /admin/tenants/{tenant_id}/usage/events` and `summarize_billing_events()`
+  so persisted billing events (`calls`, `sandbox_ms`) are queryable without
+  direct DB inspection.
 
 ### Routing and resiliency
 - Fixed active-active registry-watcher scaling: each replica now persists its own
   change-stream resume token (`routing_registry::<instance_id>`) so pods do not
   overwrite each other's stream position.
+- Embedding reprovision status is now incrementally updated with
+  `progress={completed,total}` and partial tenant summaries while the run is in
+  flight, so admin polling can distinguish healthy progress from a stalled job.
 - Added TTL lifecycle management for watcher resume-state docs
   (`WATCHER_RESUME_TTL_SECONDS`) with index-option conflict handling.
 - Integrated JWT rotation with downstream warm-client pooling: the warm-hit path
@@ -101,6 +156,9 @@
   state) and only evicts/reconnects with a freshly minted token when a (re)connect is
   actually needed, so calls always use a fresh JIT credential without dropping pool
   semantics. Catalog discovery presents the same credential.
+- Warm sandbox worker-pool acquisition now skips/recycles workers already dead
+  while idle in the free queue, reducing user-visible `tools/call` failures from
+  transient worker exits.
 - Sliding-window rate limiter that weights the previous window into the current
   one, closing the 2x burst-at-the-boundary gap. Buckets live one extra window so
   the rolling calculation can read the prior window before TTL cleanup.

@@ -54,7 +54,7 @@ def _build_request(*, limits: SandboxLimits) -> ExecRequest:
         raw_code="def run() -> dict[str, bool]:\n    return {'ok': True}\n",
         requirements=[],
         arguments={},
-        secrets={},
+        env={},
         limits=limits,
     )
 

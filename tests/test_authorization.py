@@ -31,13 +31,13 @@ async def test_authorization_enforces_scope(monkeypatch):
     denied = await service.authorize_tool_call(
         server="orders",
         name="update_order_status",
-        caller_scopes=["orders", "readonly"],
+        caller_scopes=["orders", "readonly", "server:orders"],
         caller_roles=[],
     )
     allowed = await service.authorize_tool_call(
         server="orders",
         name="update_order_status",
-        caller_scopes=["orders:write"],
+        caller_scopes=["orders:write", "server:orders"],
         caller_roles=[],
     )
     assert denied.allowed is False
@@ -84,7 +84,7 @@ async def test_authorization_allows_when_scope_not_required(monkeypatch):
     result = await service.authorize_tool_call(
         server="weather",
         name="get_forecast",
-        caller_scopes=None,
+        caller_scopes=["server:weather"],
         caller_roles=[],
     )
     assert result.allowed is True
@@ -107,11 +107,34 @@ async def test_authorization_denies_when_scope_missing(monkeypatch):
     result = await service.authorize_tool_call(
         server="orders",
         name="update_order_status",
-        caller_scopes=None,
+        caller_scopes=["server:orders"],
         caller_roles=[],
     )
     assert result.allowed is False
-    assert result.reason == "missing_scope"
+    assert result.reason == "scope_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_authorization_denies_when_server_scope_missing(monkeypatch):
+    docs = {
+        ("orders", "find_order"): {
+            "server": "orders",
+            "name": "find_order",
+            "scopes": [],
+        }
+    }
+    fake_db = _FakeDb(tool_catalog=_FakeCollection(docs))
+    monkeypatch.setattr("services.authorization.get_tenant_database", lambda tenant_id: fake_db)
+
+    service = AuthorizationService()
+    result = await service.authorize_tool_call(
+        server="orders",
+        name="find_order",
+        caller_scopes=["orders"],
+        caller_roles=[],
+    )
+    assert result.allowed is False
+    assert result.reason == "server_scope_required"
 
 
 @pytest.mark.asyncio
@@ -152,7 +175,7 @@ async def test_authorization_passes_through_tenant_id(monkeypatch):
         tenant_id="tenant-123",
         server="orders",
         name="find_order",
-        caller_scopes=[],
+        caller_scopes=["server:orders"],
         caller_roles=[],
     )
     assert result.allowed is True

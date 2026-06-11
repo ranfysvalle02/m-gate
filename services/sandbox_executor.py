@@ -11,9 +11,10 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Awaitable, Callable, Protocol
 
 from config.settings import Settings, get_settings
+from services.sandbox_db_bridge import SandboxDbBridge
 from services.sandbox_errors import (
     SandboxError,
     SandboxProtocolError,
@@ -52,7 +53,8 @@ class ExecRequest:
     raw_code: str
     requirements: list[str]
     arguments: dict[str, Any]
-    secrets: dict[str, str]
+    env: dict[str, str]
+    action_type: str = "read"
     limits: SandboxLimits | None = None
 
 
@@ -98,10 +100,19 @@ class WasmExecutor:
         if self.settings.code_executor == "disabled":
             raise SandboxError("Code executor is disabled.")
         started = time.perf_counter()
+        process = None
+        stderr_task: asyncio.Task[bytes] | None = None
+        frame: dict[str, Any] | None = None
+        stderr = ""
+        limits = self._resolve_limits(request.limits)
+        worker_timeout_ms = self._worker_timeout_ms(
+            wall_timeout_ms=limits.wall_timeout_ms,
+            db_bridge_enabled=self._db_bridge_enabled(),
+        )
+        dispatch = self._db_dispatcher(request)
         async with self._global_guard():
             semaphore = await self._tenant_semaphore(request.tenant_id)
             async with semaphore:
-                limits = self._resolve_limits(request.limits)
                 with tempfile.TemporaryDirectory(prefix="mcp-sbx-") as temp_dir:
                     temp_path = Path(temp_dir)
                     job_path = temp_path / "job.json"
@@ -127,43 +138,105 @@ class WasmExecutor:
                         *command,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
+                        stdin=asyncio.subprocess.PIPE,
                         env=self._subprocess_env(),
                     )
+                    if process.stdout is None or process.stdin is None:
+                        raise SandboxError("Sandbox worker did not expose stdio pipes.")
+                    stderr_task = asyncio.create_task(
+                        process.stderr.read() if process.stderr is not None else asyncio.sleep(0, result=b"")
+                    )
                     try:
-                        stdout_raw, stderr_raw = await asyncio.wait_for(
-                            process.communicate(),
-                            timeout=limits.wall_timeout_ms / 1000,
+                        frame = await self._pump_worker_frames(
+                            reader=process.stdout,
+                            writer=process.stdin,
+                            timeout_ms=worker_timeout_ms,
+                            dispatch=dispatch,
                         )
                     except TimeoutError as exc:
                         process.kill()
-                        await process.communicate()
+                        if stderr_task is not None:
+                            with contextlib.suppress(Exception):
+                                await stderr_task
+                        with contextlib.suppress(Exception):
+                            await process.wait()
                         raise SandboxTimeoutError(
                             f"Code tool '{request.server}/{request.tool}' timed out after "
-                            f"{limits.wall_timeout_ms}ms."
+                            f"{worker_timeout_ms}ms."
                         ) from exc
+                    finally:
+                        if process.stdin is not None and not process.stdin.is_closing():
+                            with contextlib.suppress(Exception):
+                                process.stdin.write(b'{"shutdown": true}\n')
+                                await process.stdin.drain()
+                        with contextlib.suppress(Exception):
+                            await process.wait()
+                    stderr_raw = b""
+                    if stderr_task is not None:
+                        stderr_raw = await stderr_task
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        stdout = stdout_raw.decode("utf-8", errors="replace")
         stderr = stderr_raw.decode("utf-8", errors="replace")
-        if len(stdout.encode("utf-8")) + len(stderr.encode("utf-8")) > limits.max_output_bytes:
-            raise SandboxProtocolError("Sandbox output exceeded the configured output-size limit.")
-        frame = self._decode_worker_frame(stdout)
-        if process.returncode != 0 and frame is None:
-            message = stderr.strip() or stdout.strip() or f"worker exit code {process.returncode}"
-            raise SandboxError(f"Sandbox worker failed: {message}")
         if frame is None:
-            raise SandboxProtocolError("Sandbox worker did not emit a JSON result frame.")
-        if not frame.get("ok"):
-            raise self._frame_error(frame)
+            message = stderr.strip()
+            if process is not None:
+                message = message or f"worker exit code {process.returncode}"
+            raise SandboxError(f"Sandbox worker failed: {message}")
+        return self._result_from_frame(frame, limits=limits, elapsed_ms=elapsed_ms)
 
-        result_value = frame.get("result")
-        payload = result_value if isinstance(result_value, dict) else {"data": result_value}
-        return ExecResult(
-            payload=payload,
-            stdout=str(frame.get("stdout") or ""),
-            stderr=str(frame.get("stderr") or ""),
-            elapsed_ms=elapsed_ms,
+    def _db_bridge_enabled(self) -> bool:
+        return bool(self.settings.sandbox_db_bridge_enabled)
+
+    def _worker_timeout_ms(self, *, wall_timeout_ms: int, db_bridge_enabled: bool) -> int:
+        timeout_ms = max(1, int(wall_timeout_ms))
+        if not db_bridge_enabled:
+            return timeout_ms
+        max_calls = max(0, int(self.settings.sandbox_db_max_calls_per_invocation))
+        per_call = max(0, int(self.settings.sandbox_db_query_timeout_ms))
+        # Allow host-side DB RPC latency without treating it as guest compute time.
+        return timeout_ms + (max_calls * per_call)
+
+    def _db_dispatcher(
+        self, request: ExecRequest
+    ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None:
+        if not self._db_bridge_enabled():
+            return None
+        bridge = SandboxDbBridge(
+            tenant_id=request.tenant_id,
+            action_type=request.action_type,
+            settings=self.settings,
         )
+        return bridge.handle
+
+    async def _pump_worker_frames(
+        self,
+        *,
+        reader,
+        writer,
+        timeout_ms: int,
+        dispatch: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    ) -> dict[str, Any]:
+        deadline = asyncio.get_running_loop().time() + max(0.05, timeout_ms / 1000)
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("Sandbox worker timed out before returning a result frame.")
+            line = await asyncio.wait_for(reader.readline(), timeout=remaining)
+            if not line:
+                raise SandboxError("Sandbox worker exited before returning a result.")
+            try:
+                frame = json.loads(line.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError as exc:
+                raise SandboxProtocolError("Sandbox worker returned a malformed frame.") from exc
+            if not isinstance(frame, dict):
+                raise SandboxProtocolError("Sandbox worker frame was not a JSON object.")
+            if frame.get("type") != "db_rpc":
+                return frame
+            if dispatch is None:
+                raise SandboxProtocolError("Sandbox worker requested DB RPC when bridge is disabled.")
+            response = await dispatch(frame)
+            writer.write((json.dumps(response) + "\n").encode("utf-8"))
+            await writer.drain()
 
     async def _tenant_semaphore(self, tenant_id: str) -> asyncio.Semaphore:
         async with self._tenant_limits_lock:
@@ -208,7 +281,13 @@ class WasmExecutor:
             "requirements": request.requirements,
             "python_paths": python_paths,
             "arguments": request.arguments,
-            "secrets": request.secrets,
+            "env": request.env,
+            "action_type": request.action_type,
+            "db_bridge": self._db_bridge_enabled(),
+            "db_rpc_wait_ms": self._worker_timeout_ms(
+                wall_timeout_ms=limits.wall_timeout_ms,
+                db_bridge_enabled=self._db_bridge_enabled(),
+            ),
             "limits": self._limits_payload(limits),
         }
 
@@ -378,10 +457,15 @@ class PooledWasmExecutor(WasmExecutor):
         if self.settings.code_executor == "disabled":
             raise SandboxError("Code executor is disabled.")
         started = time.perf_counter()
+        limits = self._resolve_limits(request.limits)
+        worker_timeout_ms = self._worker_timeout_ms(
+            wall_timeout_ms=limits.wall_timeout_ms,
+            db_bridge_enabled=self._db_bridge_enabled(),
+        )
+        dispatch = self._db_dispatcher(request)
         async with self._global_guard():
             semaphore = await self._tenant_semaphore(request.tenant_id)
             async with semaphore:
-                limits = self._resolve_limits(request.limits)
                 with tempfile.TemporaryDirectory(prefix="mcp-sbx-") as temp_dir:
                     temp_path = Path(temp_dir)
                     job_path = temp_path / "job.json"
@@ -397,7 +481,8 @@ class PooledWasmExecutor(WasmExecutor):
                     frame = await self.pool.submit(
                         job_dir=temp_path,
                         limits=self._limits_payload(limits),
-                        timeout_ms=limits.wall_timeout_ms,
+                        timeout_ms=worker_timeout_ms,
+                        dispatch=dispatch,
                     )
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         return self._result_from_frame(frame, limits=limits, elapsed_ms=elapsed_ms)

@@ -65,11 +65,11 @@ def test_vector_pipeline_shape_and_scope_filter():
         query_vector=[0.1, 0.2, 0.3],
         num_candidates=100,
         output_limit=5,
-        allowed_scopes=["weather"],
+        allowed_scopes=["weather", "server:weather"],
     )
     vs = pipeline[0]["$vectorSearch"]
     assert vs["path"] == "embedding"
-    assert vs["filter"] == {"scopes": {"$in": ["weather"]}}
+    assert vs["filter"] == {"scopes": {"$in": ["weather"]}, "server": {"$in": ["weather"]}}
     assert pipeline[1]["$project"]["score"] == {"$meta": "vectorSearchScore"}
 
 
@@ -77,11 +77,11 @@ def test_text_pipeline_shape_and_scope_filter():
     pipeline = build_text_pipeline(
         query="forecast",
         output_limit=5,
-        allowed_scopes=["weather"],
+        allowed_scopes=["weather", "server:weather"],
     )
     assert pipeline[0]["$search"]["text"]["path"] == ["name", "description", "server"]
     match_stages = [s["$match"] for s in pipeline if "$match" in s]
-    assert match_stages == [{"scopes": {"$in": ["weather"]}}]
+    assert match_stages == [{"scopes": {"$in": ["weather"]}, "server": {"$in": ["weather"]}}]
     project = next(s["$project"] for s in pipeline if "$project" in s)
     assert project["score"] == {"$meta": "searchScore"}
 
@@ -112,15 +112,20 @@ def test_rank_fusion_pipeline_applies_scope_filter():
         pipeline_limit=20,
         output_limit=10,
         include_score_details=True,
-        allowed_scopes=["weather", "readonly"],
+        allowed_scopes=["weather", "readonly", "server:weather"],
     )
     pipelines = pipeline[0]["$rankFusion"]["input"]["pipelines"]
 
     vector_filter = pipelines["vectorPipeline"][0]["$vectorSearch"]["filter"]
-    assert vector_filter == {"scopes": {"$in": ["weather", "readonly"]}}
+    assert vector_filter == {
+        "scopes": {"$in": ["weather", "readonly"]},
+        "server": {"$in": ["weather"]},
+    }
 
     match_stages = [stage["$match"] for stage in pipelines["fullTextPipeline"] if "$match" in stage]
-    assert match_stages == [{"scopes": {"$in": ["weather", "readonly"]}}]
+    assert match_stages == [
+        {"scopes": {"$in": ["weather", "readonly"]}, "server": {"$in": ["weather"]}}
+    ]
 
 
 def test_rank_fusion_ignores_empty_scope_list():
@@ -137,6 +142,16 @@ def test_rank_fusion_ignores_empty_scope_list():
     )
     pipelines = pipeline[0]["$rankFusion"]["input"]["pipelines"]
     assert "filter" not in pipelines["vectorPipeline"][0]["$vectorSearch"]
+
+
+def test_server_scope_wildcard_does_not_restrict_server():
+    pipeline = build_vector_pipeline(
+        query_vector=[0.1, 0.2, 0.3],
+        num_candidates=50,
+        output_limit=5,
+        allowed_scopes=["readonly", "server:*"],
+    )
+    assert pipeline[0]["$vectorSearch"]["filter"] == {"scopes": {"$in": ["readonly"]}}
 
 
 def test_app_side_rrf_fusion_orders_by_combined_rank():

@@ -160,6 +160,336 @@
       </tbody>
     </table>
   </div>
+  <div class="card server-workspace" x-show="state.serverWorkspace.open" x-transition.opacity>
+    <div class="workspace-head">
+      <div>
+        <div class="studio-eyebrow">Server workspace</div>
+        <h3 class="text-xl font-semibold" x-text="workspaceServerName() || 'Select a server'"></h3>
+      </div>
+      <button type="button" class="btn-secondary" @click="closeServerWorkspace()">
+        Close workspace
+      </button>
+    </div>
+    <div class="workspace-tabs">
+      <button
+        type="button"
+        class="workspace-tab"
+        :class="workspaceTabIs('tools') ? 'workspace-tab-active' : ''"
+        @click="setWorkspaceTab('tools')"
+      >
+        Tools
+      </button>
+      <button
+        type="button"
+        class="workspace-tab"
+        :class="workspaceTabIs('search') ? 'workspace-tab-active' : ''"
+        @click="setWorkspaceTab('search')"
+      >
+        Search
+      </button>
+      <button
+        type="button"
+        class="workspace-tab"
+        :class="workspaceTabIs('exploreDb') ? 'workspace-tab-active' : ''"
+        @click="setWorkspaceTab('exploreDb')"
+      >
+        Explore DB
+      </button>
+      <button
+        type="button"
+        class="workspace-tab"
+        :class="workspaceTabIs('secrets') ? 'workspace-tab-active' : ''"
+        @click="setWorkspaceTab('secrets')"
+      >
+        Secrets
+      </button>
+    </div>
+
+    <div x-show="workspaceTabIs('tools')" class="text-sm text-slate-500">
+      Edit tools in the composer above. Search, DB explore, and env secrets are
+      scoped to this selected server.
+    </div>
+
+    <div x-show="workspaceTabIs('search')" class="space-y-4">
+      <h3 class="text-lg font-semibold">Server Search</h3>
+      <p class="text-sm text-slate-500">
+        Results are filtered to
+        <code x-text="workspaceServerName() || '-'"></code>.
+      </p>
+      <form class="grid gap-3 md:grid-cols-4" @submit.prevent="runSearch()">
+        <div class="md:col-span-2">
+          <label class="field-label">Query</label
+          ><input class="field-input" x-model="forms.search.query" required />
+        </div>
+        <div>
+          <label class="field-label">Mode</label
+          ><select class="field-input" x-model="forms.search.mode">
+            <option>hybrid</option>
+            <option>vector</option>
+            <option>text</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">Limit</label
+          ><input
+            type="number"
+            min="1"
+            max="50"
+            class="field-input"
+            x-model.number="forms.search.limit"
+          />
+        </div>
+        <div>
+          <button type="submit" class="btn-primary mt-6">Run Search</button>
+        </div>
+      </form>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Server</th>
+              <th>Tool</th>
+              <th>Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template
+              x-if="!state.searchResults || state.searchResults.length === 0"
+            >
+              <tr>
+                <td class="empty-cell" colspan="3">
+                  <span class="empty-emoji">🔎</span>Run a search to see matching
+                  tools
+                </td>
+              </tr>
+            </template>
+            <template
+              x-for="item in state.searchResults"
+              :key="`${item.server}:${item.name}`"
+            >
+              <tr>
+                <td x-text="item.server"></td>
+                <td x-text="item.name"></td>
+                <td x-text="item.score ?? '-'"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div x-show="workspaceTabIs('exploreDb')" class="space-y-3">
+      <h3 class="text-lg font-semibold">Explore Database</h3>
+      <p class="text-sm text-slate-500">
+        Queries run against the active tenant and selected server workspace.
+      </p>
+      <template x-if="state.workspaceExplore">
+        <div class="explore-drawer">
+          <div class="explore-head">
+            <span class="explore-title">Database Explorer</span>
+            <span class="field-hint" x-show="state.exploreCollectionsLoading"
+              >Loading collections...</span
+            >
+          </div>
+          <div class="grid gap-3 md:grid-cols-4">
+            <div>
+              <label class="field-label">Collection</label>
+              <select class="field-input" x-model="state.workspaceExplore.explore_collection">
+                <option value="">Select collection</option>
+                <template
+                  x-for="name in (state.exploreCollections || [])"
+                  :key="`workspace-explore-collection-${name}`"
+                >
+                  <option :value="name" x-text="name"></option>
+                </template>
+              </select>
+            </div>
+            <div>
+              <label class="field-label">Query mode</label>
+              <select class="field-input" x-model="state.workspaceExplore.explore_mode">
+                <option value="find">find</option>
+                <option value="aggregate">aggregate</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label">Limit</label>
+              <input
+                class="field-input"
+                type="number"
+                min="1"
+                max="100"
+                x-model.number="state.workspaceExplore.explore_limit"
+              />
+            </div>
+            <div>
+              <label class="field-label">Insert into</label>
+              <select class="field-input" x-model="state.workspaceExploreTargetId">
+                <template x-for="tool in (forms.server.tools || [])" :key="`workspace-target-${tool.local_id}`">
+                  <option :value="tool.local_id" x-text="tool.name || `Function ${tool.local_id}`"></option>
+                </template>
+              </select>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              class="btn-secondary !py-1 !px-2.5 !text-xs"
+              @click="loadWorkspaceExploreSample()"
+            >
+              Sample docs
+            </button>
+            <button
+              type="button"
+              class="btn-secondary !py-1 !px-2.5 !text-xs"
+              @click="runWorkspaceExploreQuery()"
+            >
+              Run query
+            </button>
+          </div>
+          <template x-if="state.workspaceExplore.explore_mode === 'find'">
+            <div>
+              <label class="field-label"
+                >Find filter <span class="field-hint">(JSON object)</span></label
+              >
+              <textarea
+                class="field-input font-mono text-xs"
+                rows="3"
+                x-model="state.workspaceExplore.explore_filter"
+                placeholder='{"status":"active"}'
+              ></textarea>
+            </div>
+          </template>
+          <template x-if="state.workspaceExplore.explore_mode === 'aggregate'">
+            <div>
+              <label class="field-label"
+                >Pipeline <span class="field-hint">(JSON array)</span></label
+              >
+              <textarea
+                class="field-input font-mono text-xs"
+                rows="4"
+                x-model="state.workspaceExplore.explore_pipeline"
+                placeholder='[{"$match":{"status":"active"}}]'
+              ></textarea>
+            </div>
+          </template>
+          <template x-if="state.workspaceExplore.explore_error">
+            <div class="explore-error" x-text="state.workspaceExplore.explore_error"></div>
+          </template>
+          <template x-if="state.workspaceExplore.explore_snippet">
+            <div class="explore-snippet-wrap">
+              <div class="flex items-center justify-between mb-1">
+                <div class="field-label !mb-0">Function snippet</div>
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    class="schema-sync"
+                    @click="copyWorkspaceExploreSnippet()"
+                  >
+                    Copy
+                  </button>
+                  <button
+                    type="button"
+                    class="schema-sync"
+                    @click="insertWorkspaceExploreSnippet()"
+                  >
+                    Insert into source
+                  </button>
+                </div>
+              </div>
+              <pre class="explore-snippet" x-text="state.workspaceExplore.explore_snippet"></pre>
+            </div>
+          </template>
+          <template
+            x-if="(state.workspaceExplore.explore_sample_docs || []).length > 0 || (state.workspaceExplore.explore_results || []).length > 0"
+          >
+            <div class="explore-output">
+              <div class="field-label !mb-1">Preview</div>
+              <pre
+                class="test-output !mt-0 !max-h-32 !text-[11px]"
+                x-text="JSON.stringify((state.workspaceExplore.explore_results || []).length ? state.workspaceExplore.explore_results : state.workspaceExplore.explore_sample_docs, null, 2)"
+              ></pre>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+
+    <div x-show="workspaceTabIs('secrets')" class="space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="text-lg font-semibold">Virtual <code>.env</code></h3>
+        <button type="button" class="btn-secondary" @click="loadServerEnv()">
+          Refresh keys
+        </button>
+      </div>
+      <p class="text-sm text-slate-500">
+        Values are encrypted at rest and never returned after write. Access in
+        code with <code>context.env['KEY']</code>.
+      </p>
+      <div class="grid gap-3 md:grid-cols-3">
+        <div>
+          <label class="field-label">Key</label>
+          <input class="field-input" x-model="forms.serverEnv.key" placeholder="CLICK_LABEL" />
+        </div>
+        <div class="md:col-span-2">
+          <label class="field-label">Value</label>
+          <input
+            type="password"
+            class="field-input"
+            x-model="forms.serverEnv.value"
+            placeholder="••••••••"
+            autocomplete="new-password"
+          />
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="btn-primary"
+          :disabled="state.serverEnvSaving"
+          @click="saveServerEnvEntry()"
+        >
+          Save key
+        </button>
+        <span class="field-hint" x-show="state.serverEnvLoading">Loading…</span>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-if="!state.serverEnv.keys || state.serverEnv.keys.length === 0">
+              <tr>
+                <td class="empty-cell" colspan="2">
+                  <span class="empty-emoji">🔐</span>No keys configured
+                </td>
+              </tr>
+            </template>
+            <template x-for="key in (state.serverEnv.keys || [])" :key="`server-env-${key}`">
+              <tr>
+                <td><code x-text="key"></code></td>
+                <td class="space-x-2">
+                  <button type="button" class="link-btn" @click="editServerEnvKey(key)">
+                    Set value
+                  </button>
+                  <button
+                    type="button"
+                    class="link-btn text-rose-600"
+                    @click="deleteServerEnvKey(key)"
+                  >
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 </section>
 
 <section
@@ -392,7 +722,51 @@
     </button>
   </div>
 
-  <form class="space-y-4" @submit.prevent="saveServer()">
+  <div class="server-browse-actions card">
+    <div class="studio-intro">
+      Pick a server, then use the workspace tabs for tools, search, database
+      exploration, and secure per-server env keys.
+    </div>
+    <div class="builder-actions">
+      <button
+        type="button"
+        class="btn-secondary"
+        @click="openServerComposer('code')"
+      >
+        + New virtual server
+      </button>
+      <button
+        type="button"
+        class="btn-secondary"
+        @click="openServerComposer('connect')"
+      >
+        + Connect existing server
+      </button>
+      <button type="button" class="btn-secondary" @click="loadServers()">
+        Refresh list
+      </button>
+    </div>
+  </div>
+
+  <form
+    x-show="state.serverComposerOpen && workspaceTabIs('tools')"
+    x-transition.opacity
+    class="server-composer space-y-4"
+    @submit.prevent="saveServer()"
+  >
+    <div class="builder-head">
+      <div
+        class="builder-title"
+        x-text="state.serverComposerMode === 'edit' ? 'Edit MCP server' : 'Create MCP server'"
+      ></div>
+      <button
+        type="button"
+        class="btn-secondary"
+        @click="closeServerWorkspace()"
+      >
+        Close workspace
+      </button>
+    </div>
     <div class="mb-2">
       <div class="segment-ctrl">
         <button
@@ -530,10 +904,50 @@
           </template>
         </div>
 
-        <div class="studio-rules">
-          <strong>Sandbox rules:</strong> no network egress, stdlib by default,
-          one pinned requirement per line (<code>name==version</code>), 64KB max
-          source, and the function name must match the tool name.
+        <div class="contract-card">
+          <div class="contract-head">
+            <span class="contract-title">Sandbox contract</span>
+            <span class="contract-sub"
+              >Checked automatically — what you see here is what Save
+              enforces.</span
+            >
+          </div>
+          <ul class="contract-grid">
+            <li>
+              <span class="contract-key">Exceptions &amp; builtins</span>
+              <span class="contract-val"
+                >No import needed —
+                <code>raise ValueError("bad input")</code>,
+                <code>len()</code>, <code>dict()</code> all just work.</span
+              >
+            </li>
+            <li>
+              <span class="contract-key">Standard library</span>
+              <span class="contract-val"
+                >Just <code>import</code> it — <code>json</code>,
+                <code>math</code>, <code>datetime</code>, <code>re</code>,
+                <code>statistics</code>… (blocked: <code>os</code>,
+                <code>sys</code>, <code>subprocess</code>,
+                <code>socket</code>, …).</span
+              >
+            </li>
+            <li>
+              <span class="contract-key">Third-party packages</span>
+              <span class="contract-val"
+                >Pin each in <em>Requirements</em> as
+                <code>package==1.2.3</code> (one per line). No network at
+                runtime.</span
+              >
+            </li>
+            <li>
+              <span class="contract-key">Your function</span>
+              <span class="contract-val"
+                >Name must equal the tool name, take the input-schema fields as
+                arguments, and <code>return</code> JSON-serializable data. 64KB
+                max source.</span
+              >
+            </li>
+          </ul>
         </div>
 
         <template
@@ -563,17 +977,33 @@
                   :class="`action-${tool.action_type || 'read'}`"
                   x-text="tool.action_type || 'read'"
                 ></span>
-                <template x-if="hasLintHints(tool)">
+                <template x-if="getToolValidation(tool.local_id)?.validating">
+                  <span class="fn-status fn-status-checking" title="Validating">
+                    <span class="spinner"></span> checking
+                  </span>
+                </template>
+                <template
+                  x-if="!getToolValidation(tool.local_id)?.validating && toolErrorCount(tool) > 0"
+                >
                   <span
-                    class="fn-status fn-status-warn"
-                    :title="lintHintsForTool(tool).join(' · ')"
-                    x-text="`⚠ ${lintHintsForTool(tool).length}`"
+                    class="fn-status fn-status-err"
+                    :title="toolIssues(tool).map(i => i.message).join(' · ')"
+                    x-text="`⚠ ${toolErrorCount(tool)}`"
                   ></span>
                 </template>
                 <template
-                  x-if="!hasLintHints(tool) && (tool.raw_code || '').trim()"
+                  x-if="!getToolValidation(tool.local_id)?.validating && toolErrorCount(tool) === 0 && toolWarningCount(tool) > 0"
                 >
-                  <span class="fn-status fn-status-ok" title="No lint issues"
+                  <span
+                    class="fn-status fn-status-warn"
+                    :title="toolIssues(tool).map(i => i.message).join(' · ')"
+                    x-text="`${toolWarningCount(tool)} suggestion${toolWarningCount(tool) === 1 ? '' : 's'}`"
+                  ></span>
+                </template>
+                <template
+                  x-if="!getToolValidation(tool.local_id)?.validating && toolErrorCount(tool) === 0 && toolWarningCount(tool) === 0 && (tool.raw_code || '').trim()"
+                >
+                  <span class="fn-status fn-status-ok" title="Passes the sandbox contract"
                     >✓ ready</span
                   >
                 </template>
@@ -604,12 +1034,17 @@
                     ><input
                       class="field-input"
                       x-model="tool.name"
+                      @input="scheduleToolValidate(tool)"
                       placeholder="get_weather"
                     />
                   </div>
                   <div>
                     <label class="field-label">Action type</label>
-                    <select class="field-input" x-model="tool.action_type">
+                    <select
+                      class="field-input"
+                      x-model="tool.action_type"
+                      @change="scheduleToolValidate(tool)"
+                    >
                       <option value="read">read</option>
                       <option value="write">write</option>
                       <option value="destructive">destructive</option>
@@ -636,14 +1071,27 @@
                     >
                   </div>
                   <div>
-                    <label class="field-label"
-                      >Input schema
-                      <span class="field-hint">(JSON)</span></label
-                    >
+                    <div class="flex items-center justify-between mb-1.5">
+                      <label class="field-label !mb-0"
+                        >Input schema
+                        <span class="field-hint">(JSON)</span></label
+                      >
+                      <template x-if="canSyncSchema(tool)">
+                        <button
+                          type="button"
+                          class="schema-sync"
+                          @click="applySuggestedSchema(tool)"
+                          title="Generate properties & required from your function signature"
+                        >
+                          ✦ Sync from signature
+                        </button>
+                      </template>
+                    </div>
                     <textarea
                       class="field-input font-mono text-xs"
                       rows="5"
                       x-model="tool.input_schema"
+                      @input="scheduleToolValidate(tool)"
                       placeholder='{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}'
                     ></textarea>
                   </div>
@@ -656,6 +1104,7 @@
                       class="field-input font-mono text-xs"
                       rows="2"
                       x-model="tool.requirements"
+                      @input="scheduleToolValidate(tool)"
                       placeholder="httpx==0.27.0"
                     ></textarea>
                   </div>
@@ -675,7 +1124,15 @@
                   <div class="flex flex-col flex-1 min-h-[300px]">
                     <div class="flex items-end justify-between mb-1.5">
                       <label class="field-label !mb-0">Python source</label>
-                      <span class="field-hint">Cmd/Ctrl+S to save</span>
+                      <div class="flex items-center gap-2">
+                        <button
+                          type="button"
+                          class="schema-sync"
+                          @click="toggleExplore(tool)"
+                          x-text="tool.explore_open ? 'Hide DB explorer' : 'Explore database'"
+                        ></button>
+                        <span class="field-hint">Cmd/Ctrl+S to save</span>
+                      </div>
                     </div>
                     <div
                       class="code-editor-host field-input flex-1 !p-0"
@@ -689,14 +1146,173 @@
                       placeholder="def get_weather(city: str) -> dict:&#10;    ..."
                       style="display: none"
                     ></textarea>
+                    <p class="editor-imports">
+                      <span class="ei-key">Imports</span>
+                      <span
+                        >Builtins &amp; exceptions need
+                        <strong>no import</strong> —
+                        <code>raise ValueError("…")</code></span
+                      >
+                      <span class="ei-sep">·</span>
+                      <span
+                        >Standard library: just
+                        <code>import json</code>, <code>math</code>,
+                        <code>datetime</code>…</span
+                      >
+                      <span class="ei-sep">·</span>
+                      <span
+                        >Third-party → add to
+                        <strong>Requirements</strong> (e.g.
+                        <code>httpx==0.27.0</code>)</span
+                      >
+                      <span class="ei-sep">·</span>
+                      <span
+                        ><strong>Virtual DB:</strong> use
+                        <code>context.db["collection"].find(...)</code> via
+                        Explore DB tools in this server workspace.</span
+                      >
+                    </p>
+
+                    <div class="explore-drawer" x-show="tool.explore_open" x-transition.opacity>
+                      <div class="explore-head">
+                        <span class="explore-title">Explore Database</span>
+                        <span
+                          class="field-hint"
+                          x-show="state.exploreCollectionsLoading"
+                          >Loading collections...</span
+                        >
+                      </div>
+                      <div class="grid gap-3 md:grid-cols-3">
+                        <div>
+                          <label class="field-label">Collection</label>
+                          <select class="field-input" x-model="tool.explore_collection">
+                            <option value="">Select collection</option>
+                            <template
+                              x-for="name in (state.exploreCollections || [])"
+                              :key="`explore-collection-${name}`"
+                            >
+                              <option :value="name" x-text="name"></option>
+                            </template>
+                          </select>
+                        </div>
+                        <div>
+                          <label class="field-label">Query mode</label>
+                          <select class="field-input" x-model="tool.explore_mode">
+                            <option value="find">find</option>
+                            <option value="aggregate">aggregate</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label class="field-label">Limit</label>
+                          <input
+                            class="field-input"
+                            type="number"
+                            min="1"
+                            max="100"
+                            x-model.number="tool.explore_limit"
+                          />
+                        </div>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <button
+                          type="button"
+                          class="btn-secondary !py-1 !px-2.5 !text-xs"
+                          @click="loadExploreSample(tool)"
+                        >
+                          Sample docs
+                        </button>
+                        <button
+                          type="button"
+                          class="btn-secondary !py-1 !px-2.5 !text-xs"
+                          @click="runExploreQuery(tool)"
+                        >
+                          Run query
+                        </button>
+                      </div>
+                      <template x-if="tool.explore_mode === 'find'">
+                        <div>
+                          <label class="field-label"
+                            >Find filter <span class="field-hint">(JSON object)</span></label
+                          >
+                          <textarea
+                            class="field-input font-mono text-xs"
+                            rows="3"
+                            x-model="tool.explore_filter"
+                            placeholder='{"status":"active"}'
+                          ></textarea>
+                        </div>
+                      </template>
+                      <template x-if="tool.explore_mode === 'aggregate'">
+                        <div>
+                          <label class="field-label"
+                            >Pipeline <span class="field-hint">(JSON array)</span></label
+                          >
+                          <textarea
+                            class="field-input font-mono text-xs"
+                            rows="4"
+                            x-model="tool.explore_pipeline"
+                            placeholder='[{"$match":{"status":"active"}}]'
+                          ></textarea>
+                        </div>
+                      </template>
+                      <template x-if="tool.explore_error">
+                        <div class="explore-error" x-text="tool.explore_error"></div>
+                      </template>
+                      <template x-if="tool.explore_snippet">
+                        <div class="explore-snippet-wrap">
+                          <div class="flex items-center justify-between mb-1">
+                            <div class="field-label !mb-0">Function snippet</div>
+                            <div class="flex items-center gap-2">
+                              <button
+                                type="button"
+                                class="schema-sync"
+                                @click="copyExploreSnippet(tool)"
+                              >
+                                Copy
+                              </button>
+                              <button
+                                type="button"
+                                class="schema-sync"
+                                @click="insertExploreSnippet(tool)"
+                              >
+                                Insert into source
+                              </button>
+                            </div>
+                          </div>
+                          <pre class="explore-snippet" x-text="tool.explore_snippet"></pre>
+                        </div>
+                      </template>
+                      <template
+                        x-if="(tool.explore_sample_docs || []).length > 0 || (tool.explore_results || []).length > 0"
+                      >
+                        <div class="explore-output">
+                          <div class="field-label !mb-1">Preview</div>
+                          <pre
+                            class="test-output !mt-0 !max-h-32 !text-[11px]"
+                            x-text="JSON.stringify((tool.explore_results || []).length ? tool.explore_results : tool.explore_sample_docs, null, 2)"
+                          ></pre>
+                        </div>
+                      </template>
+                    </div>
                   </div>
 
                   <div class="grid gap-4 md:grid-cols-2">
                     <div>
-                      <label class="field-label"
-                        >Test arguments
-                        <span class="field-hint">(JSON)</span></label
-                      >
+                      <div class="flex items-end justify-between mb-1.5">
+                        <label class="field-label !mb-0"
+                          >Test arguments
+                          <span class="field-hint">(JSON)</span></label
+                        >
+                        <button
+                          type="button"
+                          class="schema-sync"
+                          x-show="canFillTestArgs(tool)"
+                          @click="fillTestArgsFromSchema(tool)"
+                          title="Generate sample arguments from the input schema"
+                        >
+                          ✦ Fill from schema
+                        </button>
+                      </div>
                       <textarea
                         class="field-input font-mono text-xs"
                         rows="3"
@@ -771,17 +1387,68 @@
                 </div>
               </div>
 
-              <template x-if="hasLintHints(tool)">
-                <div class="lint-hints">
-                  <div class="lint-title">Lint hints</div>
+              <template x-if="toolIssues(tool).length > 0">
+                <div
+                  class="lint-hints"
+                  :class="toolErrorCount(tool) === 0 ? 'lint-hints-advisory' : ''"
+                >
+                  <div class="lint-title">
+                    <span
+                      x-text="toolErrorCount(tool) > 0 ? 'Fix before saving' : 'Suggestions'"
+                    ></span>
+                    <span
+                      class="lint-count"
+                      x-text="`${toolErrorCount(tool) || toolWarningCount(tool)}`"
+                    ></span>
+                    <template x-if="toolHasSchemaWarning(tool) && canSyncSchema(tool)">
+                      <button
+                        type="button"
+                        class="lint-fix ml-auto"
+                        @click="applySuggestedSchema(tool)"
+                      >
+                        ✦ Sync schema from signature
+                      </button>
+                    </template>
+                  </div>
                   <ul>
                     <template
-                      x-for="hint in lintHintsForTool(tool)"
-                      :key="hint"
+                      x-for="(issue, i) in toolIssues(tool)"
+                      :key="i + ':' + issue.message"
                     >
-                      <li x-text="hint"></li>
+                      <li :class="issue.severity === 'warning' ? 'lint-item-warn' : 'lint-item-err'">
+                        <span
+                          class="lint-dot"
+                          :class="issue.severity === 'warning' ? 'lint-dot-warn' : 'lint-dot-err'"
+                          aria-hidden="true"
+                        ></span>
+                        <template x-if="issue.line">
+                          <a
+                            class="lint-line"
+                            href="#"
+                            @click.prevent="focusToolLine(tool, issue.line)"
+                            x-text="`L${issue.line}`"
+                          ></a>
+                        </template>
+                        <span class="lint-msg" x-text="issue.message"></span>
+                        <template x-if="issueFixName(tool, issue)">
+                          <button
+                            type="button"
+                            class="lint-fix"
+                            @click="applyToolNameFix(tool)"
+                            x-text="`Rename to '${issueFixName(tool, issue)}'`"
+                          ></button>
+                        </template>
+                      </li>
                     </template>
                   </ul>
+                </div>
+              </template>
+              <template
+                x-if="toolIssues(tool).length === 0 && (tool.raw_code || '').trim() && !getToolValidation(tool.local_id)?.validating"
+              >
+                <div class="lint-ok">
+                  <span aria-hidden="true">✓</span> Passes the sandbox contract —
+                  ready to save.
                 </div>
               </template>
             </div>
@@ -790,18 +1457,32 @@
       </div>
     </template>
 
-    <div class="flex items-end gap-2">
-      <button
-        type="submit"
-        class="btn-primary"
-        x-text="serverKindIsCode() ? 'Save virtual server' : 'Save server'"
-      ></button>
-      <button type="button" class="btn-secondary" @click="resetServerForm()">
-        Reset
-      </button>
-      <button type="button" class="btn-secondary" @click="loadServers()">
-        Refresh
-      </button>
+    <div class="save-bar">
+      <div class="flex items-center gap-2">
+        <button
+          type="submit"
+          class="btn-primary"
+          :disabled="!canSaveServer()"
+          :title="saveBlockedReason()"
+          x-text="serverKindIsCode() ? 'Save virtual server' : 'Save server'"
+        ></button>
+        <button type="button" class="btn-secondary" @click="resetServerForm()">
+          Reset
+        </button>
+        <button type="button" class="btn-secondary" @click="loadServers()">
+          Refresh
+        </button>
+        <button
+          type="button"
+          class="btn-secondary"
+          @click="closeServerWorkspace()"
+        >
+          Close workspace
+        </button>
+      </div>
+      <template x-if="!canSaveServer() && saveBlockedReason()">
+        <div class="save-blocked" x-text="saveBlockedReason()"></div>
+      </template>
     </div>
   </form>
   <div class="table-wrap">
@@ -838,9 +1519,9 @@
               <button
                 type="button"
                 class="link-btn"
-                @click="editServer(server)"
+                @click.prevent.stop="openServerWorkspace(server, 'tools')"
               >
-                Edit
+                Workspace
               </button>
               <button
                 type="button"

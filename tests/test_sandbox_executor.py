@@ -1,6 +1,5 @@
-from __future__ import annotations
-
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -15,30 +14,109 @@ from services.sandbox_executor import (
 )
 
 
+class _FakeStdin:
+    def __init__(self, process: "_FakeProcess") -> None:
+        self._process = process
+        self._closing = False
+
+    def write(self, data: bytes) -> None:
+        self._process.handle_stdin(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def is_closing(self) -> bool:
+        return self._closing
+
+
+class _FakeStdout:
+    def __init__(self, process: "_FakeProcess") -> None:
+        self._process = process
+
+    async def readline(self) -> bytes:
+        return await self._process.readline()
+
+
+class _FakeStderr:
+    def __init__(self, process: "_FakeProcess") -> None:
+        self._process = process
+
+    async def read(self) -> bytes:
+        return self._process.stderr_bytes
+
+
 class _FakeProcess:
     def __init__(
         self,
         *,
-        stdout: bytes = b"",
+        stdout: bytes | list[bytes] = b"",
         stderr: bytes = b"",
         returncode: int = 0,
         delay_seconds: float = 0.0,
+        stdin_response: Any = None,
     ) -> None:
-        self._stdout = stdout
-        self._stderr = stderr
+        if isinstance(stdout, list):
+            self._stdout_lines = list(stdout)
+        else:
+            self._stdout_lines = [stdout] if stdout else []
+        self.stderr_bytes = stderr
         self.returncode = returncode
         self.delay_seconds = delay_seconds
         self.killed = False
+        self.stdin = _FakeStdin(self)
+        self.stdout = _FakeStdout(self)
+        self.stderr = _FakeStderr(self)
+        self.stdin_writes: list[bytes] = []
+        self._stdin_response = stdin_response
+        self._done = asyncio.Event()
 
     async def communicate(self):
         if self.delay_seconds and not self.killed:
             await asyncio.sleep(self.delay_seconds)
-        return self._stdout, self._stderr
+        stdout = b"".join(self._stdout_lines)
+        self._stdout_lines = []
+        self._done.set()
+        return stdout, self.stderr_bytes
+
+    async def readline(self) -> bytes:
+        if self.delay_seconds and not self.killed:
+            await asyncio.sleep(self.delay_seconds)
+        if self._stdout_lines:
+            line = self._stdout_lines.pop(0)
+            if not line.endswith(b"\n"):
+                line += b"\n"
+            if not self._stdout_lines:
+                self._done.set()
+            return line
+        self._done.set()
+        return b""
+
+    def handle_stdin(self, data: bytes) -> None:
+        self.stdin_writes.append(data)
+        if self._stdin_response is None:
+            return
+        for line in data.decode("utf-8", errors="replace").splitlines():
+            payload = line.strip()
+            if not payload:
+                continue
+            response = self._stdin_response(payload)
+            if response is None:
+                continue
+            if isinstance(response, bytes):
+                self._stdout_lines.append(response)
+            else:
+                self._stdout_lines.append(str(response).encode("utf-8"))
 
     def kill(self):
         self.killed = True
         self.delay_seconds = 0.0
         self.returncode = -9
+        self._stdout_lines.clear()
+        self._done.set()
+
+    async def wait(self):
+        await self._done.wait()
+        return self.returncode
 
 
 def _request(*, limits: SandboxLimits | None = None) -> ExecRequest:
@@ -49,7 +127,7 @@ def _request(*, limits: SandboxLimits | None = None) -> ExecRequest:
         raw_code="def add(a: int, b: int) -> int:\n    return a + b\n",
         requirements=[],
         arguments={"a": 1, "b": 2},
-        secrets={},
+        env={},
         limits=limits,
     )
 
@@ -102,7 +180,7 @@ async def test_run_rejects_non_json_worker_output(monkeypatch):
     settings = Settings()
     executor = WasmExecutor(settings=settings, python_bin="python")
 
-    with pytest.raises(SandboxProtocolError, match="JSON"):
+    with pytest.raises(SandboxProtocolError, match="malformed"):
         await executor.run(_request())
 
 
@@ -130,8 +208,12 @@ async def test_run_maps_worker_timeout_frame(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_enforces_output_limit(monkeypatch):
     process = _FakeProcess(
-        stdout=b'{"ok": true, "result": {"sum": 3}, "stdout": "", "stderr": ""}\n',
-        stderr=b"x" * 2048,
+        stdout=(
+            b'{"ok": true, "result": {"sum": 3}, '
+            b'"stdout": "", "stderr": "'
+            + (b"x" * 2048)
+            + b'"}\n'
+        ),
         returncode=0,
     )
 
@@ -143,6 +225,31 @@ async def test_run_enforces_output_limit(monkeypatch):
     executor = WasmExecutor(settings=settings, python_bin="python")
     with pytest.raises(SandboxProtocolError, match="output-size"):
         await executor.run(_request(limits=SandboxLimits(1000, 1024 * 1024, 1000, 100)))
+
+
+@pytest.mark.asyncio
+async def test_run_handles_db_rpc_frames_before_final_result(monkeypatch):
+    rpc_frame = b'{"type":"db_rpc","id":1,"op":"find","collection":"users","args":[{}],"kwargs":{"limit":1}}\n'
+    final_frame = b'{"ok": true, "result": {"sum": 3}, "stdout": "", "stderr": ""}\n'
+    process = _FakeProcess(stdout=[rpc_frame, final_frame], returncode=0)
+
+    class _Bridge:
+        def __init__(self, **_kwargs):
+            return None
+
+        async def handle(self, frame):
+            assert frame["type"] == "db_rpc"
+            return {"type": "db_rpc_result", "id": frame["id"], "ok": True, "result": []}
+
+    async def _spawn(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
+    monkeypatch.setattr("services.sandbox_executor.SandboxDbBridge", _Bridge)
+    executor = WasmExecutor(settings=Settings(sandbox_db_bridge_enabled=True), python_bin="python")
+    result = await executor.run(_request())
+    assert result.payload == {"sum": 3}
+    assert any(b'"type": "db_rpc_result"' in line for line in process.stdin_writes)
 
 
 @pytest.mark.asyncio
@@ -204,7 +311,7 @@ async def test_run_maps_output_limit_frame(monkeypatch):
 
 
 class _GateProcess:
-    """A worker stand-in that blocks in communicate() until released, so a test
+    """A worker stand-in that blocks in readline() until released, so a test
     can observe how many runs are in flight at once."""
 
     def __init__(self, active: dict, release: asyncio.Event, frame: bytes) -> None:
@@ -213,16 +320,35 @@ class _GateProcess:
         self._frame = frame
         self.returncode = 0
         self.killed = False
+        self.stdin = _FakeStdin(self)
+        self.stdout = _FakeStdout(self)
+        self.stderr = _FakeStderr(self)
+        self.stderr_bytes = b""
+        self._sent = False
+        self._done = asyncio.Event()
 
-    async def communicate(self):
+    def handle_stdin(self, data: bytes) -> None:
+        return None
+
+    async def readline(self):
+        if self._sent:
+            self._done.set()
+            return b""
         self.active["now"] += 1
         self.active["max"] = max(self.active["max"], self.active["now"])
         await self.release.wait()
         self.active["now"] -= 1
-        return self._frame, b""
+        self._sent = True
+        self._done.set()
+        return self._frame if self._frame.endswith(b"\n") else self._frame + b"\n"
 
     def kill(self):
         self.killed = True
+        self._done.set()
+
+    async def wait(self):
+        await self._done.wait()
+        return self.returncode
 
 
 @pytest.mark.asyncio

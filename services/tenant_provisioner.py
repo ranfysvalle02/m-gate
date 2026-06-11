@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from datetime import UTC, datetime
 
 from pymongo.errors import OperationFailure
 
+import database.mongo as mongo_module
 from config.settings import Settings, get_settings
 from database.encryption import (
     create_encrypted_routing_registry,
@@ -51,6 +53,13 @@ def reset_ready_tenant_cache() -> None:
     _ready_tenants.clear()
     _ready_locks.clear()
     _provision_locks.clear()
+
+
+def _evict_tenant_cache(tenant_id: str) -> None:
+    """Forget one tenant from in-process provisioning caches."""
+    _ready_tenants.discard(tenant_id)
+    _ready_locks.pop(tenant_id, None)
+    _provision_locks.pop(tenant_id, None)
 
 
 async def _tenant_lock_for(
@@ -248,3 +257,24 @@ async def provision_tenant(
         )
         _ready_tenants.add(tenant_id)
         return tenant_db_name(tenant_id)
+
+
+async def deprovision_tenant(tenant_id: str) -> bool:
+    """Delete a tenant's control-plane record and drop its tenant database."""
+    control_db = get_control_database()
+    result = await control_db["tenants"].delete_many({"tenant_id": tenant_id})
+
+    db_name = tenant_db_name(tenant_id)
+    try:
+        client = mongo_module.get_client()
+    except Exception:
+        client = None
+    if client is not None:
+        drop_database = getattr(client, "drop_database", None)
+        if callable(drop_database):
+            dropped = drop_database(db_name)
+            if inspect.isawaitable(dropped):
+                await dropped
+
+    _evict_tenant_cache(tenant_id)
+    return int(result.deleted_count) > 0

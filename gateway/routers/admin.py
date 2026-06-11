@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -8,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from config.settings import get_settings
-from database.mongo import get_control_database, get_tenant_database
+from database.mongo import get_control_database, get_tenant_database, tenant_db_name
 from models.admin import (
     AdminSearchRequest,
     CacheMigrateRequest,
@@ -17,6 +18,14 @@ from models.admin import (
     CatalogListResponse,
     CodeToolTestRequest,
     CodeToolTestResponse,
+    CodeToolValidateRequest,
+    CodeToolValidateResponse,
+    CodeToolValidationIssue,
+    ExploreCollectionsResponse,
+    ExploreQueryRequest,
+    ExploreQueryResponse,
+    ExploreSampleRequest,
+    ExploreSampleResponse,
     EgressAllowlistResponse,
     EgressAllowlistUpdateRequest,
     EmbeddingConfigResponse,
@@ -28,8 +37,8 @@ from models.admin import (
     PendingActionResponse,
     QuotaResponse,
     QuotaUpdateRequest,
-    SandboxSecretsResponse,
-    SandboxSecretsUpdateRequest,
+    ServerEnvResponse,
+    ServerEnvUpdateRequest,
     ServerPatchRequest,
     ServerUpsertRequest,
     StatsResponse,
@@ -37,9 +46,11 @@ from models.admin import (
     TelemetryListRequest,
     TelemetryListResponse,
     TenantCreateRequest,
+    TenantDeleteResponse,
     TenantResponse,
     TenantStats,
     TenantStatusUpdateRequest,
+    UsageEventsResponse,
     UsageRemaining,
     UsageResponse,
     UsageTotals,
@@ -58,6 +69,8 @@ from services.code_tools import (
     encrypt_raw_code,
     is_encrypted_token,
     lint_code_tool,
+    suggest_input_schema,
+    validate_code_tool,
 )
 from services.egress_policy import EgressNotAllowed, check_endpoint_allowed, parse_allowlist
 from services.embedding_config import (
@@ -95,7 +108,7 @@ from services.pending_actions import (
 )
 from services.proxy_registry import get_proxy_registry
 from services.registry_watcher import get_catalog_version
-from services.server_guard import EndpointNotAllowed, StdioNotAllowed, enforce_server_policy
+from services.sandbox_db_bridge import SandboxDbBridge
 from services.sandbox_executor import (
     ExecRequest,
     SandboxError,
@@ -103,11 +116,17 @@ from services.sandbox_executor import (
     SandboxTimeoutError,
     get_executor,
 )
+from services.server_guard import EndpointNotAllowed, StdioNotAllowed, enforce_server_policy
 from services.telemetry_logger import get_telemetry_logger
 from services.tenant_egress import get_tenant_egress_allowlist, set_tenant_egress_allowlist
-from services.tenant_provisioner import provision_tenant
+from services.tenant_provisioner import deprovision_tenant, provision_tenant
 from services.tenant_status import STATUS_ACTIVE, STATUS_SUSPENDED, set_tenant_status
-from services.usage_metering import get_effective_quota, get_usage, set_quota
+from services.usage_metering import (
+    get_effective_quota,
+    get_usage,
+    set_quota,
+    summarize_billing_events,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 settings = get_settings()
@@ -165,6 +184,12 @@ def _validate_secret_key(key: str) -> str:
     return normalized
 
 
+async def _require_server_exists(tenant_id: str, server_name: str) -> None:
+    doc = await get_tenant_database(tenant_id)["routing_registry"].find_one({"_id": server_name})
+    if not isinstance(doc, dict):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found.")
+
+
 def _pending_action_response(doc: dict[str, Any]) -> PendingActionResponse:
     return PendingActionResponse(
         action_id=str(doc.get("_id", "")),
@@ -212,15 +237,81 @@ def _usage_response(
     )
 
 
-async def _sandbox_secrets_response(tenant_id: str) -> SandboxSecretsResponse:
-    doc = await get_tenant_database(tenant_id)["sandbox_secrets"].find_one({"_id": "sandbox"})
+async def _server_env_response(tenant_id: str, server_name: str) -> ServerEnvResponse:
+    doc = await get_tenant_database(tenant_id)["server_secrets"].find_one({"_id": server_name})
     values = doc.get("values", {}) if isinstance(doc, dict) else {}
     keys = sorted(str(key) for key in values.keys()) if isinstance(values, dict) else []
-    return SandboxSecretsResponse(
+    return ServerEnvResponse(
         tenant_id=tenant_id,
+        server=server_name,
         keys=keys,
         updated_at=doc.get("updated_at") if isinstance(doc, dict) else None,
         updated_by=doc.get("updated_by") if isinstance(doc, dict) else None,
+    )
+
+
+def _field_type_summary(sample_docs: list[dict[str, Any]]) -> dict[str, str]:
+    summary: dict[str, str] = {}
+    for doc in sample_docs:
+        if not isinstance(doc, dict):
+            continue
+        for key, value in doc.items():
+            if key in summary:
+                continue
+            summary[key] = type(value).__name__
+    return summary
+
+
+def _find_snippet(collection: str, filter_doc: dict[str, Any], limit: int) -> str:
+    return (
+        f"context.db[{json.dumps(collection)}].find("
+        f"{json.dumps(filter_doc, indent=2)}, limit={int(limit)})"
+    )
+
+
+def _aggregate_snippet(collection: str, pipeline: list[dict[str, Any]]) -> str:
+    return (
+        f"context.db[{json.dumps(collection)}].aggregate("
+        f"{json.dumps(pipeline, indent=2)})"
+    )
+
+
+async def _bridge_read(
+    *,
+    tenant_id: str,
+    op: str,
+    collection: str,
+    args: list[Any],
+    kwargs: dict[str, Any] | None = None,
+) -> Any:
+    bridge = SandboxDbBridge(
+        tenant_id=tenant_id,
+        action_type="read",
+        settings=settings,
+        max_calls_override=5,
+    )
+    frame = await bridge.handle(
+        {
+            "id": f"admin-explore-{op}",
+            "op": op,
+            "collection": collection,
+            "args": args,
+            "kwargs": kwargs or {},
+        }
+    )
+    if not frame.get("ok"):
+        error = frame.get("error") if isinstance(frame.get("error"), dict) else {}
+        message = str(error.get("message") or "Explore query failed.")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=message)
+    return frame.get("result")
+
+
+def _require_db_bridge_enabled() -> None:
+    if settings.sandbox_db_bridge_enabled:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Virtual DB bridge is disabled. Enable SANDBOX_DB_BRIDGE_ENABLED.",
     )
 
 
@@ -469,6 +560,23 @@ async def list_tenants(request: Request) -> list[TenantResponse]:
     return [_tenant_response(doc) for doc in docs if doc]
 
 
+@router.delete("/tenants/{tenant_id}", response_model=TenantDeleteResponse)
+async def delete_tenant(request: Request, tenant_id: str) -> TenantDeleteResponse:
+    _require_platform_admin(request)
+    deleted = await deprovision_tenant(tenant_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+    actor = str(getattr(request.state, "user_id", "admin"))
+    get_telemetry_logger().log_background(
+        tenant_id=tenant_id,
+        user_id=actor,
+        method="admin/tenants/delete",
+        status="tenant_deprovisioned",
+        metadata={"tenant_id": tenant_id, "actor": actor},
+    )
+    return TenantDeleteResponse(tenant_id=tenant_id, db_name=tenant_db_name(tenant_id), deleted=True)
+
+
 @router.post("/tenants/{tenant_id}/suspend", response_model=TenantResponse)
 async def suspend_tenant(
     request: Request,
@@ -591,26 +699,39 @@ async def put_egress_allowlist(
 
 
 @router.get(
-    "/tenants/{tenant_id}/sandbox-secrets",
-    response_model=SandboxSecretsResponse,
+    "/servers/{server_name}/env",
+    response_model=ServerEnvResponse,
 )
-async def get_sandbox_secrets(request: Request, tenant_id: str) -> SandboxSecretsResponse:
-    target_tenant = _resolve_target_tenant(request, tenant_id)
-    return await _sandbox_secrets_response(target_tenant)
+async def get_server_env(
+    request: Request,
+    server_name: str,
+    tenant_id: str | None = Query(default=None),
+) -> ServerEnvResponse:
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(
+        request, tenant_id if isinstance(tenant_id, str) else None
+    )
+    await _require_server_exists(target_tenant, server_name)
+    return await _server_env_response(target_tenant, server_name)
 
 
 @router.put(
-    "/tenants/{tenant_id}/sandbox-secrets",
-    response_model=SandboxSecretsResponse,
+    "/servers/{server_name}/env",
+    response_model=ServerEnvResponse,
 )
-async def put_sandbox_secrets(
+async def put_server_env(
     request: Request,
-    tenant_id: str,
-    payload: SandboxSecretsUpdateRequest,
-) -> SandboxSecretsResponse:
-    target_tenant = _resolve_target_tenant(request, tenant_id)
-    collection = get_tenant_database(target_tenant)["sandbox_secrets"]
-    existing = await collection.find_one({"_id": "sandbox"})
+    server_name: str,
+    payload: ServerEnvUpdateRequest,
+    tenant_id: str | None = Query(default=None),
+) -> ServerEnvResponse:
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(
+        request, tenant_id if isinstance(tenant_id, str) else None
+    )
+    await _require_server_exists(target_tenant, server_name)
+    collection = get_tenant_database(target_tenant)["server_secrets"]
+    existing = await collection.find_one({"_id": server_name})
     current = existing.get("values", {}) if isinstance(existing, dict) else {}
     values = dict(current) if isinstance(current, dict) else {}
 
@@ -634,10 +755,11 @@ async def put_sandbox_secrets(
         now = datetime.now(UTC)
         updated_by = getattr(request.state, "user_id", "admin")
         await collection.replace_one(
-            {"_id": "sandbox"},
+            {"_id": server_name},
             {
-                "_id": "sandbox",
+                "_id": server_name,
                 "tenant_id": target_tenant,
+                "server": server_name,
                 "values": values,
                 "updated_at": now,
                 "updated_by": str(updated_by),
@@ -645,8 +767,8 @@ async def put_sandbox_secrets(
             upsert=True,
         )
     else:
-        await collection.delete_one({"_id": "sandbox"})
-    return await _sandbox_secrets_response(target_tenant)
+        await collection.delete_one({"_id": server_name})
+    return await _server_env_response(target_tenant, server_name)
 
 
 @router.get("/tenants/{tenant_id}/usage", response_model=UsageResponse)
@@ -663,6 +785,19 @@ async def get_tenant_usage(request: Request, tenant_id: str) -> UsageResponse:
         calls_limit=int(quota.get("calls_limit", 0)),
         sandbox_seconds_limit=int(quota.get("sandbox_seconds_limit", 0)),
     )
+
+
+@router.get("/tenants/{tenant_id}/usage/events", response_model=UsageEventsResponse)
+async def get_tenant_usage_events(
+    request: Request,
+    tenant_id: str,
+    period: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> UsageEventsResponse:
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    summary = await summarize_billing_events(target_tenant, period=period, limit=limit)
+    return UsageEventsResponse(**summary)
 
 
 @router.put("/tenants/{tenant_id}/quota", response_model=QuotaResponse)
@@ -830,6 +965,120 @@ async def get_server(
     return await _public_server_doc_with_code(doc)
 
 
+@router.get("/explore/collections", response_model=ExploreCollectionsResponse)
+async def explore_collections(
+    request: Request,
+    tenant_id: str | None = Query(default=None),
+) -> ExploreCollectionsResponse:
+    _require_tenant_admin(request)
+    _require_db_bridge_enabled()
+    target_tenant = _resolve_target_tenant(request, tenant_id if isinstance(tenant_id, str) else None)
+    names = await get_tenant_database(target_tenant).list_collection_names()
+    collections = sorted(
+        name
+        for name in names
+        if isinstance(name, str) and name and not name.startswith("system.")
+    )
+    return ExploreCollectionsResponse(tenant_id=target_tenant, collections=collections)
+
+
+@router.post("/explore/sample", response_model=ExploreSampleResponse)
+async def explore_sample(
+    request: Request,
+    payload: ExploreSampleRequest,
+) -> ExploreSampleResponse:
+    _require_tenant_admin(request)
+    _require_db_bridge_enabled()
+    target_tenant = _resolve_target_tenant(request, payload.tenant_id)
+    limit = max(1, min(int(payload.limit), int(settings.sandbox_db_max_docs)))
+    raw = await _bridge_read(
+        tenant_id=target_tenant,
+        op="find",
+        collection=payload.collection,
+        args=[{}],
+        kwargs={"limit": limit},
+    )
+    sample_docs = [doc for doc in (raw or []) if isinstance(doc, dict)]
+    return ExploreSampleResponse(
+        tenant_id=target_tenant,
+        collection=payload.collection,
+        limit=limit,
+        field_types=_field_type_summary(sample_docs),
+        sample_docs=sample_docs,
+        snippet=_find_snippet(payload.collection, {}, limit),
+    )
+
+
+@router.post("/explore/query", response_model=ExploreQueryResponse)
+async def explore_query(
+    request: Request,
+    payload: ExploreQueryRequest,
+) -> ExploreQueryResponse:
+    _require_tenant_admin(request)
+    _require_db_bridge_enabled()
+    target_tenant = _resolve_target_tenant(request, payload.tenant_id)
+    limit = max(1, min(int(payload.limit), int(settings.sandbox_db_max_docs)))
+    if payload.mode == "aggregate":
+        pipeline = [stage for stage in payload.pipeline if isinstance(stage, dict)]
+        raw = await _bridge_read(
+            tenant_id=target_tenant,
+            op="aggregate",
+            collection=payload.collection,
+            args=[pipeline],
+        )
+        snippet = _aggregate_snippet(payload.collection, pipeline or [{"$limit": limit}])
+    else:
+        filter_doc = payload.filter if isinstance(payload.filter, dict) else {}
+        raw = await _bridge_read(
+            tenant_id=target_tenant,
+            op="find",
+            collection=payload.collection,
+            args=[filter_doc],
+            kwargs={"limit": limit},
+        )
+        snippet = _find_snippet(payload.collection, filter_doc, limit)
+
+    results = [doc for doc in (raw or []) if isinstance(doc, dict)]
+    return ExploreQueryResponse(
+        tenant_id=target_tenant,
+        collection=payload.collection,
+        mode=payload.mode,
+        limit=limit,
+        results=results,
+        snippet=snippet,
+    )
+
+
+@router.post("/code-tools/validate", response_model=CodeToolValidateResponse)
+async def validate_code_tool_endpoint(
+    request: Request, payload: CodeToolValidateRequest
+) -> CodeToolValidateResponse:
+    """Lint authored Python without executing it.
+
+    Returns the exact set of issues the save path enforces (same
+    :func:`validate_code_tool`), so the admin UI can block a broken save before it
+    is attempted and surface line-accurate problems while the author types. Pure
+    and cheap: no DB access, no sandbox spawn.
+    """
+    _require_tenant_admin(request)
+    issues = validate_code_tool(
+        {
+            "name": payload.name,
+            "raw_code": payload.raw_code,
+            "requirements": [str(req).strip() for req in (payload.requirements or []) if str(req).strip()],
+            "metadata": {"action_type": payload.action_type},
+            "input_schema": payload.input_schema,
+        }
+    )
+    ok = not any(issue["severity"] == "error" for issue in issues)
+    typed_issues = [CodeToolValidationIssue(**issue) for issue in issues]
+    return CodeToolValidateResponse(
+        ok=ok,
+        issues=typed_issues,
+        suggested_schema=suggest_input_schema(payload.raw_code, payload.name),
+    )
+
+
 @router.post(
     "/servers/{server_name}/tools/{tool_name}/test",
     response_model=CodeToolTestResponse,
@@ -870,9 +1119,10 @@ async def test_code_tool(
                     server=server_name,
                     tool=tool_name,
                     raw_code=payload.raw_code,
-                    requirements=candidate_tool["requirements"],
+                    requirements=list(candidate_tool["requirements"]),
                     arguments=payload.arguments if isinstance(payload.arguments, dict) else {},
-                    secrets={},
+                    env={},
+                    action_type=payload.action_type,
                 )
             ),
             timeout=timeout_seconds,
@@ -1206,8 +1456,9 @@ async def admin_search(request: Request, payload: AdminSearchRequest) -> dict[st
         vector_weight=payload.vector_weight,
         text_weight=payload.text_weight,
         mode=payload.mode,
+        server=payload.server,
     )
-    return {"tenant_id": target_tenant, "mode": payload.mode, "items": items}
+    return {"tenant_id": target_tenant, "mode": payload.mode, "server": payload.server, "items": items}
 
 
 def _merge_embedding_config(

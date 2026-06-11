@@ -10,9 +10,11 @@ from models.admin import (
     AdminSearchRequest,
     CacheMigrateRequest,
     CodeToolTestRequest,
+    ExploreQueryRequest,
+    ExploreSampleRequest,
     EgressAllowlistUpdateRequest,
     QuotaUpdateRequest,
-    SandboxSecretsUpdateRequest,
+    ServerEnvUpdateRequest,
     ServerPatchRequest,
     ServerUpsertRequest,
     TenantCreateRequest,
@@ -245,6 +247,7 @@ async def test_test_code_tool_endpoint_executes_and_returns_payload(patch_mongo,
             assert request.server == "weather"
             assert request.tool == "get_current_weather"
             assert request.arguments["city"] == "Lisbon"
+            assert request.action_type == "read"
             return _Result()
 
     monkeypatch.setattr(admin, "get_executor", lambda: _Executor())
@@ -282,6 +285,65 @@ async def test_test_code_tool_endpoint_returns_lint_error(patch_mongo):
     )
     assert response.ok is False
     assert "not allowed" in (response.error or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_explore_collections_lists_non_system_collections(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    monkeypatch.setattr(admin.settings, "sandbox_db_bridge_enabled", True)
+    tenant_db = get_tenant_database("local-dev")
+    tenant_db["users"].docs.append({"_id": "u1"})
+    tenant_db["system.profile"].docs.append({"_id": "ignored"})
+
+    response = await admin.explore_collections(_Req(roles=["admin"]))
+    assert response.tenant_id == "local-dev"
+    assert "users" in response.collections
+    assert "system.profile" not in response.collections
+
+
+@pytest.mark.asyncio
+async def test_explore_sample_and_query_return_snippets(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    monkeypatch.setattr(admin.settings, "sandbox_db_bridge_enabled", True)
+    tenant_db = get_tenant_database("local-dev")
+    tenant_db["users"].docs.extend(
+        [{"_id": "u1", "status": "active"}, {"_id": "u2", "status": "inactive"}]
+    )
+
+    sample = await admin.explore_sample(
+        _Req(roles=["admin"]),
+        ExploreSampleRequest(collection="users", limit=1),
+    )
+    assert sample.collection == "users"
+    assert len(sample.sample_docs) == 1
+    assert "context.db" in sample.snippet
+
+    queried = await admin.explore_query(
+        _Req(roles=["admin"]),
+        ExploreQueryRequest(collection="users", mode="find", filter={"status": "active"}, limit=10),
+    )
+    assert queried.mode == "find"
+    assert queried.results == [{"_id": "u1", "status": "active"}]
+    assert "context.db" in queried.snippet
+
+
+@pytest.mark.asyncio
+async def test_explore_query_rejects_banned_aggregate_stage(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    monkeypatch.setattr(admin.settings, "sandbox_db_bridge_enabled", True)
+    with pytest.raises(HTTPException) as exc:
+        await admin.explore_query(
+            _Req(roles=["admin"]),
+            ExploreQueryRequest(
+                collection="users",
+                mode="aggregate",
+                pipeline=[{"$match": {}}, {"$out": "archive"}],
+            ),
+        )
+    assert exc.value.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -400,32 +462,44 @@ async def test_list_tenants_surfaces_status(patch_mongo):
 
 
 @pytest.mark.asyncio
-async def test_put_and_get_sandbox_secrets_redacts_values(patch_mongo):
+async def test_put_and_get_server_env_redacts_values(patch_mongo):
     import gateway.routers.admin as admin
 
     req = _Req(tenant_id="local-dev", roles=["admin"])
-    response = await admin.put_sandbox_secrets(
+    get_tenant_database("local-dev")["routing_registry"].docs.append(
+        {"_id": "analytics", "server": "analytics", "tenant_id": "local-dev"}
+    )
+    response = await admin.put_server_env(
         req,
-        "local-dev",
-        SandboxSecretsUpdateRequest(values={"API_KEY": "secret-token", "EMPTY": ""}),
+        "analytics",
+        ServerEnvUpdateRequest(values={"API_KEY": "secret-token", "EMPTY": ""}),
+        tenant_id="local-dev",
     )
     assert response.tenant_id == "local-dev"
+    assert response.server == "analytics"
     assert response.keys == ["API_KEY"]
 
-    stored = get_tenant_database("local-dev")["sandbox_secrets"].docs[0]
+    stored = get_tenant_database("local-dev")["server_secrets"].docs[0]
     assert stored["values"]["API_KEY"].startswith(("enc::", "qe::"))
     assert "secret-token" not in stored["values"]["API_KEY"]
 
-    listed = await admin.get_sandbox_secrets(req, "local-dev")
+    listed = await admin.get_server_env(req, "analytics", tenant_id="local-dev")
     assert listed.keys == ["API_KEY"]
 
 
 @pytest.mark.asyncio
-async def test_sandbox_secrets_cross_tenant_requires_platform_admin(patch_mongo):
+async def test_server_env_cross_tenant_requires_platform_admin(patch_mongo):
     import gateway.routers.admin as admin
 
+    get_tenant_database("tenant-b")["routing_registry"].docs.append(
+        {"_id": "analytics", "server": "analytics", "tenant_id": "tenant-b"}
+    )
     with pytest.raises(HTTPException) as exc:
-        await admin.get_sandbox_secrets(_Req(tenant_id="tenant-a", roles=["admin"]), "tenant-b")
+        await admin.get_server_env(
+            _Req(tenant_id="tenant-a", roles=["admin"]),
+            "analytics",
+            tenant_id="tenant-b",
+        )
     assert exc.value.status_code == 403
 
 
@@ -625,6 +699,77 @@ async def test_update_tenant_quota_requires_platform_admin(patch_mongo):
 
 
 @pytest.mark.asyncio
+async def test_get_tenant_usage_events_returns_rollup_and_recent_events(patch_mongo):
+    import gateway.routers.admin as admin
+
+    control = patch_mongo._control_db
+    now = datetime.now(UTC)
+    control["usage_events"].docs.extend(
+        [
+            {
+                "tenant_id": "local-dev",
+                "period": "2026-06",
+                "kind": "calls",
+                "amount": 2,
+                "ts": now,
+                "metadata": {"source": "live_execution"},
+            },
+            {
+                "tenant_id": "local-dev",
+                "period": "2026-06",
+                "kind": "sandbox_ms",
+                "amount": 500,
+                "ts": now.replace(microsecond=0),
+                "metadata": {},
+            },
+            {
+                "tenant_id": "local-dev",
+                "period": "2026-06",
+                "kind": "calls",
+                "amount": 1,
+                "ts": now.replace(microsecond=0),
+                "metadata": {},
+            },
+        ]
+    )
+    response = await admin.get_tenant_usage_events(
+        _Req(tenant_id="local-dev", roles=["admin"]),
+        "local-dev",
+        period="2026-06",
+        limit=2,
+    )
+    assert response.tenant_id == "local-dev"
+    assert response.totals_by_kind == {"calls": 3, "sandbox_ms": 500}
+    assert response.total_amount == 503
+    assert len(response.events) == 2
+
+
+@pytest.mark.asyncio
+async def test_delete_tenant_requires_platform_admin_and_deletes_when_allowed(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+    import services.tenant_provisioner as tp
+
+    class _Telemetry:
+        def log_background(self, **kwargs):
+            return None
+
+    monkeypatch.setattr(admin, "get_telemetry_logger", lambda: _Telemetry())
+    await tp.provision_tenant("tenant-z", wait_for_queryable_indexes=False)
+
+    with pytest.raises(HTTPException) as exc:
+        await admin.delete_tenant(_Req(tenant_id="tenant-z", roles=["admin"]), "tenant-z")
+    assert exc.value.status_code == 403
+
+    response = await admin.delete_tenant(
+        _Req(roles=[admin.settings.platform_admin_role]),
+        "tenant-z",
+    )
+    assert response.deleted is True
+    assert response.tenant_id == "tenant-z"
+    assert await patch_mongo._control_db["tenants"].find_one({"tenant_id": "tenant-z"}) is None
+
+
+@pytest.mark.asyncio
 async def test_cache_migrate_defaults_to_caller_tenant(patch_mongo, monkeypatch):
     import gateway.routers.admin as admin
 
@@ -755,14 +900,24 @@ async def test_admin_search_delegates_to_hybrid_service(patch_mongo, monkeypatch
             text_weight=None,
             mode="hybrid",
             allowed_scopes=None,
+            server=None,
         ):
-            return [{"tenant_id": tenant_id, "name": query, "mode": mode, "limit": limit}]
+            return [
+                {
+                    "tenant_id": tenant_id,
+                    "name": query,
+                    "mode": mode,
+                    "limit": limit,
+                    "server": server,
+                }
+            ]
 
     monkeypatch.setattr(admin, "hybrid_search_service", _Search())
-    payload = AdminSearchRequest(query="weather", mode="hybrid", limit=3)
+    payload = AdminSearchRequest(query="weather", mode="hybrid", limit=3, server="weather")
     response = await admin.admin_search(_Req(), payload)
     assert response["tenant_id"] == "local-dev"
     assert response["items"][0]["name"] == "weather"
+    assert response["items"][0]["server"] == "weather"
 
 
 # --------------------------------------------------------------------------- #
@@ -958,7 +1113,7 @@ async def test_register_server_blocked_by_tenant_allowlist(patch_mongo, monkeypa
 
 
 # --------------------------------------------------------------------------- #
-# Code-backed tools (transport="code") — Phase 2: storage only
+# Code-backed tools (transport="code") — authoring + runtime behavior
 # --------------------------------------------------------------------------- #
 _CODE_SRC = "def add(a: int, b: int) -> int:\n    return a + b\n"
 

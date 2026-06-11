@@ -9,16 +9,23 @@
       @codemirror/* package ships its OWN copy of @codemirror/state, so EditorView
       construction throws "Unrecognized extension value" (broken instanceof) and the
       code editor silently fails. app.js imports the bare names below at runtime.
+
+      @lezer/highlight is deduped for the same reason: syntax highlighting matches
+      tokens by Tag *identity*. classHighlighter (our highlighter) and the Python
+      grammar's tags must come from ONE @lezer/highlight instance, or every token
+      falls through uncoloured. So @codemirror/language + lang-python both ?external
+      it onto the single pinned copy below.
     -->
     <script type="importmap">
       {
         "imports": {
+          "@lezer/highlight": "https://esm.sh/@lezer/highlight@1.2.1",
           "@codemirror/state": "https://esm.sh/@codemirror/state@6.4.1",
           "@codemirror/view": "https://esm.sh/@codemirror/view@6.27.0?external=@codemirror/state",
-          "@codemirror/language": "https://esm.sh/@codemirror/language@6.10.3?external=@codemirror/state,@codemirror/view",
+          "@codemirror/language": "https://esm.sh/@codemirror/language@6.10.3?external=@codemirror/state,@codemirror/view,@lezer/highlight",
           "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.7.1?external=@codemirror/state,@codemirror/view,@codemirror/language",
           "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete@6.18.6?external=@codemirror/state,@codemirror/view,@codemirror/language",
-          "@codemirror/lang-python": "https://esm.sh/@codemirror/lang-python@6.1.6?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/autocomplete"
+          "@codemirror/lang-python": "https://esm.sh/@codemirror/lang-python@6.1.6?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/autocomplete,@lezer/highlight"
         }
       }
     </script>
@@ -29,9 +36,9 @@
       the Alpine core script; otherwise Alpine starts first and every x-data /
       x-init expression fails with "adminConsole is not defined".
     -->
-    <script defer src="/static/app.js"></script>
+    <script defer src="/static/app.js?v={{ asset_version | default('dev') }}"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v={{ asset_version | default('dev') }}" />
   </head>
   <body>
     <div

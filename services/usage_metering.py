@@ -182,3 +182,45 @@ async def emit_billing_event(
             "metadata": metadata or {},
         }
     )
+
+
+async def summarize_billing_events(
+    tenant_id: str,
+    *,
+    period: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    resolved_period = period or current_period()
+    docs = await _events_collection().find(
+        {"tenant_id": tenant_id, "period": resolved_period}
+    ).to_list(length=10_000)
+    docs.sort(
+        key=lambda item: item.get("ts")
+        if isinstance(item.get("ts"), datetime)
+        else datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )
+
+    totals_by_kind: dict[str, int] = {}
+    for doc in docs:
+        kind = str(doc.get("kind") or "unknown")
+        totals_by_kind[kind] = totals_by_kind.get(kind, 0) + _non_negative_int(doc.get("amount"))
+
+    max_events = max(1, int(limit))
+    events = [
+        {
+            "kind": str(doc.get("kind") or ""),
+            "amount": _non_negative_int(doc.get("amount")),
+            "period": str(doc.get("period") or resolved_period),
+            "ts": doc.get("ts"),
+            "metadata": doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {},
+        }
+        for doc in docs[:max_events]
+    ]
+    return {
+        "tenant_id": tenant_id,
+        "period": resolved_period,
+        "totals_by_kind": totals_by_kind,
+        "total_amount": sum(totals_by_kind.values()),
+        "events": events,
+    }

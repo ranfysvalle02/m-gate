@@ -13,6 +13,7 @@ import services.tenant_provisioner as tp
 from config.settings import get_settings
 from services.tenant_provisioner import (
     UnknownTenantError,
+    deprovision_tenant,
     ensure_tenant_ready,
 )
 
@@ -167,3 +168,37 @@ async def test_provision_tenant_qe_branch_ensures_tenant_data_key(patch_mongo, m
 
     await tp.provision_tenant("tenant-qe", wait_for_queryable_indexes=False)
     assert calls == {"vault": 1, "registry": 1, "tenant_key": 1}
+
+
+@pytest.mark.asyncio
+async def test_deprovision_tenant_drops_db_and_evicts_ready_cache(patch_mongo):
+    settings = get_settings()
+    original_qe = settings.qe_enabled
+    object.__setattr__(settings, "qe_enabled", False)
+    await tp.provision_tenant("tenant-remove", wait_for_queryable_indexes=False)
+    assert "tenant-remove" in tp._ready_tenants  # noqa: SLF001
+    assert "tenant-remove" in tp._provision_locks  # noqa: SLF001
+
+    try:
+        deleted = await deprovision_tenant("tenant-remove")
+        assert deleted is True
+
+        control = mongo_module.get_control_database()
+        assert await control["tenants"].find_one({"tenant_id": "tenant-remove"}) is None
+        assert "tenant-remove" not in tp._ready_tenants  # noqa: SLF001
+        assert "tenant-remove" not in tp._ready_locks  # noqa: SLF001
+        assert "tenant-remove" not in tp._provision_locks  # noqa: SLF001
+
+        db_name = mongo_module.tenant_db_name("tenant-remove")
+        client = mongo_module.get_client()
+        assert db_name not in client._databases  # noqa: SLF001
+    finally:
+        object.__setattr__(settings, "qe_enabled", original_qe)
+
+
+@pytest.mark.asyncio
+async def test_deprovision_unknown_tenant_returns_false_and_clears_cache(patch_mongo):
+    tp._ready_tenants.add("ghost-tenant")  # noqa: SLF001
+    deleted = await deprovision_tenant("ghost-tenant")
+    assert deleted is False
+    assert "ghost-tenant" not in tp._ready_tenants  # noqa: SLF001

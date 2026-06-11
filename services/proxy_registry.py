@@ -320,7 +320,8 @@ class InMemoryFastMCPRegistry:
         requirements = [
             str(req) for req in (tool_doc.get("requirements") or []) if isinstance(req, str)
         ]
-        secrets = await self._read_sandbox_secrets(server.tenant_id)
+        metadata = tool_doc.get("metadata") if isinstance(tool_doc.get("metadata"), dict) else {}
+        env = await self._read_server_env(server.tenant_id, server.server)
         request = ExecRequest(
             tenant_id=server.tenant_id,
             server=server.server,
@@ -328,7 +329,8 @@ class InMemoryFastMCPRegistry:
             raw_code=raw_code,
             requirements=requirements,
             arguments=arguments,
-            secrets=secrets,
+            env=env,
+            action_type=str(metadata.get("action_type") or "read"),
         )
         timeout_seconds = self.settings.sandbox_wall_timeout_ms / 1000
         try:
@@ -358,8 +360,8 @@ class InMemoryFastMCPRegistry:
         observe_usage("sandbox_ms", max(0, int(result.elapsed_ms)))
         return self._validate_result(result.payload)
 
-    async def _read_sandbox_secrets(self, tenant_id: str) -> dict[str, str]:
-        doc = await get_tenant_database(tenant_id)["sandbox_secrets"].find_one({"_id": "sandbox"})
+    async def _read_server_env(self, tenant_id: str, server_name: str) -> dict[str, str]:
+        doc = await get_tenant_database(tenant_id)["server_secrets"].find_one({"_id": server_name})
         encrypted = doc.get("values", {}) if isinstance(doc, dict) else {}
         if not isinstance(encrypted, dict):
             return {}

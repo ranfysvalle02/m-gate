@@ -98,7 +98,7 @@ async def test_tools_call_denied_when_scope_missing(rpc_module, patch_mongo):
     patch_mongo["tool_catalog"].docs.append(
         {"server": "orders", "name": "update_order_status", "scopes": ["orders:write"]}
     )
-    request = _FakeRequest(scopes=["orders:read"], roles=[])
+    request = _FakeRequest(scopes=["orders:read", "server:orders"], roles=[])
     resp = await _handle(
         rpc_module,
         "tools/call",
@@ -112,8 +112,8 @@ async def test_tools_call_denied_when_scope_missing(rpc_module, patch_mongo):
 
 @pytest.mark.asyncio
 async def test_tools_call_code_tool_execution_disabled(rpc_module, patch_mongo):
-    # A code-backed tool is discoverable but not executable until the Phase 3
-    # sandbox ships; the call must return a clear, protocol-safe error.
+    # Code-backed tools remain discoverable even when execution is feature-flagged
+    # off; tools/call must return a clear, protocol-safe disabled error.
     patch_mongo["tool_catalog"].docs.append(
         {
             "server": "my-funcs",
@@ -122,7 +122,7 @@ async def test_tools_call_code_tool_execution_disabled(rpc_module, patch_mongo):
             "metadata": {"transport": "code"},
         }
     )
-    request = _FakeRequest(scopes=["math:run"], roles=[])
+    request = _FakeRequest(scopes=["math:run", "server:my-funcs"], roles=[])
     resp = await _handle(
         rpc_module,
         "tools/call",
@@ -150,7 +150,7 @@ async def test_tools_call_code_tool_execution_enabled_calls_registry(rpc_module,
     original = settings.code_tool_execution_enabled
     object.__setattr__(settings, "code_tool_execution_enabled", True)
     try:
-        request = _FakeRequest(scopes=["math:run"], roles=[])
+        request = _FakeRequest(scopes=["math:run", "server:my-funcs"], roles=[])
         resp = await _handle(
             rpc_module,
             "tools/call",
@@ -177,7 +177,7 @@ async def test_tools_call_quota_exceeded_returns_rate_limited(rpc_module, patch_
     original_calls = settings.default_quota_calls_per_period
     object.__setattr__(settings, "default_quota_calls_per_period", 1)
     try:
-        request = _FakeRequest(scopes=["orders:read"], roles=[])
+        request = _FakeRequest(scopes=["orders:read", "server:orders"], roles=[])
         resp = await _handle(
             rpc_module,
             "tools/call",
@@ -201,7 +201,7 @@ async def test_tools_call_allowed_executes_downstream(rpc_module, patch_mongo):
     patch_mongo["tool_catalog"].docs.append(
         {"server": "orders", "name": "find_order", "scopes": ["orders:read"]}
     )
-    request = _FakeRequest(scopes=["orders:read"], roles=[])
+    request = _FakeRequest(scopes=["orders:read", "server:orders"], roles=[])
     resp = await _handle(
         rpc_module,
         "tools/call",
@@ -227,7 +227,11 @@ async def test_tools_call_requires_confirmation_creates_pending_action(rpc_modul
             "metadata": {"requires_confirmation": True, "action_type": "destructive"},
         }
     )
-    request = _FakeRequest(scopes=["orders:write"], roles=[], user_id="requester")
+    request = _FakeRequest(
+        scopes=["orders:write", "server:orders"],
+        roles=[],
+        user_id="requester",
+    )
     resp = await _handle(
         rpc_module,
         "tools/call",
@@ -255,7 +259,11 @@ async def test_tools_call_with_approved_confirmation_executes_downstream(rpc_mod
             "metadata": {"requires_confirmation": True, "action_type": "destructive"},
         }
     )
-    request = _FakeRequest(scopes=["orders:write"], roles=[], user_id="requester")
+    request = _FakeRequest(
+        scopes=["orders:write", "server:orders"],
+        roles=[],
+        user_id="requester",
+    )
     first = await _handle(
         rpc_module,
         "tools/call",
@@ -293,7 +301,11 @@ async def test_tools_call_confirmation_mismatch_returns_forbidden(rpc_module, pa
             "metadata": {"requires_confirmation": True, "action_type": "destructive"},
         }
     )
-    request = _FakeRequest(scopes=["orders:write"], roles=[], user_id="requester")
+    request = _FakeRequest(
+        scopes=["orders:write", "server:orders"],
+        roles=[],
+        user_id="requester",
+    )
     first = await _handle(
         rpc_module,
         "tools/call",
@@ -333,7 +345,11 @@ async def test_tools_call_confirmation_not_approved_returns_confirmation_require
             "metadata": {"requires_confirmation": True, "action_type": "destructive"},
         }
     )
-    request = _FakeRequest(scopes=["orders:write"], roles=[], user_id="requester")
+    request = _FakeRequest(
+        scopes=["orders:write", "server:orders"],
+        roles=[],
+        user_id="requester",
+    )
     first = await _handle(
         rpc_module,
         "tools/call",
@@ -417,7 +433,7 @@ async def test_tools_call_downstream_timeout_returns_upstream_timeout(rpc_module
         rpc_module,
         "tools/call",
         {"server": "orders", "name": "find_order", "arguments": {}},
-        _FakeRequest(scopes=[]),
+        _FakeRequest(scopes=["server:orders"]),
     )
     assert resp.error is not None
     assert resp.error.code == int(JsonRpcErrorCode.UPSTREAM_TIMEOUT)
@@ -454,7 +470,7 @@ async def test_tools_call_cache_hit_skips_downstream(rpc_module, patch_mongo, mo
         rpc_module,
         "tools/call",
         {"server": "weather", "name": "get_forecast", "arguments": {"city": "NYC"}},
-        _FakeRequest(scopes=[]),
+        _FakeRequest(scopes=["server:weather"]),
     )
     assert resp.error is None
     assert resp.result == {"cached": True, "city": "NYC"}
@@ -490,7 +506,7 @@ async def test_tools_call_cache_miss_stores_result(rpc_module, patch_mongo, monk
         rpc_module,
         "tools/call",
         {"server": "weather", "name": "get_forecast", "arguments": {"city": "NYC"}},
-        _FakeRequest(scopes=[]),
+        _FakeRequest(scopes=["server:weather"]),
     )
     assert resp.error is None
     assert stored["name"] == "get_forecast"
@@ -544,12 +560,12 @@ async def test_tools_search_passes_mode_through(rpc_module, monkeypatch):
         rpc_module,
         "tools/search",
         {"query": "rain", "mode": "vector", "limit": 3},
-        _FakeRequest(scopes=["weather"]),
+        _FakeRequest(scopes=["weather", "server:weather"]),
     )
     assert resp.error is None
     assert resp.result["mode"] == "vector"
     assert captured["mode"] == "vector"
-    assert captured["allowed_scopes"] == ["weather"]
+    assert captured["allowed_scopes"] == ["weather", "server:weather"]
 
 
 @pytest.mark.asyncio

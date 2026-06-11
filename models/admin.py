@@ -25,6 +25,12 @@ class TenantStatusUpdateRequest(BaseModel):
     reason: str | None = None
 
 
+class TenantDeleteResponse(BaseModel):
+    tenant_id: str
+    db_name: str
+    deleted: bool = True
+
+
 class ServerUpsertRequest(BaseModel):
     tenant_id: str | None = None
     server: str
@@ -66,6 +72,65 @@ class CodeToolTestResponse(BaseModel):
     result: dict[str, Any] | None = None
     elapsed_ms: float | None = None
     error: str | None = None
+
+
+class CodeToolValidateRequest(BaseModel):
+    tenant_id: str | None = None
+    name: str = ""
+    raw_code: str = ""
+    requirements: list[str] = Field(default_factory=list)
+    action_type: Literal["read", "write", "destructive"] = "read"
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class CodeToolValidationIssue(BaseModel):
+    severity: Literal["error", "warning"] = "error"
+    message: str
+    line: int | None = None
+
+
+class CodeToolValidateResponse(BaseModel):
+    ok: bool
+    issues: list[CodeToolValidationIssue] = Field(default_factory=list)
+    suggested_schema: dict[str, Any] | None = None
+
+
+class ExploreCollectionsResponse(BaseModel):
+    tenant_id: str
+    collections: list[str] = Field(default_factory=list)
+
+
+class ExploreSampleRequest(BaseModel):
+    tenant_id: str | None = None
+    collection: str
+    limit: int = Field(default=10, ge=1, le=100)
+
+
+class ExploreSampleResponse(BaseModel):
+    tenant_id: str
+    collection: str
+    limit: int
+    field_types: dict[str, str] = Field(default_factory=dict)
+    sample_docs: list[dict[str, Any]] = Field(default_factory=list)
+    snippet: str = ""
+
+
+class ExploreQueryRequest(BaseModel):
+    tenant_id: str | None = None
+    collection: str
+    mode: Literal["find", "aggregate"] = "find"
+    filter: dict[str, Any] = Field(default_factory=dict)
+    pipeline: list[dict[str, Any]] = Field(default_factory=list)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class ExploreQueryResponse(BaseModel):
+    tenant_id: str
+    collection: str
+    mode: Literal["find", "aggregate"]
+    limit: int
+    results: list[dict[str, Any]] = Field(default_factory=list)
+    snippet: str = ""
 
 
 class CacheMigrateRequest(BaseModel):
@@ -136,13 +201,14 @@ class EgressAllowlistResponse(BaseModel):
     updated_by: str | None = None
 
 
-class SandboxSecretsUpdateRequest(BaseModel):
+class ServerEnvUpdateRequest(BaseModel):
     # Empty string clears a key; omitted keys are unchanged.
     values: dict[str, str] = Field(default_factory=dict)
 
 
-class SandboxSecretsResponse(BaseModel):
+class ServerEnvResponse(BaseModel):
     tenant_id: str
+    server: str
     keys: list[str] = Field(default_factory=list)
     updated_at: datetime | None = None
     updated_by: str | None = None
@@ -195,6 +261,22 @@ class UsageResponse(BaseModel):
     usage: UsageTotals
     quota: QuotaResponse
     remaining: UsageRemaining
+
+
+class UsageEventRecord(BaseModel):
+    kind: str
+    amount: int = 0
+    period: str = ""
+    ts: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class UsageEventsResponse(BaseModel):
+    tenant_id: str
+    period: str
+    totals_by_kind: dict[str, int] = Field(default_factory=dict)
+    total_amount: int = 0
+    events: list[UsageEventRecord] = Field(default_factory=list)
 
 
 class WhoAmIResponse(BaseModel):
@@ -269,6 +351,7 @@ class StatsResponse(BaseModel):
 
 class AdminSearchRequest(BaseModel):
     tenant_id: str | None = None
+    server: str | None = None
     query: str
     limit: int = Field(default=10, ge=1, le=50)
     mode: Literal["hybrid", "vector", "text"] = "hybrid"

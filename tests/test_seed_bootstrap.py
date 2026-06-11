@@ -10,6 +10,7 @@ def test_routing_registry_seed_includes_code_demos_and_deepwiki():
     assert by_id["weather"]["transport"] == "code"
     assert by_id["orders"]["transport"] == "code"
     assert by_id["utilities"]["transport"] == "code"
+    assert by_id["analytics"]["transport"] == "code"
     assert by_id["deepwiki"]["transport"] == "streamable_http"
     assert by_id["deepwiki"]["endpoint"] == "https://mcp.deepwiki.com/mcp"
 
@@ -22,8 +23,9 @@ async def test_seed_bootstrap_data_encrypts_code_tool_source(patch_mongo):
     weather = next(doc for doc in routing if doc.get("_id") == "weather")
     orders = next(doc for doc in routing if doc.get("_id") == "orders")
     utilities = next(doc for doc in routing if doc.get("_id") == "utilities")
+    analytics = next(doc for doc in routing if doc.get("_id") == "analytics")
 
-    for server_doc in (weather, orders, utilities):
+    for server_doc in (weather, orders, utilities, analytics):
         assert server_doc["transport"] == "code"
         assert server_doc.get("endpoint") is None
         assert server_doc.get("cwd") is None
@@ -41,3 +43,5 @@ async def test_seed_bootstrap_data_encrypts_code_tool_source(patch_mongo):
     admin = next(doc for doc in session_docs if doc.get("user_id") == "admin")
     assert "deepwiki" in (admin.get("scopes") or [])
     assert "utilities" in (admin.get("scopes") or [])
+    assert "analytics" in (admin.get("scopes") or [])
+    assert "server:analytics" in (admin.get("scopes") or [])

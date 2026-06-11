@@ -44,14 +44,19 @@ class AuthorizationService:
         if "admin" in roles:
             return AuthorizationResult(allowed=True, reason="admin_override", tool=tool)
 
+        normalized_scopes = {scope for scope in (caller_scopes or []) if isinstance(scope, str)}
+        required_server_scope = f"server:{server}"
+        if required_server_scope not in normalized_scopes and "server:*" not in normalized_scopes:
+            return AuthorizationResult(allowed=False, reason="server_scope_required", tool=tool)
+
         required_scopes = [scope for scope in tool.get("scopes", []) if isinstance(scope, str)]
         if not required_scopes:
             return AuthorizationResult(allowed=True, reason="no_scope_required", tool=tool)
 
-        if not caller_scopes:
+        if not normalized_scopes:
             return AuthorizationResult(allowed=False, reason="missing_scope", tool=tool)
 
-        if set(required_scopes).intersection(set(caller_scopes)):
+        if set(required_scopes).intersection(normalized_scopes):
             return AuthorizationResult(allowed=True, reason="scope_match", tool=tool)
 
         return AuthorizationResult(allowed=False, reason="scope_mismatch", tool=tool)

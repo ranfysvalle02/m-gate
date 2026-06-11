@@ -20,7 +20,7 @@ def _request(
     code: str,
     tool: str = "run",
     arguments: dict | None = None,
-    secrets: dict | None = None,
+    env: dict | None = None,
     limits: SandboxLimits | None = None,
 ) -> ExecRequest:
     return ExecRequest(
@@ -30,7 +30,7 @@ def _request(
         raw_code=code,
         requirements=[],
         arguments=arguments or {},
-        secrets=secrets or {},
+        env=env or {},
         limits=limits,
     )
 
@@ -55,10 +55,10 @@ async def test_wasm_happy_path_returns_jsonable_result(sandbox_executor):
 
 
 @pytest.mark.asyncio
-async def test_wasm_injects_tenant_secrets_into_function(sandbox_executor):
+async def test_wasm_exposes_server_env_in_context(sandbox_executor):
     req = _request(
-        code="def run(secrets):\n    return {'token': secrets.get('API_KEY', '')}\n",
-        secrets={"API_KEY": "secret-123"},
+        code="def run():\n    return {'token': context.env.get('API_KEY', '')}\n",
+        env={"API_KEY": "secret-123"},
     )
     result = await sandbox_executor.run(req)
     assert result.payload == {"token": "secret-123"}

@@ -212,6 +212,8 @@ async def run_reprovision(
     guardrail_service = get_active_embedding_service()
     model_id, dimensions, version = active_embedding_identity()
 
+    completed_tenants = 0
+    tenant_total = 0
     await _write_status(
         state="running",
         started_at=_now(),
@@ -223,6 +225,7 @@ async def run_reprovision(
         error=None,
         tenants=[],
         totals={},
+        progress={"completed": 0, "total": 0},
     )
 
     try:
@@ -230,6 +233,13 @@ async def run_reprovision(
         guardrail_count = await resync_guardrail_signatures(embedding_service=guardrail_service)
 
         tenant_ids = await _all_tenant_ids(settings)
+        tenant_total = len(tenant_ids)
+        await _write_status(
+            state="running",
+            tenants=[],
+            totals={},
+            progress={"completed": 0, "total": tenant_total},
+        )
         summaries: list[dict[str, Any]] = []
         catalog_total = 0
         for tenant_id in tenant_ids:
@@ -247,6 +257,17 @@ async def run_reprovision(
             )
             summaries.append(summary)
             catalog_total += int(summary.get("catalog_reembedded", 0))
+            completed_tenants = len(summaries)
+            await _write_status(
+                state="running",
+                tenants=summaries,
+                totals={
+                    "tenants": tenant_total,
+                    "catalog_reembedded": catalog_total,
+                    "guardrail_signatures": guardrail_count,
+                },
+                progress={"completed": completed_tenants, "total": tenant_total},
+            )
 
         # Force discovery clients to re-list against the rebuilt catalog.
         _bump_catalog_version()
@@ -261,10 +282,16 @@ async def run_reprovision(
             finished_at=_now(),
             tenants=summaries,
             totals=totals,
+            progress={"completed": tenant_total, "total": tenant_total},
         )
     except Exception as exc:
         logger.exception("Embedding reprovision failed.")
-        await _write_status(state="failed", finished_at=_now(), error=str(exc))
+        await _write_status(
+            state="failed",
+            finished_at=_now(),
+            error=str(exc),
+            progress={"completed": completed_tenants, "total": tenant_total},
+        )
         raise
 
     return await get_reprovision_status()
@@ -300,6 +327,7 @@ async def run_tenant_reprovision(
         error=None,
         tenants=[],
         totals={},
+        progress={"completed": 0, "total": 1},
     )
     try:
         service = await get_embedding_service_for(tenant_id, settings)
@@ -326,6 +354,7 @@ async def run_tenant_reprovision(
                 "catalog_reembedded": int(summary.get("catalog_reembedded", 0)),
                 "guardrail_signatures": 0,
             },
+            progress={"completed": 1, "total": 1},
         )
     except Exception as exc:
         logger.exception("Tenant embedding reprovision failed for %s.", tenant_id)
@@ -335,6 +364,7 @@ async def run_tenant_reprovision(
             state="failed",
             finished_at=_now(),
             error=str(exc),
+            progress={"completed": 0, "total": 1},
         )
         raise
 
@@ -369,6 +399,7 @@ async def trigger_reprovision(*, started_by: str | None = None) -> dict[str, Any
         error=None,
         tenants=[],
         totals={},
+        progress={"completed": 0, "total": 0},
     )
 
     task = asyncio.create_task(_run_in_background(started_by=started_by))
@@ -402,6 +433,7 @@ async def trigger_tenant_reprovision(
         error=None,
         tenants=[],
         totals={},
+        progress={"completed": 0, "total": 1},
     )
 
     task = asyncio.create_task(
