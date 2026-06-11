@@ -387,7 +387,12 @@ def test_apply_serve_rlimits_sets_noncumulative_limits(monkeypatch):
     # Cumulative limits (CPU / address space) must NOT be set on a resident worker.
     assert fake_resource.RLIMIT_CPU not in calls["rlimits"]
     assert fake_resource.RLIMIT_AS not in calls["rlimits"]
-    assert calls["rlimits"][fake_resource.RLIMIT_FSIZE] == (128 * 1024, 128 * 1024)
+    # FSIZE backstop must clear the frame budget so a legitimate near-cap result
+    # (written full to /job/sandbox.result.json with JSON framing) is bounded
+    # gracefully by _bounded_frame rather than killed by EFBIG.
+    expected_fsize = worker.frame_budget_bytes(128 * 1024)
+    assert expected_fsize > 128 * 1024
+    assert calls["rlimits"][fake_resource.RLIMIT_FSIZE] == (expected_fsize, expected_fsize)
     assert calls["rlimits"][fake_resource.RLIMIT_NOFILE] == (256, 256)
     # SIGXFSZ is ignored so an over-limit write fails the job, not the worker.
     assert ("xfsz", "ign") in calls["signals"]

@@ -161,6 +161,15 @@ services:
       FUSION_STRATEGY: rank_fusion
       # Local demo defaults to running transport=code tools inside wasm sandbox.
       CODE_TOOL_EXECUTION_ENABLED: "true"
+      # Keep prewarmed CPython-on-WASI workers resident. With pool size 0 every
+      # call spawns a throwaway worker that does a full Cranelift compile of the
+      # 26MB python.wasm under a tight RLIMIT_CPU -> SIGXCPU / rayon thread-spawn
+      # failures under load. A warm pool compiles once at startup (reusing the
+      # serialized module cache) and serve-mode workers skip cumulative CPU
+      # rlimits, so each call reuses an already-compiled runtime. Global cap is
+      # kept at pool size so concurrent demand never queues past warm capacity.
+      SANDBOX_POOL_SIZE: "2"
+      SANDBOX_MAX_GLOBAL_CONCURRENCY: "2"
       ENABLE_METRICS: "true"
       LOG_JSON: "true"
       REQUEST_MAX_BYTES: 262144

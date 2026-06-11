@@ -47,6 +47,7 @@ window.adminConsole = function adminConsole(config) {
             scopes: "",
             input_schema: "{}",
             test_arguments: "{}",
+            expanded: true,
           },
         ],
       },
@@ -737,6 +738,7 @@ window.adminConsole = function adminConsole(config) {
         scopes: "",
         input_schema: "{}",
         test_arguments: "{}",
+        expanded: true,
       };
     },
 
@@ -755,6 +757,7 @@ window.adminConsole = function adminConsole(config) {
         scopes,
         input_schema: JSON.stringify(tool.input_schema || {}, null, 2),
         test_arguments: "{}",
+        expanded: false,
       };
     },
 
@@ -773,7 +776,88 @@ window.adminConsole = function adminConsole(config) {
     },
 
     addToolToServer() {
-      this.forms.server.tools.push(this.emptyToolForm());
+      const tool = this.emptyToolForm();
+      this.forms.server.tools.push(tool);
+      this.$nextTick(() => this.refreshCodeEditors());
+    },
+
+    // A "virtual" server is authored code; "connect" proxies an existing MCP
+    // server over a network/stdio transport. The chooser maps to the stored
+    // transport field while keeping the rest of the form intact.
+    chooseServerKind(kind) {
+      if (kind === "code") {
+        this.forms.server.transport = "code";
+      } else if (this.forms.server.transport === "code") {
+        this.forms.server.transport = "streamable_http";
+      }
+      this.$nextTick(() => this.refreshCodeEditors());
+    },
+
+    serverKindIsCode() {
+      return this.forms.server.transport === "code";
+    },
+
+    toggleTool(localId) {
+      const tool = this._toolById(localId);
+      if (!tool) return;
+      tool.expanded = !tool.expanded;
+      this.$nextTick(() => this.refreshCodeEditors());
+    },
+
+    expandTool(localId) {
+      const tool = this._toolById(localId);
+      if (!tool) return;
+      tool.expanded = true;
+      this.$nextTick(() => this.refreshCodeEditors());
+    },
+
+    toolSummaryName(tool, idx) {
+      const name = String(tool?.name || "").trim();
+      return name || `Function ${idx + 1}`;
+    },
+
+    // One-click "see the magic": drop in a complete, sandbox-safe function the
+    // operator can immediately run in the sandbox and save as a real MCP tool.
+    loadExampleTool() {
+      const example = this.emptyToolForm();
+      example.name = "word_count";
+      example.description = "Count the words and characters in a string.";
+      example.action_type = "read";
+      example.scopes = "utilities, readonly";
+      example.input_schema = JSON.stringify(
+        {
+          type: "object",
+          properties: { text: { type: "string", description: "Text to analyze" } },
+          required: ["text"],
+        },
+        null,
+        2,
+      );
+      example.raw_code = [
+        "def word_count(text: str) -> dict:",
+        '    """Count the words and characters in the given text."""',
+        "    words = [w for w in text.split() if w]",
+        '    return {"words": len(words), "characters": len(text)}',
+        "",
+      ].join("\n");
+      example.test_arguments = JSON.stringify({ text: "hello brave new world" });
+      example.expanded = true;
+
+      const tools = this.forms.server.tools || [];
+      const onlyEmptyStarter =
+        tools.length === 1 &&
+        !String(tools[0].name || "").trim() &&
+        !String(tools[0].raw_code || "").trim();
+      if (onlyEmptyStarter) {
+        this._teardownCodeEditor(tools[0].local_id);
+        this.forms.server.tools = [example];
+      } else {
+        this.forms.server.tools.push(example);
+      }
+      if (!String(this.forms.server.server || "").trim()) {
+        this.forms.server.server = "my-tools";
+      }
+      this.forms.server.transport = "code";
       this.$nextTick(() => this.refreshCodeEditors());
     },
 
@@ -808,7 +892,14 @@ window.adminConsole = function adminConsole(config) {
           `/admin/servers/${encodeURIComponent(server.server)}`,
         );
         const tools = (detail.tools || []).map((tool) => this.normalizeToolForm(tool));
-        this.forms.server.tools = tools.length > 0 ? tools : [this.emptyToolForm()];
+        if (tools.length > 0) {
+          // Open the first function so the editor is visible right away; the
+          // rest stay collapsed for a clean, scannable manifest.
+          tools[0].expanded = true;
+          this.forms.server.tools = tools;
+        } else {
+          this.forms.server.tools = [this.emptyToolForm()];
+        }
         this.state.toolTestResults = {};
         this.$nextTick(() => this.refreshCodeEditors());
       } catch (error) {
@@ -835,12 +926,14 @@ window.adminConsole = function adminConsole(config) {
       if (this._cmLib) return this._cmLib;
       if (this._cmLoadPromise) return this._cmLoadPromise;
       this._cmLoadPromise = (async () => {
+        // Bare specifiers resolve through the import map in base.html, which pins a
+        // single @codemirror/state instance across every package (see comment there).
         const [stateMod, viewMod, commandsMod, languageMod, pythonMod] = await Promise.all([
-          import("https://esm.sh/@codemirror/state@6.4.1"),
-          import("https://esm.sh/@codemirror/view@6.27.0"),
-          import("https://esm.sh/@codemirror/commands@6.7.1"),
-          import("https://esm.sh/@codemirror/language@6.10.3"),
-          import("https://esm.sh/@codemirror/lang-python@6.1.6"),
+          import("@codemirror/state"),
+          import("@codemirror/view"),
+          import("@codemirror/commands"),
+          import("@codemirror/language"),
+          import("@codemirror/lang-python"),
         ]);
         this._cmLib = {
           EditorState: stateMod.EditorState,
@@ -903,25 +996,30 @@ window.adminConsole = function adminConsole(config) {
       try {
         cm = await this._loadCodeMirror();
       } catch (_) {
-        // CDN/module load failed; textareas remain as fallback editor.
+        // CDN/module load failed; reveal the plain textareas and hide the empty
+        // editor hosts so authored code is always visible and editable.
+        this._revealFallbacks();
         return;
       }
-      const activeIds = new Set(
-        (this.forms.server.tools || []).map((tool) => String(tool.local_id)),
+      // Only expanded functions own a live editor — collapsed/removed cards are
+      // torn down so hidden hosts never mis-measure and the DOM stays light.
+      const expandedIds = new Set(
+        (this.forms.server.tools || [])
+          .filter((tool) => tool.expanded)
+          .map((tool) => String(tool.local_id)),
       );
       for (const editorId of Object.keys(this._codeEditors)) {
-        if (!activeIds.has(String(editorId))) {
+        if (!expandedIds.has(String(editorId))) {
           this._teardownCodeEditor(editorId);
         }
       }
       for (const tool of this.forms.server.tools || []) {
+        if (!tool.expanded) continue;
         const toolId = String(tool.local_id);
         if (this._codeEditors[toolId]) continue;
         const host = document.querySelector(`[data-code-editor-host="${toolId}"]`);
         const fallback = document.querySelector(`[data-code-editor-fallback="${toolId}"]`);
         if (!host || !fallback) continue;
-        fallback.classList.add("code-editor-fallback");
-        fallback.style.display = "none";
         const startCode = String(tool.raw_code || "");
         const saveBinding = cm.keymap.of([
           {
@@ -932,44 +1030,68 @@ window.adminConsole = function adminConsole(config) {
             },
           },
         ]);
-        const state = cm.EditorState.create({
-          doc: startCode,
-          extensions: [
-            cm.lineNumbers(),
-            cm.highlightActiveLineGutter(),
-            cm.highlightSpecialChars(),
-            cm.history(),
-            cm.drawSelection(),
-            cm.dropCursor(),
-            cm.indentOnInput(),
-            cm.bracketMatching(),
-            cm.foldGutter(),
-            cm.rectangularSelection(),
-            cm.highlightActiveLine(),
-            cm.syntaxHighlighting(cm.defaultHighlightStyle, { fallback: true }),
-            cm.keymap.of([
-              ...cm.defaultKeymap,
-              ...cm.historyKeymap,
-              ...cm.foldKeymap,
-              cm.indentWithTab,
-            ]),
-            saveBinding,
-            cm.python(),
-            cm.EditorView.updateListener.of((update) => {
-              if (!update.docChanged) return;
-              const next = update.state.doc.toString();
-              const matched = this._toolById(tool.local_id);
-              if (matched) {
-                matched.raw_code = next;
-              }
-            }),
-          ],
-        });
-        const view = new cm.EditorView({
-          state,
-          parent: host,
-        });
+        let view;
+        try {
+          const state = cm.EditorState.create({
+            doc: startCode,
+            extensions: [
+              cm.lineNumbers(),
+              cm.highlightActiveLineGutter(),
+              cm.highlightSpecialChars(),
+              cm.history(),
+              cm.drawSelection(),
+              cm.dropCursor(),
+              cm.indentOnInput(),
+              cm.bracketMatching(),
+              cm.foldGutter(),
+              cm.rectangularSelection(),
+              cm.highlightActiveLine(),
+              cm.syntaxHighlighting(cm.defaultHighlightStyle, { fallback: true }),
+              cm.keymap.of([
+                ...cm.defaultKeymap,
+                ...cm.historyKeymap,
+                ...cm.foldKeymap,
+                cm.indentWithTab,
+              ]),
+              saveBinding,
+              cm.python(),
+              cm.EditorView.updateListener.of((update) => {
+                if (!update.docChanged) return;
+                const next = update.state.doc.toString();
+                const matched = this._toolById(tool.local_id);
+                if (matched) {
+                  matched.raw_code = next;
+                }
+              }),
+            ],
+          });
+          view = new cm.EditorView({ state, parent: host });
+        } catch (_) {
+          // Editor construction failed — keep the plain textarea usable so the
+          // author never loses sight of their code.
+          host.style.display = "none";
+          fallback.style.display = "";
+          fallback.classList.remove("code-editor-fallback");
+          continue;
+        }
+        // Success: swap the textarea out for the rich editor.
+        host.style.display = "";
+        fallback.classList.add("code-editor-fallback");
+        fallback.style.display = "none";
         this._codeEditors[toolId] = view;
+      }
+    },
+
+    _revealFallbacks() {
+      for (const tool of this.forms.server.tools || []) {
+        const id = String(tool.local_id);
+        const host = document.querySelector(`[data-code-editor-host="${id}"]`);
+        const fallback = document.querySelector(`[data-code-editor-fallback="${id}"]`);
+        if (host) host.style.display = "none";
+        if (fallback) {
+          fallback.style.display = "";
+          fallback.classList.remove("code-editor-fallback");
+        }
       }
     },
 

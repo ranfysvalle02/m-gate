@@ -146,7 +146,13 @@ def _apply_serve_rlimits(*, max_output_bytes: int) -> None:
         signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
     except (OSError, ValueError):
         pass
-    fsize_cap = max(max_output_bytes, 64 * 1024)
+    # Backstop against a runaway guest filling host disk -- NOT precise output
+    # enforcement (done by _safe_read truncation + _bounded_frame). The guest
+    # writes the full result to /job/sandbox.result.json, which serializes
+    # LARGER than max_output_bytes once JSON framing/escaping is added, so the
+    # ceiling must clear the frame budget or a legitimate near-limit result
+    # would trip EFBIG before the graceful output_limit frame can be produced.
+    fsize_cap = max(frame_budget_bytes(max_output_bytes), 64 * 1024)
     try:
         resource.setrlimit(resource.RLIMIT_FSIZE, (fsize_cap, fsize_cap))
         resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
@@ -167,7 +173,10 @@ def _apply_posix_rlimits(*, wall_timeout_ms: int, memory_bytes: int, max_output_
     # enforcement can produce a protocol-safe frame.
     cpu_seconds = max(5, math.ceil(wall_timeout_ms / 1000) + 5)
     rss_cap = max(memory_bytes * 2, 64 * 1024 * 1024)
-    fsize_cap = max(max_output_bytes, 64 * 1024)
+    # Clear the frame budget (the guest-written result.json exceeds the raw
+    # output cap once JSON-framed) so a legitimate near-limit result is bounded
+    # gracefully by _bounded_frame instead of being killed by EFBIG.
+    fsize_cap = max(frame_budget_bytes(max_output_bytes), 64 * 1024)
     try:
         resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 5))
         resource.setrlimit(resource.RLIMIT_AS, (rss_cap, rss_cap))
@@ -188,19 +197,30 @@ def _build_engine() -> Engine:
 
 
 def _module_cache_file(wasm_file: Path, cache_path: str) -> Path:
-    """Derive a cache filename keyed by the source binary and wasmtime version.
+    """Derive a cache filename keyed by wasm CONTENT + wasmtime version.
 
-    A version/size/mtime-derived name means a runtime upgrade or a swapped
-    ``python.wasm`` transparently invalidates a stale precompiled artifact.
+    A content hash (not size+mtime) makes the key deterministic across a docker
+    build->run boundary: BuildKit can rewrite file timestamps, so an mtime-based
+    key would make a precompiled artifact baked at image-build time MISS at
+    startup (silently reintroducing the cold compile this cache exists to avoid).
+    The content hash also invalidates correctly when ``python.wasm`` is swapped
+    or the runtime is upgraded; any incompatible artifact that still slips
+    through fails closed in ``_load_module`` (deserialize error -> clean
+    recompile), so the key only needs to be stable, not perfectly versioned.
     """
     try:
-        import wasmtime
+        from importlib.metadata import version as _pkg_version
 
-        version = str(getattr(wasmtime, "__version__", "unknown"))
-    except Exception:  # pragma: no cover - wasmtime always present at runtime
-        version = "unknown"
-    stat = wasm_file.stat()
-    signature = f"{wasm_file.resolve()}:{stat.st_size}:{int(stat.st_mtime)}:{version}"
+        runtime_version = _pkg_version("wasmtime")
+    except Exception:  # pragma: no cover - metadata always present at runtime
+        try:
+            import wasmtime
+
+            runtime_version = str(getattr(wasmtime, "__version__", "unknown"))
+        except Exception:
+            runtime_version = "unknown"
+    content_digest = hashlib.sha256(wasm_file.read_bytes()).hexdigest()
+    signature = f"{content_digest}:{runtime_version}"
     digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:32]
     return Path(cache_path) / f"python-{digest}.cwasm"
 

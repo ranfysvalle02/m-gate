@@ -40,6 +40,24 @@ COPY --chown=appuser:appuser . /app
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"
 USER appuser
+
+# Precompile the CPython-on-WASI module into the cache at build time so every
+# container start (including a recreate) deserializes an already-compiled
+# artifact instead of running wasmtime's parallel (rayon) Cranelift compile on
+# the hot path -- the compile is the cold-start cost most prone to thread-spawn
+# (EAGAIN) / CPU-limit failures under host load. The cache key is derived from
+# the wasm file's resolved path + size + mtime + wasmtime version, all identical
+# between this build layer and runtime, so the baked artifact is a guaranteed
+# hit. Best-effort: if the wasm is absent (run `make fetch-wasm`) or a compile
+# hiccups, the worker simply falls back to compiling at startup -- no regression.
+RUN if [ -f vendor/python-3.12.0.wasm ]; then \
+      echo "Precompiling CPython-on-WASI sandbox module cache..." && \
+      python -c "from pathlib import Path; from services.sandbox_worker import _build_engine, _load_module; _load_module(_build_engine(), Path('vendor/python-3.12.0.wasm').resolve(), 'vendor/.wasm-cache'); print('Sandbox module cache ready at vendor/.wasm-cache')" || \
+      echo "WARNING: sandbox module precompile failed; worker will compile at startup."; \
+    else \
+      echo "WARNING: vendor/python-3.12.0.wasm not found; skipping sandbox module precompile (run 'make fetch-wasm')."; \
+    fi
+
 # --proxy-headers makes uvicorn honor X-Forwarded-Proto/For, but ONLY from peers in
 # FORWARDED_ALLOW_IPS (uvicorn reads that env var; defaults to 127.0.0.1). Set it to
 # your ingress/LB address range in production so client IP (rate limiting) and scheme

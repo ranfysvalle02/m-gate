@@ -1,329 +1,773 @@
-{% extends "base.html" %}
-{% block content %}
-  <section
-    x-show="activeSection === 'dashboard'"
-    class="space-y-4"
-    x-transition:enter="view-active"
-    x-transition:enter-start="view-from"
-    x-transition:enter-end="view-to"
-  >
-    <h1 class="text-2xl font-semibold">Dashboard</h1>
-    <button type="button" class="learn-cta" @click="openHelp('mcp')">
-      <span class="learn-cta-icon" aria-hidden="true">📡</span>
-      <span class="learn-cta-text">
-        <strong>New to MCP?</strong>
-        <span>Learn how the Model Context Protocol and JSON-RPC power this gateway — with copy-paste examples.</span>
-      </span>
-      <span class="learn-cta-go">Open the guide →</span>
-    </button>
-    <div class="grid gap-4 md:grid-cols-3">
-      <div class="card">
-        <div class="card-label">Catalog Version</div>
-        <div class="card-value" x-text="state.stats?.catalog_version ?? '-'"></div>
-      </div>
-      <div class="card">
-        <div class="card-label">Tenant Count</div>
-        <div class="card-value" x-text="state.stats?.tenant_count ?? state.stats?.tenants?.length ?? '-'"></div>
-      </div>
-      <div class="card">
-        <div class="card-label">Telemetry Statuses</div>
-        <div class="text-sm text-slate-700" x-text="Object.keys(state.stats?.telemetry_status_counts || {}).length"></div>
-      </div>
+{% extends "base.html" %} {% block content %}
+<section
+  x-show="activeSection === 'dashboard'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
+  <h1 class="text-2xl font-semibold">Dashboard</h1>
+  <button type="button" class="learn-cta" @click="openHelp('mcp')">
+    <span class="learn-cta-icon" aria-hidden="true">📡</span>
+    <span class="learn-cta-text">
+      <strong>New to MCP?</strong>
+      <span
+        >Learn how the Model Context Protocol and JSON-RPC power this gateway —
+        with copy-paste examples.</span
+      >
+    </span>
+    <span class="learn-cta-go">Open the guide →</span>
+  </button>
+  <div class="grid gap-4 md:grid-cols-3">
+    <div class="card">
+      <div class="card-label">Catalog Version</div>
+      <div
+        class="card-value"
+        x-text="state.stats?.catalog_version ?? '-'"
+      ></div>
     </div>
     <div class="card">
-      <div class="card-label">Onboarding Checklist</div>
-      <div class="mt-2 flex items-center justify-between gap-2 text-sm">
-        <span x-text="`${checklistCountCompleted()} / 3 complete`"></span>
-        <button type="button" class="btn-secondary" @click="loadStats()">Recheck</button>
-      </div>
-      <div class="mt-3 grid gap-2 md:grid-cols-3">
-        <button type="button" class="btn-secondary text-left" @click="goToChecklistStep('tenant')">
-          <span x-text="checklistDone('tenant') ? '✓' : '○'"></span>
-          Create a tenant
+      <div class="card-label">Tenant Count</div>
+      <div
+        class="card-value"
+        x-text="state.stats?.tenant_count ?? state.stats?.tenants?.length ?? '-'"
+      ></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Telemetry Statuses</div>
+      <div
+        class="text-sm text-slate-700"
+        x-text="Object.keys(state.stats?.telemetry_status_counts || {}).length"
+      ></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-label">Onboarding Checklist</div>
+    <div class="mt-2 flex items-center justify-between gap-2 text-sm">
+      <span x-text="`${checklistCountCompleted()} / 3 complete`"></span>
+      <button type="button" class="btn-secondary" @click="loadStats()">
+        Recheck
+      </button>
+    </div>
+    <div class="mt-3 grid gap-2 md:grid-cols-3">
+      <button
+        type="button"
+        class="btn-secondary text-left"
+        @click="goToChecklistStep('tenant')"
+      >
+        <span x-text="checklistDone('tenant') ? '✓' : '○'"></span>
+        Create a tenant
+      </button>
+      <button
+        type="button"
+        class="btn-secondary text-left"
+        @click="goToChecklistStep('function')"
+      >
+        <span x-text="checklistDone('function') ? '✓' : '○'"></span>
+        Author a function
+      </button>
+      <button
+        type="button"
+        class="btn-secondary text-left"
+        @click="goToChecklistStep('connect')"
+      >
+        <span x-text="checklistDone('connect') ? '✓' : '○'"></span>
+        Connect an MCP client
+      </button>
+    </div>
+  </div>
+  <button type="button" class="btn-secondary" @click="loadStats()">
+    Refresh stats
+  </button>
+</section>
+
+<section
+  x-show="activeSection === 'tenants'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
+  <h2 class="text-2xl font-semibold">Tenants</h2>
+  <form class="flex gap-3 items-end" @submit.prevent="createTenant()">
+    <div>
+      <label class="field-label">Tenant ID</label>
+      <input
+        class="field-input"
+        x-model="forms.newTenantId"
+        placeholder="tenant-a"
+        required
+      />
+    </div>
+    <button type="submit" class="btn-primary">Create Tenant</button>
+    <button type="button" class="btn-secondary" @click="loadTenants()">
+      Refresh
+    </button>
+  </form>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Tenant</th>
+          <th>DB Name</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-if="!state.tenants || state.tenants.length === 0">
+          <tr>
+            <td class="empty-cell" colspan="5">
+              <span class="empty-emoji">🏢</span>No tenants yet
+            </td>
+          </tr>
+        </template>
+        <template x-for="tenant in state.tenants" :key="tenant.tenant_id">
+          <tr>
+            <td x-text="tenant.tenant_id"></td>
+            <td x-text="tenant.db_name"></td>
+            <td>
+              <span
+                x-text="tenant.status || 'active'"
+                :class="(tenant.status === 'suspended') ? 'text-red-600 font-medium' : 'text-emerald-700'"
+              ></span>
+              <span
+                x-show="tenant.status === 'suspended' && tenant.suspended_reason"
+                class="text-xs text-slate-500"
+                x-text="` — ${tenant.suspended_reason}`"
+              ></span>
+            </td>
+            <td x-text="formatDate(tenant.created_at)"></td>
+            <td class="space-x-2">
+              <button
+                type="button"
+                class="link-btn"
+                @click="openTenantConnect(tenant.tenant_id)"
+              >
+                Connect
+              </button>
+              <button
+                type="button"
+                class="link-btn"
+                x-show="state.whoami?.is_platform_admin"
+                @click="toggleTenantStatus(tenant)"
+                x-text="tenant.status === 'suspended' ? 'Resume' : 'Suspend'"
+              ></button>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section
+  x-show="activeSection === 'users'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
+  <h2 class="text-2xl font-semibold">Users</h2>
+  <p class="text-sm text-slate-600 max-w-3xl">
+    Users belong to the tenant selected in the top bar. A
+    <span class="font-medium">tenant admin</span> manages users and servers
+    within their own tenant; only a
+    <span class="font-medium">platform admin</span> can grant the platform-admin
+    role or manage users across tenants.
+  </p>
+  <template x-if="state.userNotice">
+    <div
+      class="rounded-md border border-emerald-300 bg-emerald-50 text-emerald-700 px-4 py-3 text-sm"
+      x-text="state.userNotice"
+    ></div>
+  </template>
+  <form class="grid gap-3 md:grid-cols-3" @submit.prevent="createUser()">
+    <div>
+      <label class="field-label">Email</label
+      ><input
+        type="email"
+        class="field-input"
+        x-model="forms.user.email"
+        required
+      />
+    </div>
+    <div>
+      <label class="field-label">Password</label
+      ><input
+        type="password"
+        class="field-input"
+        x-model="forms.user.password"
+        autocomplete="new-password"
+        required
+      />
+    </div>
+    <div>
+      <label class="field-label">Role</label>
+      <select class="field-input" x-model="forms.user.role">
+        <template x-for="opt in roleOptions" :key="opt.value">
+          <option :value="opt.value" x-text="opt.label"></option>
+        </template>
+      </select>
+    </div>
+    <div class="md:col-span-2">
+      <label class="field-label">Scopes (comma-separated)</label
+      ><input
+        class="field-input"
+        x-model="forms.user.scopes"
+        placeholder="orders:read, weather"
+      />
+    </div>
+    <div>
+      <label class="field-label">Status</label>
+      <select class="field-input" x-model="forms.user.status">
+        <option value="active">active</option>
+        <option value="disabled">disabled</option>
+      </select>
+    </div>
+    <div class="flex items-end gap-2 md:col-span-3">
+      <button type="submit" class="btn-primary">Create User</button>
+      <button type="button" class="btn-secondary" @click="resetUserForm()">
+        Reset
+      </button>
+      <button type="button" class="btn-secondary" @click="loadUsers()">
+        Refresh
+      </button>
+    </div>
+  </form>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Email</th>
+          <th>Tenant</th>
+          <th>Role</th>
+          <th>Scopes</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-if="!state.users || state.users.length === 0">
+          <tr>
+            <td class="empty-cell" colspan="6">
+              <span class="empty-emoji">👥</span>No users in this tenant yet
+            </td>
+          </tr>
+        </template>
+        <template x-for="user in state.users" :key="user.id">
+          <tr>
+            <td x-text="user.email"></td>
+            <td x-text="user.tenant_id"></td>
+            <td x-text="roleLabel(user.roles)"></td>
+            <td x-text="(user.scopes || []).join(', ') || '-'"></td>
+            <td x-text="user.status"></td>
+            <td class="space-x-2">
+              <button
+                type="button"
+                class="link-btn"
+                @click="toggleUserStatus(user)"
+                x-text="user.status === 'active' ? 'Disable' : 'Enable'"
+              ></button>
+              <button
+                type="button"
+                class="link-btn"
+                @click="resetUserPassword(user)"
+              >
+                Reset password
+              </button>
+              <button
+                type="button"
+                class="link-btn text-rose-600"
+                @click="deleteUser(user)"
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section
+  x-show="activeSection === 'approvals'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
+  <h2 class="text-2xl font-semibold">Approvals</h2>
+  <p class="text-sm text-slate-600 max-w-3xl">
+    Tools marked <code>requires_confirmation</code> pause here until a tenant
+    admin or platform admin explicitly approves or rejects them. Requesters
+    cannot approve their own actions.
+  </p>
+  <button type="button" class="btn-secondary" @click="loadPendingActions()">
+    Refresh
+  </button>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Created</th>
+          <th>Requester</th>
+          <th>Server/Tool</th>
+          <th>Action</th>
+          <th>Arguments</th>
+          <th>Expires</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template
+          x-if="!state.pendingActions || state.pendingActions.length === 0"
+        >
+          <tr>
+            <td class="empty-cell" colspan="7">
+              <span class="empty-emoji">✅</span>No pending approvals
+            </td>
+          </tr>
+        </template>
+        <template
+          x-for="action in state.pendingActions"
+          :key="action.action_id"
+        >
+          <tr>
+            <td x-text="formatDate(action.created_at)"></td>
+            <td x-text="action.user_id"></td>
+            <td x-text="`${action.server}/${action.tool}`"></td>
+            <td x-text="action.action_type"></td>
+            <td
+              class="truncate max-w-xs"
+              x-text="formatJson(action.arguments)"
+            ></td>
+            <td x-text="formatDate(action.expires_at)"></td>
+            <td class="space-x-2">
+              <button
+                type="button"
+                class="link-btn"
+                @click="approvePendingAction(action)"
+              >
+                Approve
+              </button>
+              <button
+                type="button"
+                class="link-btn text-rose-600"
+                @click="rejectPendingAction(action)"
+              >
+                Reject
+              </button>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section
+  x-show="activeSection === 'servers'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
+  <div class="studio-hero">
+    <div class="studio-hero-copy">
+      <div class="studio-eyebrow">MCP Servers</div>
+      <h2 class="studio-h1">Bundle tools into a server</h2>
+      <p class="studio-lede">
+        An MCP server is just a <strong>named bundle of tools</strong> your
+        assistant can call. Spin up a <strong>virtual</strong> server by writing
+        Python — every function is sandboxed and exposed as a real MCP tool — or
+        <strong>connect</strong> a server you already run.
+      </p>
+    </div>
+    <button type="button" class="studio-learn" @click="openHelp('mcp')">
+      <span class="help-badge" aria-hidden="true">?</span>
+      New to MCP? 60-second primer
+    </button>
+  </div>
+
+  <form class="space-y-4" @submit.prevent="saveServer()">
+    <div class="mb-2">
+      <div class="segment-ctrl">
+        <button
+          type="button"
+          class="segment-btn"
+          :class="serverKindIsCode() ? 'segment-btn-active' : ''"
+          @click="chooseServerKind('code')"
+        >
+          <span class="segment-emoji" aria-hidden="true">✨</span>
+          Virtual server
+          <span class="segment-tag">No infra</span>
         </button>
-        <button type="button" class="btn-secondary text-left" @click="goToChecklistStep('function')">
-          <span x-text="checklistDone('function') ? '✓' : '○'"></span>
-          Author a function
+        <button
+          type="button"
+          class="segment-btn"
+          :class="!serverKindIsCode() ? 'segment-btn-active' : ''"
+          @click="chooseServerKind('connect')"
+        >
+          <span class="segment-emoji" aria-hidden="true">🔌</span>
+          Connect existing
         </button>
-        <button type="button" class="btn-secondary text-left" @click="goToChecklistStep('connect')">
-          <span x-text="checklistDone('connect') ? '✓' : '○'"></span>
-          Connect an MCP client
-        </button>
       </div>
+      <p
+        class="mt-2 text-sm text-slate-500 max-w-2xl"
+        x-text="serverKindIsCode() ? 'Write Python functions. We lint, encrypt, and run each one in a wasm sandbox — then expose it as a real MCP tool.' : 'Proxy an MCP server you already operate over Streamable HTTP, SSE, or stdio.'"
+      ></p>
     </div>
-    <button type="button" class="btn-secondary" @click="loadStats()">Refresh stats</button>
-  </section>
 
-  <section
-    x-show="activeSection === 'tenants'"
-    class="space-y-4"
-    x-transition:enter="view-active"
-    x-transition:enter-start="view-from"
-    x-transition:enter-end="view-to"
-  >
-    <h2 class="text-2xl font-semibold">Tenants</h2>
-    <form class="flex gap-3 items-end" @submit.prevent="createTenant()">
+    <div class="grid gap-4 md:grid-cols-2">
       <div>
-        <label class="field-label">Tenant ID</label>
-        <input class="field-input" x-model="forms.newTenantId" placeholder="tenant-a" required />
+        <label class="field-label"
+          >Server name
+          <span class="field-hint">(lowercase, no spaces)</span></label
+        >
+        <input
+          class="field-input"
+          x-model="forms.server.server"
+          placeholder="my-tools"
+          required
+        />
       </div>
-      <button type="submit" class="btn-primary">Create Tenant</button>
-      <button type="button" class="btn-secondary" @click="loadTenants()">Refresh</button>
-    </form>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Tenant</th><th>DB Name</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
-        <tbody>
-          <template x-if="!state.tenants || state.tenants.length === 0">
-            <tr><td class="empty-cell" colspan="5"><span class="empty-emoji">🏢</span>No tenants yet</td></tr>
-          </template>
-          <template x-for="tenant in state.tenants" :key="tenant.tenant_id">
-            <tr>
-              <td x-text="tenant.tenant_id"></td>
-              <td x-text="tenant.db_name"></td>
-              <td>
-                <span x-text="tenant.status || 'active'" :class="(tenant.status === 'suspended') ? 'text-red-600 font-medium' : 'text-emerald-700'"></span>
-                <span x-show="tenant.status === 'suspended' && tenant.suspended_reason" class="text-xs text-slate-500" x-text="` — ${tenant.suspended_reason}`"></span>
-              </td>
-              <td x-text="formatDate(tenant.created_at)"></td>
-              <td class="space-x-2">
-                <button type="button" class="link-btn" @click="openTenantConnect(tenant.tenant_id)">Connect</button>
-                <button
-                  type="button"
-                  class="link-btn"
-                  x-show="state.whoami?.is_platform_admin"
-                  @click="toggleTenantStatus(tenant)"
-                  x-text="tenant.status === 'suspended' ? 'Resume' : 'Suspend'"
-                ></button>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <section
-    x-show="activeSection === 'users'"
-    class="space-y-4"
-    x-transition:enter="view-active"
-    x-transition:enter-start="view-from"
-    x-transition:enter-end="view-to"
-  >
-    <h2 class="text-2xl font-semibold">Users</h2>
-    <p class="text-sm text-slate-600 max-w-3xl">
-      Users belong to the tenant selected in the top bar. A <span class="font-medium">tenant
-      admin</span> manages users and servers within their own tenant; only a
-      <span class="font-medium">platform admin</span> can grant the platform-admin role or
-      manage users across tenants.
-    </p>
-    <template x-if="state.userNotice">
-      <div class="rounded-md border border-emerald-300 bg-emerald-50 text-emerald-700 px-4 py-3 text-sm" x-text="state.userNotice"></div>
-    </template>
-    <form class="grid gap-3 md:grid-cols-3" @submit.prevent="createUser()">
-      <div><label class="field-label">Email</label><input type="email" class="field-input" x-model="forms.user.email" required /></div>
-      <div><label class="field-label">Password</label><input type="password" class="field-input" x-model="forms.user.password" autocomplete="new-password" required /></div>
       <div>
-        <label class="field-label">Role</label>
-        <select class="field-input" x-model="forms.user.role">
-          <template x-for="opt in roleOptions" :key="opt.value">
-            <option :value="opt.value" x-text="opt.label"></option>
-          </template>
-        </select>
+        <label class="field-label"
+          >Metadata <span class="field-hint">(JSON, optional)</span></label
+        >
+        <input
+          class="field-input"
+          x-model="forms.server.metadata"
+          placeholder='{"domain":"custom"}'
+        />
       </div>
-      <div class="md:col-span-2"><label class="field-label">Scopes (comma-separated)</label><input class="field-input" x-model="forms.user.scopes" placeholder="orders:read, weather" /></div>
-      <div>
-        <label class="field-label">Status</label>
-        <select class="field-input" x-model="forms.user.status">
-          <option value="active">active</option>
-          <option value="disabled">disabled</option>
-        </select>
-      </div>
-      <div class="flex items-end gap-2 md:col-span-3">
-        <button type="submit" class="btn-primary">Create User</button>
-        <button type="button" class="btn-secondary" @click="resetUserForm()">Reset</button>
-        <button type="button" class="btn-secondary" @click="loadUsers()">Refresh</button>
-      </div>
-    </form>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Email</th><th>Tenant</th><th>Role</th><th>Scopes</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody>
-          <template x-if="!state.users || state.users.length === 0">
-            <tr><td class="empty-cell" colspan="6"><span class="empty-emoji">👥</span>No users in this tenant yet</td></tr>
-          </template>
-          <template x-for="user in state.users" :key="user.id">
-            <tr>
-              <td x-text="user.email"></td>
-              <td x-text="user.tenant_id"></td>
-              <td x-text="roleLabel(user.roles)"></td>
-              <td x-text="(user.scopes || []).join(', ') || '-'"></td>
-              <td x-text="user.status"></td>
-              <td class="space-x-2">
-                <button type="button" class="link-btn" @click="toggleUserStatus(user)" x-text="user.status === 'active' ? 'Disable' : 'Enable'"></button>
-                <button type="button" class="link-btn" @click="resetUserPassword(user)">Reset password</button>
-                <button type="button" class="link-btn text-rose-600" @click="deleteUser(user)">Delete</button>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
     </div>
-  </section>
 
-  <section
-    x-show="activeSection === 'approvals'"
-    class="space-y-4"
-    x-transition:enter="view-active"
-    x-transition:enter-start="view-from"
-    x-transition:enter-end="view-to"
-  >
-    <h2 class="text-2xl font-semibold">Approvals</h2>
-    <p class="text-sm text-slate-600 max-w-3xl">
-      Tools marked <code>requires_confirmation</code> pause here until a tenant admin or
-      platform admin explicitly approves or rejects them. Requesters cannot approve their own actions.
-    </p>
-    <button type="button" class="btn-secondary" @click="loadPendingActions()">Refresh</button>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Created</th><th>Requester</th><th>Server/Tool</th><th>Action</th><th>Arguments</th><th>Expires</th><th>Actions</th></tr></thead>
-        <tbody>
-          <template x-if="!state.pendingActions || state.pendingActions.length === 0">
-            <tr><td class="empty-cell" colspan="7"><span class="empty-emoji">✅</span>No pending approvals</td></tr>
-          </template>
-          <template x-for="action in state.pendingActions" :key="action.action_id">
-            <tr>
-              <td x-text="formatDate(action.created_at)"></td>
-              <td x-text="action.user_id"></td>
-              <td x-text="`${action.server}/${action.tool}`"></td>
-              <td x-text="action.action_type"></td>
-              <td class="truncate max-w-xs" x-text="formatJson(action.arguments)"></td>
-              <td x-text="formatDate(action.expires_at)"></td>
-              <td class="space-x-2">
-                <button type="button" class="link-btn" @click="approvePendingAction(action)">Approve</button>
-                <button type="button" class="link-btn text-rose-600" @click="rejectPendingAction(action)">Reject</button>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <section
-    x-show="activeSection === 'servers'"
-    class="space-y-4"
-    x-transition:enter="view-active"
-    x-transition:enter-start="view-from"
-    x-transition:enter-end="view-to"
-  >
-    <h2 class="text-2xl font-semibold">Servers</h2>
-    <form class="grid gap-3 md:grid-cols-3" @submit.prevent="saveServer()">
-      <div><label class="field-label">Server</label><input class="field-input" x-model="forms.server.server" required /></div>
+    <div
+      x-show="!serverKindIsCode()"
+      x-transition.opacity
+      class="grid gap-4 md:grid-cols-3"
+    >
       <div>
         <label class="field-label">Transport</label>
-        <select class="field-input" x-model="forms.server.transport" @change="$nextTick(() => refreshCodeEditors())">
+        <select class="field-input" x-model="forms.server.transport">
           <option value="streamable_http">streamable_http</option>
           <option value="sse">sse</option>
           <option value="stdio">stdio</option>
-          <option value="code">code (authored functions)</option>
         </select>
       </div>
-      <div x-show="forms.server.transport !== 'code'"><label class="field-label">Endpoint</label><input class="field-input" x-model="forms.server.endpoint" /></div>
-      <div x-show="forms.server.transport !== 'code'"><label class="field-label">Command</label><input class="field-input" x-model="forms.server.command" /></div>
-      <div class="md:col-span-2"><label class="field-label">Metadata (JSON)</label><input class="field-input" x-model="forms.server.metadata" placeholder='{"domain":"weather"}' /></div>
+      <div>
+        <label class="field-label">Endpoint</label
+        ><input
+          class="field-input"
+          x-model="forms.server.endpoint"
+          placeholder="https://host/mcp"
+        />
+      </div>
+      <div>
+        <label class="field-label"
+          >Command <span class="field-hint">(stdio)</span></label
+        ><input
+          class="field-input"
+          x-model="forms.server.command"
+          placeholder="uvx my-mcp-server"
+        />
+      </div>
+    </div>
 
-      <template x-if="forms.server.transport === 'code'">
-        <div class="md:col-span-3 studio-panel space-y-4">
-          <div class="flex items-center justify-between gap-3 flex-wrap">
-            <div class="studio-intro">
-              Author one or more Python functions. Source is linted, encrypted at rest, indexed in catalog search, and executed in the wasm sandbox.
-            </div>
-            <button type="button" class="btn-secondary" @click="addToolToServer()">+ Add function</button>
+    <template x-if="serverKindIsCode()">
+      <div class="studio-panel space-y-4">
+        <div class="builder-head">
+          <div>
+            <div class="builder-title">Tools in this server</div>
+            <div
+              class="builder-sub"
+              x-text="`${forms.server.tools.length} function${forms.server.tools.length === 1 ? '' : 's'} · sandboxed Python, exposed as MCP tools`"
+            ></div>
           </div>
-
-          <div class="studio-rules">
-            <strong>Sandbox rules:</strong> no network egress, stdlib by default, one pinned requirement per line (<code>name==version</code>), 64KB max source, and function name must match the tool name.
+          <div class="builder-actions">
+            <button
+              type="button"
+              class="btn-secondary"
+              @click="loadExampleTool()"
+            >
+              ✨ Start from example
+            </button>
+            <button
+              type="button"
+              class="btn-secondary"
+              @click="addToolToServer()"
+            >
+              + Add function
+            </button>
           </div>
+        </div>
 
-          <template x-for="(tool, idx) in forms.server.tools" :key="tool.local_id">
-            <article class="fn-card space-y-4">
-              <div class="flex items-center justify-between gap-2">
-                <h3 class="fn-card-title" x-text="`Function ${idx + 1}`"></h3>
+        <div
+          class="manifest-row"
+          x-show="forms.server.tools.some(t => (t.name || '').trim())"
+        >
+          <span class="manifest-label">Exposes</span>
+          <template
+            x-for="(t, i) in forms.server.tools"
+            :key="'chip-' + t.local_id"
+          >
+            <button
+              type="button"
+              class="manifest-chip"
+              @click="expandTool(t.local_id)"
+              x-show="(t.name || '').trim()"
+            >
+              <span
+                class="manifest-dot"
+                :class="`dot-${t.action_type || 'read'}`"
+              ></span>
+              <span x-text="t.name"></span>
+            </button>
+          </template>
+        </div>
+
+        <div class="studio-rules">
+          <strong>Sandbox rules:</strong> no network egress, stdlib by default,
+          one pinned requirement per line (<code>name==version</code>), 64KB max
+          source, and the function name must match the tool name.
+        </div>
+
+        <template
+          x-for="(tool, idx) in forms.server.tools"
+          :key="tool.local_id"
+        >
+          <article class="fn-card" :class="tool.expanded ? 'fn-card-open' : ''">
+            <div class="fn-summary">
+              <button
+                type="button"
+                class="fn-summary-main"
+                @click="toggleTool(tool.local_id)"
+                :aria-expanded="tool.expanded ? 'true' : 'false'"
+              >
+                <span
+                  class="fn-chevron"
+                  :class="tool.expanded ? 'open' : ''"
+                  aria-hidden="true"
+                  >▸</span
+                >
+                <span
+                  class="fn-summary-name"
+                  x-text="toolSummaryName(tool, idx)"
+                ></span>
+                <span
+                  class="action-badge"
+                  :class="`action-${tool.action_type || 'read'}`"
+                  x-text="tool.action_type || 'read'"
+                ></span>
+                <template x-if="hasLintHints(tool)">
+                  <span
+                    class="fn-status fn-status-warn"
+                    :title="lintHintsForTool(tool).join(' · ')"
+                    x-text="`⚠ ${lintHintsForTool(tool).length}`"
+                  ></span>
+                </template>
+                <template
+                  x-if="!hasLintHints(tool) && (tool.raw_code || '').trim()"
+                >
+                  <span class="fn-status fn-status-ok" title="No lint issues"
+                    >✓ ready</span
+                  >
+                </template>
+              </button>
+              <div class="fn-summary-tools">
+                <span
+                  class="fn-summary-hint"
+                  x-text="tool.expanded ? 'Collapse' : 'Edit'"
+                ></span>
                 <button
                   type="button"
-                  class="btn-secondary"
+                  class="icon-btn icon-btn-danger"
                   @click="removeToolFromServer(tool.local_id)"
                   :disabled="forms.server.tools.length <= 1"
+                  title="Delete function"
                 >
                   Delete
                 </button>
               </div>
+            </div>
 
-              <div class="grid gap-4 md:grid-cols-2">
-                <div><label class="field-label">Function name</label><input class="field-input" x-model="tool.name" placeholder="get_weather" /></div>
-                <div>
-                  <label class="field-label">Action type</label>
-                  <select class="field-input" x-model="tool.action_type">
-                    <option value="read">read</option>
-                    <option value="write">write</option>
-                    <option value="destructive">destructive</option>
-                  </select>
-                </div>
-                <div class="md:col-span-2"><label class="field-label">Description</label><input class="field-input" x-model="tool.description" placeholder="What this function does" /></div>
-                <div><label class="field-label">Scopes (comma-separated)</label><input class="field-input" x-model="tool.scopes" placeholder="weather, readonly" /></div>
-                <div class="flex items-center gap-2">
-                  <input type="checkbox" :id="`tool-confirm-${tool.local_id}`" x-model="tool.requires_confirmation" />
-                  <label class="field-label !mb-0" :for="`tool-confirm-${tool.local_id}`">Requires confirmation before running</label>
-                </div>
-                <div class="md:col-span-2">
-                  <label class="field-label">Input schema (JSON object)</label>
-                  <textarea class="field-input font-mono text-sm" rows="4" x-model="tool.input_schema" placeholder='{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}'></textarea>
-                </div>
-                <div class="md:col-span-2">
-                  <label class="field-label">Requirements (one pinned package per line, e.g. <code>httpx==0.27.0</code>)</label>
-                  <textarea class="field-input font-mono text-sm" rows="3" x-model="tool.requirements" placeholder="httpx==0.27.0"></textarea>
-                </div>
-                <div class="md:col-span-2">
-                  <label class="field-label">Python source <span class="field-hint">(Cmd/Ctrl+S to save server)</span></label>
-                  <div class="code-editor-host field-input" :data-code-editor-host="tool.local_id"></div>
-                  <textarea
-                    class="field-input font-mono text-sm"
-                    rows="12"
-                    x-model="tool.raw_code"
-                    :data-code-editor-fallback="tool.local_id"
-                    placeholder="def get_weather(city: str) -> dict:&#10;    ..."
-                  ></textarea>
-                </div>
-                <div class="md:col-span-2">
-                  <label class="field-label">Test arguments (JSON object)</label>
-                  <textarea class="field-input font-mono text-sm" rows="3" x-model="tool.test_arguments" placeholder='{"city":"Lisbon"}'></textarea>
-                  <div class="mt-2 flex items-center gap-2">
-                    <button type="button" class="btn-secondary" @click="runToolTest(tool)">Run in sandbox</button>
-                    <template x-if="getToolTestResult(tool.local_id)?.running">
-                      <span class="studio-hint"><span class="spinner"></span> Running…</span>
-                    </template>
+            <div class="fn-body" x-show="tool.expanded" x-transition.opacity>
+              <div class="grid gap-6 md:grid-cols-12">
+                <!-- Config Column -->
+                <div class="md:col-span-4 space-y-4">
+                  <div>
+                    <label class="field-label">Function name</label
+                    ><input
+                      class="field-input"
+                      x-model="tool.name"
+                      placeholder="get_weather"
+                    />
                   </div>
-                  <template x-if="getToolTestResult(tool.local_id) && !getToolTestResult(tool.local_id).running">
-                    <div
-                      class="mt-2 test-result"
-                      :class="getToolTestResult(tool.local_id).ok ? 'test-ok' : 'test-fail'"
+                  <div>
+                    <label class="field-label">Action type</label>
+                    <select class="field-input" x-model="tool.action_type">
+                      <option value="read">read</option>
+                      <option value="write">write</option>
+                      <option value="destructive">destructive</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="field-label">Scopes (comma-separated)</label
+                    ><input
+                      class="field-input"
+                      x-model="tool.scopes"
+                      placeholder="weather, readonly"
+                    />
+                  </div>
+                  <div class="flex items-center gap-2 mt-1">
+                    <input
+                      type="checkbox"
+                      :id="`tool-confirm-${tool.local_id}`"
+                      x-model="tool.requires_confirmation"
+                    />
+                    <label
+                      class="field-label !mb-0"
+                      :for="`tool-confirm-${tool.local_id}`"
+                      >Requires confirmation</label
                     >
-                      <template x-if="getToolTestResult(tool.local_id).ok">
-                        <div class="space-y-1">
-                          <div class="test-title">Sandbox test passed</div>
-                          <div x-show="getToolTestResult(tool.local_id).elapsed_ms != null" x-text="`Elapsed: ${Number(getToolTestResult(tool.local_id).elapsed_ms).toFixed(1)}ms`"></div>
-                          <pre class="test-output" x-text="JSON.stringify(getToolTestResult(tool.local_id).result || {}, null, 2)"></pre>
+                  </div>
+                  <div>
+                    <label class="field-label"
+                      >Input schema
+                      <span class="field-hint">(JSON)</span></label
+                    >
+                    <textarea
+                      class="field-input font-mono text-xs"
+                      rows="5"
+                      x-model="tool.input_schema"
+                      placeholder='{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}'
+                    ></textarea>
+                  </div>
+                  <div>
+                    <label class="field-label"
+                      >Requirements
+                      <span class="field-hint">(pinned packages)</span></label
+                    >
+                    <textarea
+                      class="field-input font-mono text-xs"
+                      rows="2"
+                      x-model="tool.requirements"
+                      placeholder="httpx==0.27.0"
+                    ></textarea>
+                  </div>
+                </div>
+
+                <!-- Code & Test Column -->
+                <div class="md:col-span-8 flex flex-col gap-4">
+                  <div>
+                    <label class="field-label">Description</label
+                    ><input
+                      class="field-input"
+                      x-model="tool.description"
+                      placeholder="What this function does"
+                    />
+                  </div>
+
+                  <div class="flex flex-col flex-1 min-h-[300px]">
+                    <div class="flex items-end justify-between mb-1.5">
+                      <label class="field-label !mb-0">Python source</label>
+                      <span class="field-hint">Cmd/Ctrl+S to save</span>
+                    </div>
+                    <div
+                      class="code-editor-host field-input flex-1 !p-0"
+                      :data-code-editor-host="tool.local_id"
+                    ></div>
+                    <textarea
+                      class="field-input font-mono text-sm flex-1"
+                      rows="12"
+                      x-model="tool.raw_code"
+                      :data-code-editor-fallback="tool.local_id"
+                      placeholder="def get_weather(city: str) -> dict:&#10;    ..."
+                      style="display: none"
+                    ></textarea>
+                  </div>
+
+                  <div class="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <label class="field-label"
+                        >Test arguments
+                        <span class="field-hint">(JSON)</span></label
+                      >
+                      <textarea
+                        class="field-input font-mono text-xs"
+                        rows="3"
+                        x-model="tool.test_arguments"
+                        placeholder='{"city":"Lisbon"}'
+                      ></textarea>
+                    </div>
+                    <div class="flex flex-col">
+                      <div class="flex items-center justify-between mb-1.5">
+                        <label class="field-label !mb-0">Sandbox test</label>
+                        <div class="flex items-center gap-2">
+                          <template
+                            x-if="getToolTestResult(tool.local_id)?.running"
+                          >
+                            <span class="studio-hint text-xs"
+                              ><span class="spinner"></span> Running…</span
+                            >
+                          </template>
+                          <button
+                            type="button"
+                            class="btn-secondary !py-1 !px-2.5 !text-xs"
+                            @click="runToolTest(tool)"
+                          >
+                            Run
+                          </button>
+                        </div>
+                      </div>
+
+                      <template
+                        x-if="getToolTestResult(tool.local_id) && !getToolTestResult(tool.local_id).running"
+                      >
+                        <div
+                          class="test-result flex-1 overflow-auto !py-1.5 !px-2"
+                          :class="getToolTestResult(tool.local_id).ok ? 'test-ok' : 'test-fail'"
+                        >
+                          <template x-if="getToolTestResult(tool.local_id).ok">
+                            <div class="space-y-0.5">
+                              <div class="flex justify-between items-center">
+                                <div class="test-title text-xs">Passed</div>
+                                <div
+                                  class="text-[10px] opacity-70"
+                                  x-show="getToolTestResult(tool.local_id).elapsed_ms != null"
+                                  x-text="`${Number(getToolTestResult(tool.local_id).elapsed_ms).toFixed(1)}ms`"
+                                ></div>
+                              </div>
+                              <pre
+                                class="test-output !mt-0 !bg-transparent !border-0 !p-0 !max-h-24 !text-[11px]"
+                                x-text="JSON.stringify(getToolTestResult(tool.local_id).result || {}, null, 2)"
+                              ></pre>
+                            </div>
+                          </template>
+                          <template x-if="!getToolTestResult(tool.local_id).ok">
+                            <div class="space-y-0.5">
+                              <div class="test-title text-xs">Failed</div>
+                              <div
+                                class="text-[11px]"
+                                x-text="getToolTestResult(tool.local_id).error || 'Unknown error'"
+                              ></div>
+                            </div>
+                          </template>
                         </div>
                       </template>
-                      <template x-if="!getToolTestResult(tool.local_id).ok">
-                        <div class="space-y-1">
-                          <div class="test-title">Sandbox test failed</div>
-                          <div x-text="getToolTestResult(tool.local_id).error || 'Unknown error'"></div>
+                      <template x-if="!getToolTestResult(tool.local_id)">
+                        <div
+                          class="flex-1 rounded-md border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-center text-xs text-slate-400"
+                        >
+                          Run test to see output
                         </div>
                       </template>
                     </div>
-                  </template>
+                  </div>
                 </div>
               </div>
 
@@ -331,638 +775,1017 @@
                 <div class="lint-hints">
                   <div class="lint-title">Lint hints</div>
                   <ul>
-                    <template x-for="hint in lintHintsForTool(tool)" :key="hint">
+                    <template
+                      x-for="hint in lintHintsForTool(tool)"
+                      :key="hint"
+                    >
                       <li x-text="hint"></li>
                     </template>
                   </ul>
                 </div>
               </template>
-            </article>
-          </template>
-        </div>
-      </template>
-
-      <div class="flex items-end gap-2 md:col-span-3">
-        <button type="submit" class="btn-primary">Save Server</button>
-        <button type="button" class="btn-secondary" @click="resetServerForm()">Reset</button>
-        <button type="button" class="btn-secondary" @click="loadServers()">Refresh</button>
-      </div>
-    </form>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Server</th><th>Transport</th><th>Functions</th><th>Endpoint</th><th>Enabled</th><th>Actions</th></tr></thead>
-        <tbody>
-          <template x-if="!state.servers || state.servers.length === 0">
-            <tr><td class="empty-cell" colspan="6"><span class="empty-emoji">🧰</span>No servers configured yet</td></tr>
-          </template>
-          <template x-for="server in state.servers" :key="server.server">
-            <tr>
-              <td x-text="server.server"></td>
-              <td x-text="server.transport"></td>
-              <td x-text="(server.tools || []).length"></td>
-              <td class="truncate max-w-xs" x-text="server.endpoint || server.command || '-'"></td>
-              <td x-text="server.enabled ? 'yes' : 'no'"></td>
-              <td class="space-x-2">
-                <button type="button" class="link-btn" @click="editServer(server)">Edit</button>
-                <button type="button" class="link-btn" @click="toggleServer(server)" x-text="server.enabled ? 'Disable' : 'Enable'"></button>
-                <button type="button" class="link-btn text-rose-600" @click="deleteServer(server.server)">Delete</button>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <section
-    x-show="activeSection === 'catalog'"
-    class="space-y-4"
-    x-transition:enter="view-active"
-    x-transition:enter-start="view-from"
-    x-transition:enter-end="view-to"
-  >
-    <h2 class="text-2xl font-semibold">Tool Catalog</h2>
-    <div class="flex gap-2 items-end flex-wrap">
-      <div class="min-w-64">
-        <label class="field-label">Filter tools</label>
-        <input class="field-input" x-model="forms.catalog.query" placeholder="server, tool, scope, action..." />
-      </div>
-      <button type="button" class="btn-secondary" @click="loadCatalog()">Refresh</button>
-    </div>
-    <template x-if="filteredCatalogGroups().length === 0">
-      <div class="card text-sm text-slate-500">
-        <span class="empty-emoji">🗂️</span>
-        Catalog is empty or no tools match your filter.
+            </div>
+          </article>
+        </template>
       </div>
     </template>
-    <div class="space-y-3">
-      <template x-for="group in filteredCatalogGroups()" :key="group.server">
-        <div class="card">
-          <button type="button" class="w-full flex items-center justify-between gap-2 text-left" @click="toggleCatalogServer(group.server)">
-            <div>
-              <div class="text-sm font-semibold" x-text="group.server"></div>
-              <div class="text-xs text-slate-500" x-text="`${group.items.length} tool(s)`"></div>
-            </div>
-            <span class="text-xs text-slate-500" x-text="isCatalogServerOpen(group.server) ? 'Collapse' : 'Expand'"></span>
-          </button>
-          <div class="mt-3 table-wrap" x-show="isCatalogServerOpen(group.server)">
-            <table class="table">
-              <thead><tr><th>Tool</th><th>Description</th><th>Scopes</th><th>Metadata</th><th>Schema</th><th></th></tr></thead>
-              <tbody>
-                <template x-for="item in group.items" :key="`${item.server}:${item.name}`">
-                  <tr>
-                    <td>
-                      <div class="font-medium" x-text="item.name"></div>
-                    </td>
-                    <td x-text="item.description || '-'"></td>
-                    <td x-text="(item.scopes || []).join(', ') || '-'"></td>
-                    <td>
-                      <div class="text-xs text-slate-500" x-text="`action: ${item.action_type || '-'}`"></div>
-                      <div class="text-xs text-slate-500" x-text="`transport: ${item.transport || '-'}`"></div>
-                    </td>
-                    <td class="max-w-xs">
-                      <details>
-                        <summary class="link-btn">View schema</summary>
-                        <pre class="field-input mt-1 !bg-white/70 !text-slate-700" x-text="JSON.stringify(item.input_schema || {}, null, 2)"></pre>
-                      </details>
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        class="link-btn"
-                        x-show="item.transport === 'code'"
-                        @click="openCatalogTool(item)"
-                      >
-                        Edit code
-                      </button>
-                    </td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
+
+    <div class="flex items-end gap-2">
+      <button
+        type="submit"
+        class="btn-primary"
+        x-text="serverKindIsCode() ? 'Save virtual server' : 'Save server'"
+      ></button>
+      <button type="button" class="btn-secondary" @click="resetServerForm()">
+        Reset
+      </button>
+      <button type="button" class="btn-secondary" @click="loadServers()">
+        Refresh
+      </button>
+    </div>
+  </form>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Server</th>
+          <th>Transport</th>
+          <th>Functions</th>
+          <th>Endpoint</th>
+          <th>Enabled</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-if="!state.servers || state.servers.length === 0">
+          <tr>
+            <td class="empty-cell" colspan="6">
+              <span class="empty-emoji">🧰</span>No servers configured yet
+            </td>
+          </tr>
+        </template>
+        <template x-for="server in state.servers" :key="server.server">
+          <tr>
+            <td x-text="server.server"></td>
+            <td x-text="server.transport"></td>
+            <td x-text="(server.tools || []).length"></td>
+            <td
+              class="truncate max-w-xs"
+              x-text="server.endpoint || server.command || '-'"
+            ></td>
+            <td x-text="server.enabled ? 'yes' : 'no'"></td>
+            <td class="space-x-2">
+              <button
+                type="button"
+                class="link-btn"
+                @click="editServer(server)"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                class="link-btn"
+                @click="toggleServer(server)"
+                x-text="server.enabled ? 'Disable' : 'Enable'"
+              ></button>
+              <button
+                type="button"
+                class="link-btn text-rose-600"
+                @click="deleteServer(server.server)"
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section
+  x-show="activeSection === 'catalog'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
+  <h2 class="text-2xl font-semibold">Tool Catalog</h2>
+  <div class="flex gap-2 items-end flex-wrap">
+    <div class="min-w-64">
+      <label class="field-label">Filter tools</label>
+      <input
+        class="field-input"
+        x-model="forms.catalog.query"
+        placeholder="server, tool, scope, action..."
+      />
+    </div>
+    <button type="button" class="btn-secondary" @click="loadCatalog()">
+      Refresh
+    </button>
+  </div>
+  <template x-if="filteredCatalogGroups().length === 0">
+    <div class="card text-sm text-slate-500">
+      <span class="empty-emoji">🗂️</span>
+      Catalog is empty or no tools match your filter.
+    </div>
+  </template>
+  <div class="space-y-3">
+    <template x-for="group in filteredCatalogGroups()" :key="group.server">
+      <div class="card">
+        <button
+          type="button"
+          class="w-full flex items-center justify-between gap-2 text-left"
+          @click="toggleCatalogServer(group.server)"
+        >
+          <div>
+            <div class="text-sm font-semibold" x-text="group.server"></div>
+            <div
+              class="text-xs text-slate-500"
+              x-text="`${group.items.length} tool(s)`"
+            ></div>
           </div>
+          <span
+            class="text-xs text-slate-500"
+            x-text="isCatalogServerOpen(group.server) ? 'Collapse' : 'Expand'"
+          ></span>
+        </button>
+        <div class="mt-3 table-wrap" x-show="isCatalogServerOpen(group.server)">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Tool</th>
+                <th>Description</th>
+                <th>Scopes</th>
+                <th>Metadata</th>
+                <th>Schema</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template
+                x-for="item in group.items"
+                :key="`${item.server}:${item.name}`"
+              >
+                <tr>
+                  <td>
+                    <div class="font-medium" x-text="item.name"></div>
+                  </td>
+                  <td x-text="item.description || '-'"></td>
+                  <td x-text="(item.scopes || []).join(', ') || '-'"></td>
+                  <td>
+                    <div
+                      class="text-xs text-slate-500"
+                      x-text="`action: ${item.action_type || '-'}`"
+                    ></div>
+                    <div
+                      class="text-xs text-slate-500"
+                      x-text="`transport: ${item.transport || '-'}`"
+                    ></div>
+                  </td>
+                  <td class="max-w-xs">
+                    <details>
+                      <summary class="link-btn">View schema</summary>
+                      <pre
+                        class="field-input mt-1 !bg-white/70 !text-slate-700"
+                        x-text="JSON.stringify(item.input_schema || {}, null, 2)"
+                      ></pre>
+                    </details>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      class="link-btn"
+                      x-show="item.transport === 'code'"
+                      @click="openCatalogTool(item)"
+                    >
+                      Edit code
+                    </button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
         </div>
-      </template>
-    </div>
-  </section>
-
-  <section
-    x-show="activeSection === 'telemetry'"
-    class="space-y-4"
-    x-transition:enter="view-active"
-    x-transition:enter-start="view-from"
-    x-transition:enter-end="view-to"
-  >
-    <h2 class="text-2xl font-semibold">Telemetry</h2>
-    <button type="button" class="btn-secondary" @click="loadTelemetry()">Refresh</button>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Time</th><th>Method</th><th>Status</th><th>Latency</th></tr></thead>
-        <tbody>
-          <template x-if="!state.telemetry.items || state.telemetry.items.length === 0">
-            <tr><td class="empty-cell" colspan="4"><span class="empty-emoji">📈</span>No telemetry recorded yet</td></tr>
-          </template>
-          <template x-for="item in state.telemetry.items" :key="`${item.timestamp}:${item.request_id || ''}`">
-            <tr>
-              <td x-text="formatDate(item.timestamp)"></td>
-              <td x-text="item.method"></td>
-              <td x-text="item.status"></td>
-              <td x-text="item.latency_ms == null ? '-' : `${item.latency_ms.toFixed(2)}ms`"></td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <section
-    x-show="activeSection === 'search'"
-    class="space-y-4"
-    x-transition:enter="view-active"
-    x-transition:enter-start="view-from"
-    x-transition:enter-end="view-to"
-  >
-    <h2 class="text-2xl font-semibold">Search Playground</h2>
-    <form class="grid gap-3 md:grid-cols-4" @submit.prevent="runSearch()">
-      <div class="md:col-span-2"><label class="field-label">Query</label><input class="field-input" x-model="forms.search.query" required /></div>
-      <div><label class="field-label">Mode</label><select class="field-input" x-model="forms.search.mode"><option>hybrid</option><option>vector</option><option>text</option></select></div>
-      <div><label class="field-label">Limit</label><input type="number" min="1" max="50" class="field-input" x-model.number="forms.search.limit" /></div>
-      <div><button type="submit" class="btn-primary mt-6">Run Search</button></div>
-    </form>
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Server</th><th>Tool</th><th>Score</th></tr></thead>
-        <tbody>
-          <template x-if="!state.searchResults || state.searchResults.length === 0">
-            <tr><td class="empty-cell" colspan="3"><span class="empty-emoji">🔎</span>Run a search to see matching tools</td></tr>
-          </template>
-          <template x-for="item in state.searchResults" :key="`${item.server}:${item.name}`">
-            <tr>
-              <td x-text="item.server"></td>
-              <td x-text="item.name"></td>
-              <td x-text="item.score ?? '-'"></td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <section
-    x-show="activeSection === 'embeddings'"
-    class="space-y-4"
-    x-transition:enter="view-active"
-    x-transition:enter-start="view-from"
-    x-transition:enter-end="view-to"
-  >
-    <div class="flex items-center gap-3 flex-wrap">
-      <h2 class="text-2xl font-semibold">Platform Embeddings</h2>
-      <span class="inline-flex items-center rounded-full border border-sky-300 bg-sky-50 px-2.5 py-0.5 text-xs font-medium text-sky-700">
-        Default for all tenants
-      </span>
-    </div>
-    <p class="text-sm text-slate-600 max-w-3xl">
-      The platform-wide default embedding provider. <span class="font-medium">Every tenant
-      inherits this</span> unless it defines its own override under
-      <span class="font-medium">Embeddings&nbsp;·&nbsp;Tenant</span>. Vector width is detected
-      automatically by embedding a probe string. Saving a change re-embeds the tool
-      catalog, semantic cache, and guardrail signatures across <span class="font-medium">all
-      inheriting tenants</span> and rebuilds the vector indexes.
-    </p>
-
-    <div class="grid gap-4 md:grid-cols-3">
-      <div class="card">
-        <div class="card-label">Active Provider</div>
-        <div class="card-value" x-text="state.embedding?.provider ?? '-'"></div>
       </div>
-      <div class="card">
-        <div class="card-label">Model</div>
-        <div class="card-value text-lg" x-text="state.embedding?.model ?? '-'"></div>
-      </div>
-      <div class="card">
-        <div class="card-label">Dimensions</div>
-        <div class="card-value" x-text="state.embedding?.dimensions ?? '-'"></div>
-      </div>
-      <div class="card">
-        <div class="card-label">API Key At Rest</div>
-        <div class="text-sm text-slate-700" x-text="state.embedding?.api_key_set ? 'Encrypted (shared Fernet key)' : 'No key stored'"></div>
-      </div>
-    </div>
+    </template>
+  </div>
+</section>
 
-    <template x-if="state.embeddingStatus && state.embeddingStatus.state && state.embeddingStatus.state !== 'idle'">
+<section
+  x-show="activeSection === 'telemetry'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
+  <h2 class="text-2xl font-semibold">Telemetry</h2>
+  <button type="button" class="btn-secondary" @click="loadTelemetry()">
+    Refresh
+  </button>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Method</th>
+          <th>Status</th>
+          <th>Latency</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template
+          x-if="!state.telemetry.items || state.telemetry.items.length === 0"
+        >
+          <tr>
+            <td class="empty-cell" colspan="4">
+              <span class="empty-emoji">📈</span>No telemetry recorded yet
+            </td>
+          </tr>
+        </template>
+        <template
+          x-for="item in state.telemetry.items"
+          :key="`${item.timestamp}:${item.request_id || ''}`"
+        >
+          <tr>
+            <td x-text="formatDate(item.timestamp)"></td>
+            <td x-text="item.method"></td>
+            <td x-text="item.status"></td>
+            <td
+              x-text="item.latency_ms == null ? '-' : `${item.latency_ms.toFixed(2)}ms`"
+            ></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section
+  x-show="activeSection === 'search'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
+  <h2 class="text-2xl font-semibold">Search Playground</h2>
+  <form class="grid gap-3 md:grid-cols-4" @submit.prevent="runSearch()">
+    <div class="md:col-span-2">
+      <label class="field-label">Query</label
+      ><input class="field-input" x-model="forms.search.query" required />
+    </div>
+    <div>
+      <label class="field-label">Mode</label
+      ><select class="field-input" x-model="forms.search.mode">
+        <option>hybrid</option>
+        <option>vector</option>
+        <option>text</option>
+      </select>
+    </div>
+    <div>
+      <label class="field-label">Limit</label
+      ><input
+        type="number"
+        min="1"
+        max="50"
+        class="field-input"
+        x-model.number="forms.search.limit"
+      />
+    </div>
+    <div>
+      <button type="submit" class="btn-primary mt-6">Run Search</button>
+    </div>
+  </form>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Server</th>
+          <th>Tool</th>
+          <th>Score</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template
+          x-if="!state.searchResults || state.searchResults.length === 0"
+        >
+          <tr>
+            <td class="empty-cell" colspan="3">
+              <span class="empty-emoji">🔎</span>Run a search to see matching
+              tools
+            </td>
+          </tr>
+        </template>
+        <template
+          x-for="item in state.searchResults"
+          :key="`${item.server}:${item.name}`"
+        >
+          <tr>
+            <td x-text="item.server"></td>
+            <td x-text="item.name"></td>
+            <td x-text="item.score ?? '-'"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section
+  x-show="activeSection === 'embeddings'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
+  <div class="flex items-center gap-3 flex-wrap">
+    <h2 class="text-2xl font-semibold">Platform Embeddings</h2>
+    <span
+      class="inline-flex items-center rounded-full border border-sky-300 bg-sky-50 px-2.5 py-0.5 text-xs font-medium text-sky-700"
+    >
+      Default for all tenants
+    </span>
+  </div>
+  <p class="text-sm text-slate-600 max-w-3xl">
+    The platform-wide default embedding provider.
+    <span class="font-medium">Every tenant inherits this</span> unless it
+    defines its own override under
+    <span class="font-medium">Embeddings&nbsp;·&nbsp;Tenant</span>. Vector width
+    is detected automatically by embedding a probe string. Saving a change
+    re-embeds the tool catalog, semantic cache, and guardrail signatures across
+    <span class="font-medium">all inheriting tenants</span> and rebuilds the
+    vector indexes.
+  </p>
+
+  <div class="grid gap-4 md:grid-cols-3">
+    <div class="card">
+      <div class="card-label">Active Provider</div>
+      <div class="card-value" x-text="state.embedding?.provider ?? '-'"></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Model</div>
       <div
-        class="rounded-md border px-4 py-3 text-sm"
-        :class="state.embeddingStatus.state === 'failed'
+        class="card-value text-lg"
+        x-text="state.embedding?.model ?? '-'"
+      ></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Dimensions</div>
+      <div class="card-value" x-text="state.embedding?.dimensions ?? '-'"></div>
+    </div>
+    <div class="card">
+      <div class="card-label">API Key At Rest</div>
+      <div
+        class="text-sm text-slate-700"
+        x-text="state.embedding?.api_key_set ? 'Encrypted (shared Fernet key)' : 'No key stored'"
+      ></div>
+    </div>
+  </div>
+
+  <template
+    x-if="state.embeddingStatus && state.embeddingStatus.state && state.embeddingStatus.state !== 'idle'"
+  >
+    <div
+      class="rounded-md border px-4 py-3 text-sm"
+      :class="state.embeddingStatus.state === 'failed'
           ? 'border-rose-300 bg-rose-50 text-rose-700'
           : (state.embeddingStatus.state === 'running'
             ? 'border-amber-300 bg-amber-50 text-amber-800'
             : 'border-emerald-300 bg-emerald-50 text-emerald-700')"
-      >
-        <span class="font-medium">Reprovision:</span>
-        <span x-text="state.embeddingStatus.state"></span>
-        <template x-if="state.embeddingStatus.target_version">
-          <span x-text="`→ ${state.embeddingStatus.target_version}`"></span>
-        </template>
-        <template x-if="state.embeddingStatus.totals && state.embeddingStatus.totals.catalog_reembedded != null">
-          <span x-text="`(re-embedded ${state.embeddingStatus.totals.catalog_reembedded} catalog tools across ${state.embeddingStatus.totals.tenants} tenants)`"></span>
-        </template>
-        <template x-if="state.embeddingStatus.error">
-          <span class="block mt-1" x-text="state.embeddingStatus.error"></span>
-        </template>
-      </div>
-    </template>
-
-    <form class="grid gap-3 md:grid-cols-2 max-w-3xl" @submit.prevent="applyEmbedding()">
-      <div>
-        <label class="field-label">Provider</label>
-        <select class="field-input" x-model="forms.embedding.provider">
-          <template x-for="p in embeddingProviders" :key="p.value">
-            <option :value="p.value" x-text="p.label"></option>
-          </template>
-        </select>
-      </div>
-      <div>
-        <label class="field-label" x-text="embeddingIsAzure() ? 'Deployment / Model' : 'Model'"></label>
-        <input class="field-input" x-model="forms.embedding.model" placeholder="e.g. text-embedding-3-small" />
-      </div>
-
-      <div class="md:col-span-2">
-        <label class="field-label">Base URL <span class="text-slate-400">(optional)</span></label>
-        <input class="field-input" x-model="forms.embedding.base_url" placeholder="provider default" />
-        <p class="mt-1 text-xs text-slate-500">Vector dimensions are detected automatically when you save.</p>
-      </div>
-
-      <template x-if="embeddingNeedsApiKey()">
-        <div class="md:col-span-2">
-          <label class="field-label">
-            API Key
-            <span class="text-slate-400" x-show="state.embedding?.api_key_set" x-text="`(stored ${state.embedding?.api_key_hint || ''}; leave blank to keep)`"></span>
-          </label>
-          <input type="password" class="field-input" x-model="forms.embedding.api_key" placeholder="••••••••" autocomplete="new-password" />
-        </div>
-      </template>
-
-      <template x-if="embeddingIsAzure()">
-        <div class="md:col-span-2 grid gap-3 md:grid-cols-2">
-          <div>
-            <label class="field-label">Azure Endpoint</label>
-            <input class="field-input" x-model="forms.embedding.azure_endpoint" placeholder="https://my-resource.openai.azure.com" />
-          </div>
-          <div>
-            <label class="field-label">API Version</label>
-            <input class="field-input" x-model="forms.embedding.azure_api_version" placeholder="2023-05-15" />
-          </div>
-        </div>
-      </template>
-
-      <label class="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
-        <input type="checkbox" x-model="forms.embedding.reprovision" />
-        Re-embed existing data and rebuild indexes after saving
-      </label>
-
-      <div class="md:col-span-2 flex items-center gap-2">
-        <button type="submit" class="btn-primary" :disabled="state.embeddingSaving || embeddingIsRunning()" x-text="state.embeddingSaving ? 'Saving…' : 'Save & Apply'"></button>
-        <button type="button" class="btn-secondary" @click="testEmbedding()">Test connection</button>
-        <button type="button" class="btn-secondary" @click="loadEmbedding()">Refresh</button>
-      </div>
-    </form>
-
-    <template x-if="state.embeddingTest">
-      <div
-        class="max-w-3xl rounded-md border px-4 py-3 text-sm"
-        :class="state.embeddingTest.ok ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-rose-300 bg-rose-50 text-rose-700'"
-      >
-        <span class="font-medium" x-text="state.embeddingTest.ok ? 'Reachable' : 'Failed'"></span>
-        <span x-show="state.embeddingTest.ok" x-text="`— ${state.embeddingTest.model} @ ${state.embeddingTest.dimensions} dims`"></span>
-        <span x-text="`: ${state.embeddingTest.message}`"></span>
-      </div>
-    </template>
-  </section>
-
-  <section
-    x-show="activeSection === 'tenantEmbeddings'"
-    class="space-y-4"
-    x-transition:enter="view-active"
-    x-transition:enter-start="view-from"
-    x-transition:enter-end="view-to"
-  >
-    <div class="flex items-center gap-3 flex-wrap">
-      <h2 class="text-2xl font-semibold">Tenant Embeddings</h2>
-      <span
-        class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium"
-        :class="tenantEmbeddingIsOverride()
-          ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-          : 'border-slate-300 bg-slate-50 text-slate-600'"
-        x-text="tenantEmbeddingIsOverride() ? 'Override active' : 'Inheriting platform default'"
-      ></span>
-      <span class="text-sm text-slate-500">
-        Tenant: <span class="font-medium text-slate-700" x-text="state.tenantId"></span>
-      </span>
-    </div>
-    <p class="text-sm text-slate-600 max-w-3xl">
-      Bring-your-own embeddings for the tenant selected in the top bar. A tenant with
-      <span class="font-medium">no override inherits the Platform Embeddings default</span>
-      and automatically follows platform changes. Saving below creates a tenant-specific
-      override (which stops following the platform), encrypting the API key at rest with a
-      per-tenant Queryable Encryption key when encryption is enabled.
-    </p>
-
-    <div
-      class="max-w-3xl rounded-md border px-4 py-3 text-sm flex items-start justify-between gap-4"
-      :class="tenantEmbeddingIsOverride()
-        ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-        : 'border-slate-300 bg-slate-50 text-slate-700'"
     >
-      <div>
-        <template x-if="tenantEmbeddingIsOverride()">
-          <span>
-            <span class="font-medium">Override active.</span>
-            This tenant uses its own embeddings and will not follow Platform Embeddings changes.
-          </span>
-        </template>
-        <template x-if="!tenantEmbeddingIsOverride()">
-          <span>
-            <span class="font-medium">Inheriting the platform default.</span>
-            The form below is prefilled from the platform config; saving it creates an override.
-          </span>
-        </template>
-      </div>
-      <button
-        type="button"
-        class="btn-secondary whitespace-nowrap"
-        x-show="tenantEmbeddingIsOverride()"
-        :disabled="state.tenantEmbeddingSaving || tenantEmbeddingIsRunning()"
-        @click="resetTenantEmbedding()"
+      <span class="font-medium">Reprovision:</span>
+      <span x-text="state.embeddingStatus.state"></span>
+      <template x-if="state.embeddingStatus.target_version">
+        <span x-text="`→ ${state.embeddingStatus.target_version}`"></span>
+      </template>
+      <template
+        x-if="state.embeddingStatus.totals && state.embeddingStatus.totals.catalog_reembedded != null"
       >
-        Reset to platform default
+        <span
+          x-text="`(re-embedded ${state.embeddingStatus.totals.catalog_reembedded} catalog tools across ${state.embeddingStatus.totals.tenants} tenants)`"
+        ></span>
+      </template>
+      <template x-if="state.embeddingStatus.error">
+        <span class="block mt-1" x-text="state.embeddingStatus.error"></span>
+      </template>
+    </div>
+  </template>
+
+  <form
+    class="grid gap-3 md:grid-cols-2 max-w-3xl"
+    @submit.prevent="applyEmbedding()"
+  >
+    <div>
+      <label class="field-label">Provider</label>
+      <select class="field-input" x-model="forms.embedding.provider">
+        <template x-for="p in embeddingProviders" :key="p.value">
+          <option :value="p.value" x-text="p.label"></option>
+        </template>
+      </select>
+    </div>
+    <div>
+      <label
+        class="field-label"
+        x-text="embeddingIsAzure() ? 'Deployment / Model' : 'Model'"
+      ></label>
+      <input
+        class="field-input"
+        x-model="forms.embedding.model"
+        placeholder="e.g. text-embedding-3-small"
+      />
+    </div>
+
+    <div class="md:col-span-2">
+      <label class="field-label"
+        >Base URL <span class="text-slate-400">(optional)</span></label
+      >
+      <input
+        class="field-input"
+        x-model="forms.embedding.base_url"
+        placeholder="provider default"
+      />
+      <p class="mt-1 text-xs text-slate-500">
+        Vector dimensions are detected automatically when you save.
+      </p>
+    </div>
+
+    <template x-if="embeddingNeedsApiKey()">
+      <div class="md:col-span-2">
+        <label class="field-label">
+          API Key
+          <span
+            class="text-slate-400"
+            x-show="state.embedding?.api_key_set"
+            x-text="`(stored ${state.embedding?.api_key_hint || ''}; leave blank to keep)`"
+          ></span>
+        </label>
+        <input
+          type="password"
+          class="field-input"
+          x-model="forms.embedding.api_key"
+          placeholder="••••••••"
+          autocomplete="new-password"
+        />
+      </div>
+    </template>
+
+    <template x-if="embeddingIsAzure()">
+      <div class="md:col-span-2 grid gap-3 md:grid-cols-2">
+        <div>
+          <label class="field-label">Azure Endpoint</label>
+          <input
+            class="field-input"
+            x-model="forms.embedding.azure_endpoint"
+            placeholder="https://my-resource.openai.azure.com"
+          />
+        </div>
+        <div>
+          <label class="field-label">API Version</label>
+          <input
+            class="field-input"
+            x-model="forms.embedding.azure_api_version"
+            placeholder="2023-05-15"
+          />
+        </div>
+      </div>
+    </template>
+
+    <label class="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+      <input type="checkbox" x-model="forms.embedding.reprovision" />
+      Re-embed existing data and rebuild indexes after saving
+    </label>
+
+    <div class="md:col-span-2 flex items-center gap-2">
+      <button
+        type="submit"
+        class="btn-primary"
+        :disabled="state.embeddingSaving || embeddingIsRunning()"
+        x-text="state.embeddingSaving ? 'Saving…' : 'Save & Apply'"
+      ></button>
+      <button type="button" class="btn-secondary" @click="testEmbedding()">
+        Test connection
+      </button>
+      <button type="button" class="btn-secondary" @click="loadEmbedding()">
+        Refresh
       </button>
     </div>
+  </form>
 
-    <div class="grid gap-4 md:grid-cols-4">
-      <div class="card">
-        <div class="card-label">Provider</div>
-        <div class="card-value" x-text="state.tenantEmbedding?.provider ?? '-'"></div>
-      </div>
-      <div class="card">
-        <div class="card-label">Model</div>
-        <div class="card-value text-lg" x-text="state.tenantEmbedding?.model ?? '-'"></div>
-      </div>
-      <div class="card">
-        <div class="card-label">Dimensions</div>
-        <div class="card-value" x-text="state.tenantEmbedding?.dimensions ?? '-'"></div>
-      </div>
-      <div class="card">
-        <div class="card-label">Configuration Source</div>
-        <div class="text-sm text-slate-700" x-text="state.tenantEmbedding?.source === 'tenant-db' ? 'Tenant override' : 'Platform default (inherited)'"></div>
-      </div>
-    </div>
-
+  <template x-if="state.embeddingTest">
     <div
       class="max-w-3xl rounded-md border px-4 py-3 text-sm"
-      :class="state.tenantEmbedding?.secret_encryption === 'per-tenant-dek'
+      :class="state.embeddingTest.ok ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-rose-300 bg-rose-50 text-rose-700'"
+    >
+      <span
+        class="font-medium"
+        x-text="state.embeddingTest.ok ? 'Reachable' : 'Failed'"
+      ></span>
+      <span
+        x-show="state.embeddingTest.ok"
+        x-text="`— ${state.embeddingTest.model} @ ${state.embeddingTest.dimensions} dims`"
+      ></span>
+      <span x-text="`: ${state.embeddingTest.message}`"></span>
+    </div>
+  </template>
+</section>
+
+<section
+  x-show="activeSection === 'tenantEmbeddings'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
+  <div class="flex items-center gap-3 flex-wrap">
+    <h2 class="text-2xl font-semibold">Tenant Embeddings</h2>
+    <span
+      class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium"
+      :class="tenantEmbeddingIsOverride()
+          ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+          : 'border-slate-300 bg-slate-50 text-slate-600'"
+      x-text="tenantEmbeddingIsOverride() ? 'Override active' : 'Inheriting platform default'"
+    ></span>
+    <span class="text-sm text-slate-500">
+      Tenant:
+      <span class="font-medium text-slate-700" x-text="state.tenantId"></span>
+    </span>
+  </div>
+  <p class="text-sm text-slate-600 max-w-3xl">
+    Bring-your-own embeddings for the tenant selected in the top bar. A tenant
+    with
+    <span class="font-medium"
+      >no override inherits the Platform Embeddings default</span
+    >
+    and automatically follows platform changes. Saving below creates a
+    tenant-specific override (which stops following the platform), encrypting
+    the API key at rest with a per-tenant Queryable Encryption key when
+    encryption is enabled.
+  </p>
+
+  <div
+    class="max-w-3xl rounded-md border px-4 py-3 text-sm flex items-start justify-between gap-4"
+    :class="tenantEmbeddingIsOverride()
+        ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+        : 'border-slate-300 bg-slate-50 text-slate-700'"
+  >
+    <div>
+      <template x-if="tenantEmbeddingIsOverride()">
+        <span>
+          <span class="font-medium">Override active.</span>
+          This tenant uses its own embeddings and will not follow Platform
+          Embeddings changes.
+        </span>
+      </template>
+      <template x-if="!tenantEmbeddingIsOverride()">
+        <span>
+          <span class="font-medium">Inheriting the platform default.</span>
+          The form below is prefilled from the platform config; saving it
+          creates an override.
+        </span>
+      </template>
+    </div>
+    <button
+      type="button"
+      class="btn-secondary whitespace-nowrap"
+      x-show="tenantEmbeddingIsOverride()"
+      :disabled="state.tenantEmbeddingSaving || tenantEmbeddingIsRunning()"
+      @click="resetTenantEmbedding()"
+    >
+      Reset to platform default
+    </button>
+  </div>
+
+  <div class="grid gap-4 md:grid-cols-4">
+    <div class="card">
+      <div class="card-label">Provider</div>
+      <div
+        class="card-value"
+        x-text="state.tenantEmbedding?.provider ?? '-'"
+      ></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Model</div>
+      <div
+        class="card-value text-lg"
+        x-text="state.tenantEmbedding?.model ?? '-'"
+      ></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Dimensions</div>
+      <div
+        class="card-value"
+        x-text="state.tenantEmbedding?.dimensions ?? '-'"
+      ></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Configuration Source</div>
+      <div
+        class="text-sm text-slate-700"
+        x-text="state.tenantEmbedding?.source === 'tenant-db' ? 'Tenant override' : 'Platform default (inherited)'"
+      ></div>
+    </div>
+  </div>
+
+  <div
+    class="max-w-3xl rounded-md border px-4 py-3 text-sm"
+    :class="state.tenantEmbedding?.secret_encryption === 'per-tenant-dek'
         ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
         : 'border-slate-300 bg-slate-50 text-slate-700'"
-    >
-      <span class="font-medium">API Key At Rest:</span>
-      <span
-        x-text="!state.tenantEmbedding?.api_key_set
+  >
+    <span class="font-medium">API Key At Rest:</span>
+    <span
+      x-text="!state.tenantEmbedding?.api_key_set
           ? 'No key stored (provider needs no key, or inheriting platform default)'
           : (state.tenantEmbedding?.secret_encryption === 'per-tenant-dek'
             ? 'Encrypted with a per-tenant key (Queryable Encryption DEK) — crypto-shreddable'
             : 'Encrypted with the shared deployment key (Fernet)')"
+    ></span>
+    <template x-if="state.tenantEmbedding?.api_key_hint">
+      <span
+        class="text-slate-500"
+        x-text="`· stored ${state.tenantEmbedding.api_key_hint}`"
       ></span>
-      <template x-if="state.tenantEmbedding?.api_key_hint">
-        <span class="text-slate-500" x-text="`· stored ${state.tenantEmbedding.api_key_hint}`"></span>
-      </template>
-    </div>
+    </template>
+  </div>
 
-    <template x-if="state.tenantEmbeddingStatus && state.tenantEmbeddingStatus.state && state.tenantEmbeddingStatus.state !== 'idle'">
-      <div
-        class="rounded-md border px-4 py-3 text-sm"
-        :class="state.tenantEmbeddingStatus.state === 'failed'
+  <template
+    x-if="state.tenantEmbeddingStatus && state.tenantEmbeddingStatus.state && state.tenantEmbeddingStatus.state !== 'idle'"
+  >
+    <div
+      class="rounded-md border px-4 py-3 text-sm"
+      :class="state.tenantEmbeddingStatus.state === 'failed'
           ? 'border-rose-300 bg-rose-50 text-rose-700'
           : (state.tenantEmbeddingStatus.state === 'running'
             ? 'border-amber-300 bg-amber-50 text-amber-800'
             : 'border-emerald-300 bg-emerald-50 text-emerald-700')"
-      >
-        <span class="font-medium">Reprovision:</span>
-        <span x-text="state.tenantEmbeddingStatus.state"></span>
-        <template x-if="state.tenantEmbeddingStatus.target_version">
-          <span x-text="`→ ${state.tenantEmbeddingStatus.target_version}`"></span>
-        </template>
-        <template x-if="state.tenantEmbeddingStatus.error">
-          <span class="block mt-1" x-text="state.tenantEmbeddingStatus.error"></span>
-        </template>
-      </div>
-    </template>
-
-    <form class="grid gap-3 md:grid-cols-2 max-w-3xl" @submit.prevent="applyTenantEmbedding()">
-      <div>
-        <label class="field-label">Provider</label>
-        <select class="field-input" x-model="forms.tenantEmbedding.provider">
-          <template x-for="p in embeddingProviders" :key="p.value">
-            <option :value="p.value" x-text="p.label"></option>
-          </template>
-        </select>
-      </div>
-      <div>
-        <label class="field-label" x-text="tenantEmbeddingIsAzure() ? 'Deployment / Model' : 'Model'"></label>
-        <input class="field-input" x-model="forms.tenantEmbedding.model" placeholder="e.g. text-embedding-3-small" />
-      </div>
-
-      <div class="md:col-span-2">
-        <label class="field-label">Base URL <span class="text-slate-400">(optional)</span></label>
-        <input class="field-input" x-model="forms.tenantEmbedding.base_url" placeholder="provider default" />
-        <p class="mt-1 text-xs text-slate-500">Vector dimensions are detected automatically when you save.</p>
-      </div>
-
-      <template x-if="tenantEmbeddingNeedsApiKey()">
-        <div class="md:col-span-2">
-          <label class="field-label">
-            API Key
-            <span class="text-slate-400" x-show="state.tenantEmbedding?.api_key_set" x-text="`(stored ${state.tenantEmbedding?.api_key_hint || ''}; leave blank to keep)`"></span>
-          </label>
-          <input type="password" class="field-input" x-model="forms.tenantEmbedding.api_key" placeholder="••••••••" autocomplete="new-password" />
-        </div>
+    >
+      <span class="font-medium">Reprovision:</span>
+      <span x-text="state.tenantEmbeddingStatus.state"></span>
+      <template x-if="state.tenantEmbeddingStatus.target_version">
+        <span x-text="`→ ${state.tenantEmbeddingStatus.target_version}`"></span>
       </template>
-
-      <template x-if="tenantEmbeddingIsAzure()">
-        <div class="md:col-span-2 grid gap-3 md:grid-cols-2">
-          <div>
-            <label class="field-label">Azure Endpoint</label>
-            <input class="field-input" x-model="forms.tenantEmbedding.azure_endpoint" placeholder="https://my-resource.openai.azure.com" />
-          </div>
-          <div>
-            <label class="field-label">API Version</label>
-            <input class="field-input" x-model="forms.tenantEmbedding.azure_api_version" placeholder="2023-05-15" />
-          </div>
-        </div>
+      <template x-if="state.tenantEmbeddingStatus.error">
+        <span
+          class="block mt-1"
+          x-text="state.tenantEmbeddingStatus.error"
+        ></span>
       </template>
-
-      <label class="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
-        <input type="checkbox" x-model="forms.tenantEmbedding.reprovision" />
-        Re-embed this tenant's data and rebuild its index after saving
-      </label>
-
-      <div class="md:col-span-2 flex items-center gap-2">
-        <button type="submit" class="btn-primary" :disabled="state.tenantEmbeddingSaving || tenantEmbeddingIsRunning()" x-text="state.tenantEmbeddingSaving ? 'Saving…' : (tenantEmbeddingIsOverride() ? 'Update override' : 'Create tenant override')"></button>
-        <button type="button" class="btn-secondary" @click="testTenantEmbedding()">Test connection</button>
-        <button type="button" class="btn-secondary" @click="loadTenantEmbedding()">Refresh</button>
-      </div>
-    </form>
-
-    <template x-if="state.tenantEmbeddingTest">
-      <div
-        class="max-w-3xl rounded-md border px-4 py-3 text-sm"
-        :class="state.tenantEmbeddingTest.ok ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-rose-300 bg-rose-50 text-rose-700'"
-      >
-        <span class="font-medium" x-text="state.tenantEmbeddingTest.ok ? 'Reachable' : 'Failed'"></span>
-        <span x-show="state.tenantEmbeddingTest.ok" x-text="`— ${state.tenantEmbeddingTest.model} @ ${state.tenantEmbeddingTest.dimensions} dims`"></span>
-        <span x-text="`: ${state.tenantEmbeddingTest.message}`"></span>
-      </div>
-    </template>
-  </section>
-
-  <section
-    x-show="activeSection === 'account'"
-    class="space-y-4"
-    x-transition:enter="view-active"
-    x-transition:enter-start="view-from"
-    x-transition:enter-end="view-to"
-  >
-    <h2 class="text-2xl font-semibold">Account</h2>
-    <div class="card">
-      <div class="card-label">User</div>
-      <div class="card-value" x-text="state.whoami?.user_id || '-'"></div>
-      <div class="card-label mt-4">Roles</div>
-      <div class="text-sm" x-text="(state.whoami?.roles || []).join(', ') || '-'"></div>
     </div>
-    <div class="card max-w-lg">
-      <div class="card-label">Change Password</div>
-      <p class="text-xs text-slate-500 mb-3">
-        Updates your own credential. Unavailable for the environment bootstrap admin.
+  </template>
+
+  <form
+    class="grid gap-3 md:grid-cols-2 max-w-3xl"
+    @submit.prevent="applyTenantEmbedding()"
+  >
+    <div>
+      <label class="field-label">Provider</label>
+      <select class="field-input" x-model="forms.tenantEmbedding.provider">
+        <template x-for="p in embeddingProviders" :key="p.value">
+          <option :value="p.value" x-text="p.label"></option>
+        </template>
+      </select>
+    </div>
+    <div>
+      <label
+        class="field-label"
+        x-text="tenantEmbeddingIsAzure() ? 'Deployment / Model' : 'Model'"
+      ></label>
+      <input
+        class="field-input"
+        x-model="forms.tenantEmbedding.model"
+        placeholder="e.g. text-embedding-3-small"
+      />
+    </div>
+
+    <div class="md:col-span-2">
+      <label class="field-label"
+        >Base URL <span class="text-slate-400">(optional)</span></label
+      >
+      <input
+        class="field-input"
+        x-model="forms.tenantEmbedding.base_url"
+        placeholder="provider default"
+      />
+      <p class="mt-1 text-xs text-slate-500">
+        Vector dimensions are detected automatically when you save.
       </p>
-      <template x-if="state.userNotice">
-        <div class="mb-3 rounded-md border border-emerald-300 bg-emerald-50 text-emerald-700 px-3 py-2 text-sm" x-text="state.userNotice"></div>
-      </template>
-      <form class="space-y-3" @submit.prevent="changeMyPassword()">
-        <div>
-          <label class="field-label">Current password</label>
-          <input type="password" class="field-input" x-model="forms.passwordChange.current_password" autocomplete="current-password" required />
-        </div>
-        <div>
-          <label class="field-label">New password</label>
-          <input type="password" class="field-input" x-model="forms.passwordChange.new_password" autocomplete="new-password" required />
-        </div>
-        <button type="submit" class="btn-primary">Update password</button>
-      </form>
     </div>
-  </section>
 
-  <div
-    class="modal-overlay"
-    x-show="state.tenantConnectOpen"
-    x-cloak
-    @click.self="closeTenantConnect()"
-    @keydown.escape.window="closeTenantConnect()"
-    x-transition:enter="modal-overlay-enter-active"
-    x-transition:enter-start="modal-overlay-enter-from"
-    x-transition:enter-end="modal-overlay-enter-to"
-    x-transition:leave="modal-overlay-leave-active"
-    x-transition:leave-start="modal-overlay-leave-from"
-    x-transition:leave-end="modal-overlay-leave-to"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="tenant-connect-title"
-  >
-    <div class="modal-card">
-      <div class="modal-header">
-        <div>
-          <div class="modal-eyebrow">Tenant onboarding</div>
-          <h2 class="modal-title" id="tenant-connect-title" x-text="`Connect tenant '${state.tenantConnectTenant}'`"></h2>
-          <p class="modal-subtitle">
-            Production-safe quickstart: point your client at <code>/rpc</code>, authenticate for this tenant,
-            then lock egress to trusted destinations.
-          </p>
-        </div>
-        <button type="button" class="modal-close" @click="closeTenantConnect()" aria-label="Close">✕</button>
+    <template x-if="tenantEmbeddingNeedsApiKey()">
+      <div class="md:col-span-2">
+        <label class="field-label">
+          API Key
+          <span
+            class="text-slate-400"
+            x-show="state.tenantEmbedding?.api_key_set"
+            x-text="`(stored ${state.tenantEmbedding?.api_key_hint || ''}; leave blank to keep)`"
+          ></span>
+        </label>
+        <input
+          type="password"
+          class="field-input"
+          x-model="forms.tenantEmbedding.api_key"
+          placeholder="••••••••"
+          autocomplete="new-password"
+        />
       </div>
-      <div class="modal-body space-y-3">
-        <div class="tldr">
-          <span aria-hidden="true">🔐</span>
-          <span>
-            <strong>Auth mode:</strong>
-            <span x-text="authModeLabel()"></span>.
-            <template x-if="authModeLabel() === 'disabled'">
-              <span>Demo mode trusts <code>X-MCP-Scopes</code>. For production, switch to <code>hs256</code> or <code>jwks</code>.</span>
-            </template>
-            <template x-if="authModeLabel() !== 'disabled'">
-              <span>Use a bearer token with <code>tenant_id</code>, <code>roles:["tool:invoke"]</code>, and scopes/groups.</span>
-            </template>
-          </span>
+    </template>
+
+    <template x-if="tenantEmbeddingIsAzure()">
+      <div class="md:col-span-2 grid gap-3 md:grid-cols-2">
+        <div>
+          <label class="field-label">Azure Endpoint</label>
+          <input
+            class="field-input"
+            x-model="forms.tenantEmbedding.azure_endpoint"
+            placeholder="https://my-resource.openai.azure.com"
+          />
         </div>
-
-        <h4>1) RPC endpoint</h4>
-        <div class="code-block">
-          <div class="code-head">
-            <span class="code-cap">POST endpoint</span>
-            <button type="button" class="code-copy" @click="copyText(rpcEndpoint(), 'RPC endpoint')">Copy</button>
-          </div>
-          <pre x-text="rpcEndpoint()"></pre>
+        <div>
+          <label class="field-label">API Version</label>
+          <input
+            class="field-input"
+            x-model="forms.tenantEmbedding.azure_api_version"
+            placeholder="2023-05-15"
+          />
         </div>
+      </div>
+    </template>
 
-        <h4>2) Call the gateway</h4>
-        <div class="code-block">
-          <div class="code-head">
-            <span class="code-cap">curl sample</span>
-            <button type="button" class="code-copy" @click="copyText(rpcCurlSample(), 'curl sample')">Copy</button>
-          </div>
-          <pre x-text="rpcCurlSample()"></pre>
-        </div>
+    <label class="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+      <input type="checkbox" x-model="forms.tenantEmbedding.reprovision" />
+      Re-embed this tenant's data and rebuild its index after saving
+    </label>
 
-        <template x-if="authModeLabel() !== 'disabled'">
-          <div class="code-block">
-            <div class="code-head">
-              <span class="code-cap">Mint a local dev token</span>
-              <button type="button" class="code-copy" @click="copyText(tokenMintCommand(), 'mint token command')">Copy</button>
-            </div>
-            <pre x-text="tokenMintCommand()"></pre>
-          </div>
-        </template>
+    <div class="md:col-span-2 flex items-center gap-2">
+      <button
+        type="submit"
+        class="btn-primary"
+        :disabled="state.tenantEmbeddingSaving || tenantEmbeddingIsRunning()"
+        x-text="state.tenantEmbeddingSaving ? 'Saving…' : (tenantEmbeddingIsOverride() ? 'Update override' : 'Create tenant override')"
+      ></button>
+      <button
+        type="button"
+        class="btn-secondary"
+        @click="testTenantEmbedding()"
+      >
+        Test connection
+      </button>
+      <button
+        type="button"
+        class="btn-secondary"
+        @click="loadTenantEmbedding()"
+      >
+        Refresh
+      </button>
+    </div>
+  </form>
 
-        <h4>3) MCP client configuration</h4>
-        <div class="code-block">
-          <div class="code-head">
-            <span class="code-cap">Client snippet</span>
-            <button type="button" class="code-copy" @click="copyText(mcpClientSnippet(), 'MCP config')">Copy</button>
-          </div>
-          <pre x-text="mcpClientSnippet()"></pre>
-        </div>
+  <template x-if="state.tenantEmbeddingTest">
+    <div
+      class="max-w-3xl rounded-md border px-4 py-3 text-sm"
+      :class="state.tenantEmbeddingTest.ok ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-rose-300 bg-rose-50 text-rose-700'"
+    >
+      <span
+        class="font-medium"
+        x-text="state.tenantEmbeddingTest.ok ? 'Reachable' : 'Failed'"
+      ></span>
+      <span
+        x-show="state.tenantEmbeddingTest.ok"
+        x-text="`— ${state.tenantEmbeddingTest.model} @ ${state.tenantEmbeddingTest.dimensions} dims`"
+      ></span>
+      <span x-text="`: ${state.tenantEmbeddingTest.message}`"></span>
+    </div>
+  </template>
+</section>
 
-        <h4>4) Egress allowlist (security guardrail)</h4>
-        <p>Limit outbound connections for this tenant to approved domains/IPs. One entry per line, supports host globs, exact hosts, and CIDRs.</p>
-        <template x-if="state.tenantConnectEgress">
-          <div class="text-xs text-slate-500">
-            Global ceiling:
-            <span x-text="(state.tenantConnectEgress.global_allowlist || []).join(', ') || '(none configured)'"></span>
-            · default deny:
-            <span x-text="state.tenantConnectEgress.default_deny ? 'on' : 'off'"></span>
-          </div>
-        </template>
-        <textarea
-          class="field-input font-mono text-sm"
-          rows="4"
-          x-model="forms.tenantConnect.allowlist"
-          placeholder="mcp.deepwiki.com&#10;api.vendor.com&#10;203.0.113.0/24"
-        ></textarea>
-        <div class="flex items-center gap-2">
-          <button type="button" class="btn-primary" :disabled="state.tenantConnectSaving" @click="saveTenantEgressAllowlist()">
-            <span x-text="state.tenantConnectSaving ? 'Saving…' : 'Save allowlist'"></span>
+<section
+  x-show="activeSection === 'account'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
+  <h2 class="text-2xl font-semibold">Account</h2>
+  <div class="card">
+    <div class="card-label">User</div>
+    <div class="card-value" x-text="state.whoami?.user_id || '-'"></div>
+    <div class="card-label mt-4">Roles</div>
+    <div
+      class="text-sm"
+      x-text="(state.whoami?.roles || []).join(', ') || '-'"
+    ></div>
+  </div>
+  <div class="card max-w-lg">
+    <div class="card-label">Change Password</div>
+    <p class="text-xs text-slate-500 mb-3">
+      Updates your own credential. Unavailable for the environment bootstrap
+      admin.
+    </p>
+    <template x-if="state.userNotice">
+      <div
+        class="mb-3 rounded-md border border-emerald-300 bg-emerald-50 text-emerald-700 px-3 py-2 text-sm"
+        x-text="state.userNotice"
+      ></div>
+    </template>
+    <form class="space-y-3" @submit.prevent="changeMyPassword()">
+      <div>
+        <label class="field-label">Current password</label>
+        <input
+          type="password"
+          class="field-input"
+          x-model="forms.passwordChange.current_password"
+          autocomplete="current-password"
+          required
+        />
+      </div>
+      <div>
+        <label class="field-label">New password</label>
+        <input
+          type="password"
+          class="field-input"
+          x-model="forms.passwordChange.new_password"
+          autocomplete="new-password"
+          required
+        />
+      </div>
+      <button type="submit" class="btn-primary">Update password</button>
+    </form>
+  </div>
+</section>
+
+<div
+  class="modal-overlay"
+  x-show="state.tenantConnectOpen"
+  x-cloak
+  @click.self="closeTenantConnect()"
+  @keydown.escape.window="closeTenantConnect()"
+  x-transition:enter="modal-overlay-enter-active"
+  x-transition:enter-start="modal-overlay-enter-from"
+  x-transition:enter-end="modal-overlay-enter-to"
+  x-transition:leave="modal-overlay-leave-active"
+  x-transition:leave-start="modal-overlay-leave-from"
+  x-transition:leave-end="modal-overlay-leave-to"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="tenant-connect-title"
+>
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-eyebrow">Tenant onboarding</div>
+        <h2
+          class="modal-title"
+          id="tenant-connect-title"
+          x-text="`Connect tenant '${state.tenantConnectTenant}'`"
+        ></h2>
+        <p class="modal-subtitle">
+          Production-safe quickstart: point your client at <code>/rpc</code>,
+          authenticate for this tenant, then lock egress to trusted
+          destinations.
+        </p>
+      </div>
+      <button
+        type="button"
+        class="modal-close"
+        @click="closeTenantConnect()"
+        aria-label="Close"
+      >
+        ✕
+      </button>
+    </div>
+    <div class="modal-body space-y-3">
+      <div class="tldr">
+        <span aria-hidden="true">🔐</span>
+        <span>
+          <strong>Auth mode:</strong>
+          <span x-text="authModeLabel()"></span>.
+          <template x-if="authModeLabel() === 'disabled'">
+            <span
+              >Demo mode trusts <code>X-MCP-Scopes</code>. For production,
+              switch to <code>hs256</code> or <code>jwks</code>.</span
+            >
+          </template>
+          <template x-if="authModeLabel() !== 'disabled'">
+            <span
+              >Use a bearer token with <code>tenant_id</code>,
+              <code>roles:["tool:invoke"]</code>, and scopes/groups.</span
+            >
+          </template>
+        </span>
+      </div>
+
+      <h4>1) RPC endpoint</h4>
+      <div class="code-block">
+        <div class="code-head">
+          <span class="code-cap">POST endpoint</span>
+          <button
+            type="button"
+            class="code-copy"
+            @click="copyText(rpcEndpoint(), 'RPC endpoint')"
+          >
+            Copy
           </button>
-          <button type="button" class="btn-secondary" @click="loadTenantEgressAllowlist(state.tenantConnectTenant)">Reload</button>
-          <button type="button" class="btn-secondary" @click="closeTenantConnect()">Done</button>
         </div>
+        <pre x-text="rpcEndpoint()"></pre>
+      </div>
+
+      <h4>2) Call the gateway</h4>
+      <div class="code-block">
+        <div class="code-head">
+          <span class="code-cap">curl sample</span>
+          <button
+            type="button"
+            class="code-copy"
+            @click="copyText(rpcCurlSample(), 'curl sample')"
+          >
+            Copy
+          </button>
+        </div>
+        <pre x-text="rpcCurlSample()"></pre>
+      </div>
+
+      <template x-if="authModeLabel() !== 'disabled'">
+        <div class="code-block">
+          <div class="code-head">
+            <span class="code-cap">Mint a local dev token</span>
+            <button
+              type="button"
+              class="code-copy"
+              @click="copyText(tokenMintCommand(), 'mint token command')"
+            >
+              Copy
+            </button>
+          </div>
+          <pre x-text="tokenMintCommand()"></pre>
+        </div>
+      </template>
+
+      <h4>3) MCP client configuration</h4>
+      <div class="code-block">
+        <div class="code-head">
+          <span class="code-cap">Client snippet</span>
+          <button
+            type="button"
+            class="code-copy"
+            @click="copyText(mcpClientSnippet(), 'MCP config')"
+          >
+            Copy
+          </button>
+        </div>
+        <pre x-text="mcpClientSnippet()"></pre>
+      </div>
+
+      <h4>4) Egress allowlist (security guardrail)</h4>
+      <p>
+        Limit outbound connections for this tenant to approved domains/IPs. One
+        entry per line, supports host globs, exact hosts, and CIDRs.
+      </p>
+      <template x-if="state.tenantConnectEgress">
+        <div class="text-xs text-slate-500">
+          Global ceiling:
+          <span
+            x-text="(state.tenantConnectEgress.global_allowlist || []).join(', ') || '(none configured)'"
+          ></span>
+          · default deny:
+          <span
+            x-text="state.tenantConnectEgress.default_deny ? 'on' : 'off'"
+          ></span>
+        </div>
+      </template>
+      <textarea
+        class="field-input font-mono text-sm"
+        rows="4"
+        x-model="forms.tenantConnect.allowlist"
+        placeholder="mcp.deepwiki.com&#10;api.vendor.com&#10;203.0.113.0/24"
+      ></textarea>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="btn-primary"
+          :disabled="state.tenantConnectSaving"
+          @click="saveTenantEgressAllowlist()"
+        >
+          <span
+            x-text="state.tenantConnectSaving ? 'Saving…' : 'Save allowlist'"
+          ></span>
+        </button>
+        <button
+          type="button"
+          class="btn-secondary"
+          @click="loadTenantEgressAllowlist(state.tenantConnectTenant)"
+        >
+          Reload
+        </button>
+        <button
+          type="button"
+          class="btn-secondary"
+          @click="closeTenantConnect()"
+        >
+          Done
+        </button>
       </div>
     </div>
   </div>
+</div>
 {% endblock %}

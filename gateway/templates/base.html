@@ -4,6 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gateway Admin</title>
+    <!--
+      Dedupe CodeMirror via esm.sh ?external + bare specifiers. Without this each
+      @codemirror/* package ships its OWN copy of @codemirror/state, so EditorView
+      construction throws "Unrecognized extension value" (broken instanceof) and the
+      code editor silently fails. app.js imports the bare names below at runtime.
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@codemirror/state": "https://esm.sh/@codemirror/state@6.4.1",
+          "@codemirror/view": "https://esm.sh/@codemirror/view@6.27.0?external=@codemirror/state",
+          "@codemirror/language": "https://esm.sh/@codemirror/language@6.10.3?external=@codemirror/state,@codemirror/view",
+          "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.7.1?external=@codemirror/state,@codemirror/view,@codemirror/language",
+          "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete@6.18.6?external=@codemirror/state,@codemirror/view,@codemirror/language",
+          "@codemirror/lang-python": "https://esm.sh/@codemirror/lang-python@6.1.6?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/autocomplete"
+        }
+      }
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <!--
       adminConsole() (defined in app.js) must exist before Alpine initializes.
