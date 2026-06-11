@@ -28,9 +28,77 @@ import traceback
 job_path = sys.argv[1]
 result_path = sys.argv[2]
 
+class _ObjectId:
+    def __init__(self, value):
+        self.value = str(value)
+
+    def __str__(self):
+        return self.value
+
+    def __repr__(self):
+        return f"ObjectId('{self.value}')"
+
+    def __eq__(self, other):
+        return isinstance(other, _ObjectId) and other.value == self.value
+
+    def __hash__(self):
+        return hash(self.value)
+
+
+class _WriteResult:
+    # pymongo-flavored result: attribute access (.inserted_id, .modified_count,
+    # .deleted_count, .upserted_id), dict access, truthy, and JSON-safe.
+    acknowledged = True
+
+    def __init__(self, data):
+        self._data = dict(data or {})
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        try:
+            return self._data[name]
+        except KeyError:
+            raise AttributeError(name)
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+    def keys(self):
+        return self._data.keys()
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __bool__(self):
+        return True
+
+    def to_dict(self):
+        return dict(self._data)
+
+    def __repr__(self):
+        return "WriteResult(" + repr(self._data) + ")"
+
+
+def _json_default(value):
+    # Let authors return raw Mongo documents / ids / datetimes and "just work".
+    if isinstance(value, _WriteResult):
+        return value.to_dict()
+    if isinstance(value, _ObjectId):
+        return str(value)
+    if isinstance(value, _dt.datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=_dt.timezone.utc)
+        return value.astimezone(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    raise TypeError("Object of type " + type(value).__name__ + " is not JSON serializable")
+
+
 def write_frame(frame):
     with open(result_path, "w", encoding="utf-8") as handle:
-        json.dump(frame, handle)
+        json.dump(frame, handle, default=_json_default)
 
 try:
     with open(job_path, "r", encoding="utf-8") as handle:
@@ -38,17 +106,8 @@ try:
     namespace = {}
     rpc_dir = Path("/job/rpc")
     db_bridge_enabled = bool(job.get("db_bridge"))
+    tool_bridge_enabled = bool(job.get("tool_bridge"))
     rpc_state = {"counter": 0}
-
-    class _ObjectId:
-        def __init__(self, value):
-            self.value = str(value)
-
-        def __str__(self):
-            return self.value
-
-        def __repr__(self):
-            return f"ObjectId('{self.value}')"
 
     def _to_extjson(value):
         if isinstance(value, _ObjectId):
@@ -80,6 +139,39 @@ try:
             return [_from_extjson(v) for v in value]
         return value
 
+    def _bridge_call(kind, fields):
+        # One synchronous host round-trip over the preopened /job/rpc dir. The
+        # guest blocks on a response file the worker writes back; the worker
+        # pauses the wasm epoch timer while the host runs, so waiting here is
+        # not charged as guest compute time.
+        rpc_state["counter"] += 1
+        rpc_id = rpc_state["counter"]
+        payload = {"id": rpc_id, "kind": kind}
+        payload.update(fields)
+        req_path = rpc_dir / f"req-{rpc_id}.json"
+        resp_path = rpc_dir / f"resp-{rpc_id}.json"
+        req_path.write_text(json.dumps(payload), encoding="utf-8")
+        wait_seconds = max(1.0, float(job.get("db_rpc_wait_ms", 30000)) / 1000.0)
+        deadline = time.monotonic() + wait_seconds
+        while not resp_path.exists():
+            if time.monotonic() > deadline:
+                raise RuntimeError("Timed out waiting for host RPC response.")
+            time.sleep(0.005)
+        try:
+            response = json.loads(resp_path.read_text(encoding="utf-8"))
+        finally:
+            try:
+                req_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            try:
+                resp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        if not isinstance(response, dict):
+            raise RuntimeError("Malformed host RPC response.")
+        return response
+
     class _CollectionProxy:
         def __init__(self, collection_name):
             self.collection_name = str(collection_name)
@@ -87,37 +179,15 @@ try:
         def _rpc(self, op, *args, **kwargs):
             if not db_bridge_enabled:
                 raise RuntimeError("context.db is unavailable: DB bridge is disabled.")
-            rpc_state["counter"] += 1
-            rpc_id = rpc_state["counter"]
-            payload = {
-                "id": rpc_id,
-                "op": str(op),
-                "collection": self.collection_name,
-                "args": _to_extjson(list(args)),
-                "kwargs": _to_extjson(dict(kwargs or {})),
-            }
-            req_path = rpc_dir / f"req-{rpc_id}.json"
-            resp_path = rpc_dir / f"resp-{rpc_id}.json"
-            req_path.write_text(json.dumps(payload), encoding="utf-8")
-            wait_seconds = max(1.0, float(job.get("db_rpc_wait_ms", 30000)) / 1000.0)
-            deadline = time.monotonic() + wait_seconds
-            while not resp_path.exists():
-                if time.monotonic() > deadline:
-                    raise RuntimeError("Timed out waiting for DB RPC response.")
-                time.sleep(0.005)
-            try:
-                response = json.loads(resp_path.read_text(encoding="utf-8"))
-            finally:
-                try:
-                    req_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                try:
-                    resp_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            if not isinstance(response, dict):
-                raise RuntimeError("Malformed DB RPC response.")
+            response = _bridge_call(
+                "db",
+                {
+                    "op": str(op),
+                    "collection": self.collection_name,
+                    "args": _to_extjson(list(args)),
+                    "kwargs": _to_extjson(dict(kwargs or {})),
+                },
+            )
             if not response.get("ok"):
                 error = response.get("error") if isinstance(response.get("error"), dict) else {}
                 raise RuntimeError(str(error.get("message") or "Database operation failed."))
@@ -139,24 +209,31 @@ try:
             return self._rpc("distinct", field, query or {}, **kwargs)
 
         def insert_one(self, doc, **kwargs):
-            return self._rpc("insert_one", doc, **kwargs)
+            return _WriteResult(self._rpc("insert_one", doc, **kwargs))
 
         def insert_many(self, docs, **kwargs):
-            return self._rpc("insert_many", docs, **kwargs)
+            return _WriteResult(self._rpc("insert_many", docs, **kwargs))
 
         def update_one(self, filt, update, **kwargs):
-            return self._rpc("update_one", filt, update, **kwargs)
+            return _WriteResult(self._rpc("update_one", filt, update, **kwargs))
 
         def update_many(self, filt, update, **kwargs):
-            return self._rpc("update_many", filt, update, **kwargs)
+            return _WriteResult(self._rpc("update_many", filt, update, **kwargs))
 
         def delete_one(self, filt, **kwargs):
-            return self._rpc("delete_one", filt, **kwargs)
+            return _WriteResult(self._rpc("delete_one", filt, **kwargs))
 
         def delete_many(self, filt, **kwargs):
-            return self._rpc("delete_many", filt, **kwargs)
+            return _WriteResult(self._rpc("delete_many", filt, **kwargs))
 
     class _DbProxy:
+        # BSON id helper lives on the database, where it is actually used:
+        # context.db.ObjectId("..."). The top-level context only exposes
+        # resources (db, env, tools), not loose utilities.
+        @staticmethod
+        def ObjectId(value):
+            return _ObjectId(value)
+
         def __getitem__(self, collection_name):
             return _CollectionProxy(collection_name)
 
@@ -165,18 +242,71 @@ try:
                 raise AttributeError(collection_name)
             return _CollectionProxy(collection_name)
 
+    class _ToolCallable:
+        # context.tools.<server>.<tool>(**kwargs) -> the sibling tool's result.
+        # Calls are relayed to the host, which re-authorizes them against the
+        # original caller and runs the target in its own sandbox.
+        def __init__(self, server, tool):
+            self._server = str(server)
+            self._tool = str(tool)
+
+        def __call__(self, **kwargs):
+            if not tool_bridge_enabled:
+                raise RuntimeError(
+                    "context.tools is unavailable: the cross-tool bridge is disabled."
+                )
+            response = _bridge_call(
+                "tool",
+                {
+                    "server": self._server,
+                    "tool": self._tool,
+                    "arguments": _to_extjson(dict(kwargs or {})),
+                },
+            )
+            if not response.get("ok"):
+                error = response.get("error") if isinstance(response.get("error"), dict) else {}
+                raise RuntimeError(str(error.get("message") or "Tool call failed."))
+            return _from_extjson(response.get("result"))
+
+        def __repr__(self):
+            return "ToolCallable(" + self._server + "." + self._tool + ")"
+
+    class _ServerToolsProxy:
+        def __init__(self, server):
+            self._server = str(server)
+
+        def __getitem__(self, tool_name):
+            return _ToolCallable(self._server, tool_name)
+
+        def __getattr__(self, tool_name):
+            if tool_name.startswith("_"):
+                raise AttributeError(tool_name)
+            return _ToolCallable(self._server, tool_name)
+
+        def __call__(self, tool_name, **kwargs):
+            return _ToolCallable(self._server, tool_name)(**kwargs)
+
+    class _ToolsProxy:
+        # Tenant is the namespace: context.tools[<server>][<tool>](**kwargs).
+        # Use bracket syntax for names with hyphens (context.tools["my-funcs"]).
+        def __getitem__(self, server_name):
+            return _ServerToolsProxy(server_name)
+
+        def __getattr__(self, server_name):
+            if server_name.startswith("_"):
+                raise AttributeError(server_name)
+            return _ServerToolsProxy(server_name)
+
     class _Context:
         def __init__(self):
             self.db = _DbProxy()
             self.env = dict(job.get("env") or {})
+            self.tools = _ToolsProxy()
 
-        @staticmethod
-        def ObjectId(value):
-            return _ObjectId(value)
-
-        @staticmethod
-        def utcnow():
-            return _dt.datetime.now(_dt.timezone.utc)
+        def call(self, server, tool, **kwargs):
+            # Explicit form that works regardless of server/tool naming:
+            # context.call("my-funcs", "track-click", target="x").
+            return _ToolCallable(server, tool)(**kwargs)
 
     namespace["context"] = _Context()
     exec(job.get("raw_code", ""), namespace, namespace)
@@ -192,7 +322,7 @@ try:
         sys.path = extra_paths + sys.path
 
     result = func(**arguments)
-    json.dumps(result)
+    json.dumps(result, default=_json_default)
     write_frame({"ok": True, "result": result})
 except Exception as exc:  # noqa: BLE001 - sandbox seam reports structured error
     write_frame(
@@ -419,6 +549,8 @@ def _run_wasm(
     result_file = job_dir / "sandbox.result.json"
     rpc_dir = job_dir / "rpc"
     db_bridge_enabled = bool(job.get("db_bridge"))
+    tool_bridge_enabled = bool(job.get("tool_bridge"))
+    bridge_enabled = db_bridge_enabled or tool_bridge_enabled
 
     if engine is None:
         engine = _build_engine()
@@ -466,13 +598,13 @@ def _run_wasm(
     try:
         if module is None:
             module = Module.from_file(engine, str(wasm_file))
-        if db_bridge_enabled:
+        if bridge_enabled:
             rpc_dir.mkdir(parents=True, exist_ok=True)
         instance = linker.instantiate(store, module)
         start = instance.exports(store)["_start"]
         if not callable(start):
             raise RuntimeError("WASM export '_start' is not a function.")
-        if not db_bridge_enabled:
+        if not bridge_enabled:
             start(store)
         else:
             guest_done = threading.Event()
@@ -502,14 +634,24 @@ def _run_wasm(
                 rpc_id = request.get("id")
                 if rpc_id is None:
                     rpc_id = request_path.stem.removeprefix("req-") or "unknown"
-                rpc_frame = {
-                    "type": "db_rpc",
-                    "id": rpc_id,
-                    "op": request.get("op"),
-                    "collection": request.get("collection"),
-                    "args": request.get("args"),
-                    "kwargs": request.get("kwargs"),
-                }
+                kind = request.get("kind") or "db"
+                if kind == "tool":
+                    rpc_frame = {
+                        "type": "tool_rpc",
+                        "id": rpc_id,
+                        "server": request.get("server"),
+                        "tool": request.get("tool"),
+                        "arguments": request.get("arguments"),
+                    }
+                else:
+                    rpc_frame = {
+                        "type": "db_rpc",
+                        "id": rpc_id,
+                        "op": request.get("op"),
+                        "collection": request.get("collection"),
+                        "args": request.get("args"),
+                        "kwargs": request.get("kwargs"),
+                    }
                 _pause_epoch_timer()
                 try:
                     _emit(rpc_frame)

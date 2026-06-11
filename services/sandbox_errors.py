@@ -5,6 +5,12 @@ from __future__ import annotations
 # absent) depend on this module, so size formulas that must agree across the
 # process boundary live here.
 
+# Frame ``type`` values the host treats as a mid-execution host round-trip
+# (relay to a bridge) rather than the worker's final result frame. Both the
+# throwaway executor and the warm pool route on this set so a new bridge kind
+# only has to be added in one place.
+BRIDGE_RPC_FRAME_TYPES = frozenset({"db_rpc", "tool_rpc"})
+
 
 def frame_budget_bytes(max_output_bytes: int) -> int:
     """Hard ceiling for a serialized result frame emitted by a sandbox worker.

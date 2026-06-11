@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 
 from config.settings import get_settings
 from database.mongo import get_control_database, get_tenant_database, tenant_db_name
@@ -21,17 +21,17 @@ from models.admin import (
     CodeToolValidateRequest,
     CodeToolValidateResponse,
     CodeToolValidationIssue,
-    ExploreCollectionsResponse,
-    ExploreQueryRequest,
-    ExploreQueryResponse,
-    ExploreSampleRequest,
-    ExploreSampleResponse,
     EgressAllowlistResponse,
     EgressAllowlistUpdateRequest,
     EmbeddingConfigResponse,
     EmbeddingConfigUpdateRequest,
     EmbeddingTestRequest,
     EmbeddingTestResponse,
+    ExploreCollectionsResponse,
+    ExploreQueryRequest,
+    ExploreQueryResponse,
+    ExploreSampleRequest,
+    ExploreSampleResponse,
     PasswordChangeRequest,
     PendingActionListResponse,
     PendingActionResponse,
@@ -72,6 +72,7 @@ from services.code_tools import (
     suggest_input_schema,
     validate_code_tool,
 )
+from services.credential_broker import CallerIdentity
 from services.egress_policy import EgressNotAllowed, check_endpoint_allowed, parse_allowlist
 from services.embedding_config import (
     EmbeddingConfig,
@@ -115,6 +116,11 @@ from services.sandbox_executor import (
     SandboxProtocolError,
     SandboxTimeoutError,
     get_executor,
+)
+from services.server_exporter import (
+    ServerExportError,
+    ServerExportNotFound,
+    build_server_export,
 )
 from services.server_guard import EndpointNotAllowed, StdioNotAllowed, enforce_server_policy
 from services.telemetry_logger import get_telemetry_logger
@@ -965,6 +971,38 @@ async def get_server(
     return await _public_server_doc_with_code(doc)
 
 
+@router.get("/servers/{server_name}/export")
+async def export_server(
+    request: Request,
+    server_name: str,
+    tenant_id: str | None = Query(default=None),
+) -> Response:
+    """Download a code server as a runnable, self-contained FastMCP project.
+
+    Bundles every tool on the server plus the transitive closure of sibling
+    code tools they call via ``context.tools``/``context.call`` so cross-tool
+    composition keeps working in-process. Secrets are never included — only the
+    names of ``context.env`` keys are emitted into ``.env.example``.
+    """
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    try:
+        export = await build_server_export(tenant_id=target_tenant, server_name=server_name)
+    except ServerExportNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ServerExportError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return Response(
+        content=export.content,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{export.filename}"',
+            "X-Export-Tool-Count": str(export.tool_count),
+            "X-Export-Servers": ",".join(export.bundled_servers),
+        },
+    )
+
+
 @router.get("/explore/collections", response_model=ExploreCollectionsResponse)
 async def explore_collections(
     request: Request,
@@ -1111,6 +1149,19 @@ async def test_code_tool(
 
     timeout_seconds = settings.sandbox_wall_timeout_ms / 1000
     executor = get_executor()
+    # Let the workbench "Run" exercise context.tools just like production: an
+    # admin caller can reach sibling code tools, still re-authorized + restricted
+    # to code servers + no confirmation-gated tools by the shared invoker.
+    test_caller = CallerIdentity(
+        user_id=str(getattr(request.state, "user_id", "") or "admin-test"),
+        scopes=["server:*"],
+        roles=["admin"],
+    )
+    tool_invoker = get_proxy_registry().make_tool_invoker(
+        tenant_id=target_tenant,
+        caller=test_caller,
+        call_depth=0,
+    )
     try:
         result = await asyncio.wait_for(
             executor.run(
@@ -1123,6 +1174,7 @@ async def test_code_tool(
                     arguments=payload.arguments if isinstance(payload.arguments, dict) else {},
                     env={},
                     action_type=payload.action_type,
+                    tool_invoker=tool_invoker,
                 )
             ),
             timeout=timeout_seconds,

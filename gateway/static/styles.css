@@ -1004,6 +1004,22 @@ textarea.field-input {
   color: var(--text-primary);
 }
 
+.editor-imports .ei-link {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 650;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.editor-imports .ei-link:hover {
+  color: color-mix(in srgb, var(--accent) 75%, var(--text-primary));
+}
+
 .explore-drawer {
   margin-top: 0.65rem;
   border: 1px solid var(--border);
@@ -1050,6 +1066,116 @@ textarea.field-input {
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-primary);
+}
+
+/* ---- Callable-tools palette (context.tools) ---- */
+.tool-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.tp-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.tp-group-name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: color-mix(in srgb, var(--accent) 78%, var(--text-primary));
+}
+
+.tp-group-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  font-weight: 600;
+}
+
+.tp-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-elevated);
+  padding: 0.45rem 0.55rem;
+}
+
+.tp-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.tp-sig {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.tp-desc {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.tp-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.1rem;
+}
+
+.tp-param {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px dashed var(--border);
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+}
+
+.tp-param-req {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--text-primary);
+}
+
+.tp-param-type {
+  font-size: 0.6rem;
+  opacity: 0.7;
+}
+
+.tp-row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  flex-shrink: 0;
 }
 
 .fn-card {
@@ -1146,6 +1272,105 @@ textarea.field-input {
   word-break: break-word;
   background: var(--surface-elevated);
   color: var(--text-primary);
+}
+
+/* Resting/running state for the sandbox test panel — themed, not a flat gray box. */
+.test-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 4.75rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px dashed color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: var(--radius-sm);
+  background:
+    radial-gradient(
+      120% 140% at 0% 0%,
+      color-mix(in srgb, var(--accent) 9%, transparent),
+      transparent 60%
+    ),
+    var(--surface-soft);
+}
+
+.test-empty-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+}
+
+.test-empty-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.test-empty-title {
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.test-empty-sub {
+  font-size: 0.73rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.test-empty-busy {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+}
+
+/* Telemetry status pills */
+.tpill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.16rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  text-transform: capitalize;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+}
+
+.tpill::before {
+  content: "";
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.tpill-ok {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  background: color-mix(in srgb, var(--success) 13%, transparent);
+  color: color-mix(in srgb, var(--success) 78%, var(--text-primary));
+}
+
+.tpill-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 13%, transparent);
+  color: color-mix(in srgb, var(--danger) 80%, var(--text-primary));
+}
+
+.tpill-neutral {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: color-mix(in srgb, var(--accent) 75%, var(--text-primary));
 }
 
 .lint-hints {
@@ -1717,6 +1942,205 @@ textarea.field-input {
   height: 1px;
   margin: 0 0 0.95rem;
   background: var(--border);
+}
+
+/* --- Servers: function workbench (rail + detail) ------------------------- */
+.fn-workbench {
+  display: grid;
+  grid-template-columns: minmax(190px, 232px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .fn-workbench {
+    grid-template-columns: 1fr;
+  }
+}
+
+.fn-rail {
+  position: sticky;
+  top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  padding: 0.6rem;
+}
+
+.fn-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.1rem 0.35rem 0.3rem;
+}
+
+.fn-rail-title {
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.fn-rail-count {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.02rem 0.45rem;
+}
+
+.fn-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+.fn-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.5rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.fn-rail-item:hover {
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.fn-rail-item-active {
+  background: var(--surface-elevated);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.fn-rail-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.84rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fn-rail-mark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.28rem;
+  font-size: 0.64rem;
+  font-weight: 700;
+  border-radius: 999px;
+}
+
+.fn-rail-mark-ok {
+  color: color-mix(in srgb, var(--success) 78%, var(--text-primary));
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+
+.fn-rail-mark-warn {
+  color: color-mix(in srgb, var(--warning) 86%, var(--text-primary));
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+}
+
+.fn-rail-mark-err {
+  color: color-mix(in srgb, var(--danger) 88%, var(--text-primary));
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+.fn-rail-mark-checking {
+  color: var(--text-secondary);
+}
+
+.fn-rail-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  margin-top: 0.1rem;
+  padding: 0.5rem;
+  border: 1px dashed color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-primary));
+  font-size: 0.8rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.fn-rail-add:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: var(--accent);
+}
+
+.fn-detail {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.fn-pane {
+  min-width: 0;
+}
+
+.fn-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 0.95rem;
+}
+
+.fn-pane-id {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.fn-pane-name {
+  font-size: 0.98rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 /* --------------------------------------------------------------------------- */
@@ -2366,6 +2790,41 @@ textarea.field-input {
   line-height: 1.55;
   color: var(--text-secondary);
   margin-bottom: 1.1rem;
+}
+
+/* Two-up resource cards inside the context modal */
+.ctx-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+  margin: 0.25rem 0 1.1rem;
+}
+
+.ctx-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  padding: 0.85rem 0.95rem;
+}
+
+.ctx-card-icon {
+  font-size: 1.35rem;
+  line-height: 1;
+  margin-bottom: 0.45rem;
+}
+
+.ctx-card-title {
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--text-primary);
+  margin-bottom: 0.3rem;
+}
+
+.ctx-card p {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
 }
 
 .code-block {

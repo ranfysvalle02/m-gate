@@ -9,8 +9,7 @@ window.adminConsole = function adminConsole(config) {
       { key: "approvals", label: "Approvals", icon: "✅" },
       { key: "servers", label: "MCP Servers", icon: "🧰" },
       { key: "telemetry", label: "Telemetry", icon: "📈" },
-      { key: "embeddings", label: "Embeddings · Platform", icon: "🧠" },
-      { key: "tenantEmbeddings", label: "Embeddings · Tenant", icon: "🪪" },
+      { key: "embeddings", label: "Embeddings", icon: "🧠" },
       { key: "account", label: "Account", icon: "🧑" },
     ],
     activeSection: "dashboard",
@@ -103,10 +102,12 @@ window.adminConsole = function adminConsole(config) {
       pendingActions: [],
       userNotice: "",
       servers: [],
+      exportingServer: false,
       catalog: { items: [] },
       catalogExpanded: {},
       telemetry: { items: [] },
       searchResults: [],
+      embeddingScope: "platform",
       embedding: null,
       embeddingStatus: null,
       embeddingTest: null,
@@ -119,6 +120,8 @@ window.adminConsole = function adminConsole(config) {
       toasts: [],
       helpOpen: false,
       helpTab: "mcp",
+      contextHelpOpen: false,
+      contextHelpTab: "overview",
       toolTestResults: {},
       toolValidation: {},
       tenantConnectOpen: false,
@@ -144,6 +147,7 @@ window.adminConsole = function adminConsole(config) {
       exploreCollectionsLoading: false,
       workspaceExplore: null,
       workspaceExploreTargetId: null,
+      toolPaletteFilter: "",
     },
     _embeddingPoll: null,
     _tenantEmbeddingPoll: null,
@@ -263,6 +267,16 @@ window.adminConsole = function adminConsole(config) {
 
     closeHelp() {
       this.state.helpOpen = false;
+    },
+
+    // ---- "The magic of context" guide ------------------------------------- //
+    openContextHelp(tab = "overview") {
+      if (tab) this.state.contextHelpTab = tab;
+      this.state.contextHelpOpen = true;
+    },
+
+    closeContextHelp() {
+      this.state.contextHelpOpen = false;
     },
 
     async openTenantConnect(tenantId) {
@@ -525,9 +539,11 @@ window.adminConsole = function adminConsole(config) {
           }
         }
         if (this.activeSection === "telemetry") await this.loadTelemetry();
-        if (this.activeSection === "embeddings") await this.loadEmbedding();
-        if (this.activeSection === "tenantEmbeddings")
+        if (this.activeSection === "embeddings") {
+          // One section, two scopes: load both so the toggle is instant.
+          await this.loadEmbedding();
           await this.loadTenantEmbedding();
+        }
       } catch (error) {
         this.setError(error);
       }
@@ -836,6 +852,75 @@ window.adminConsole = function adminConsole(config) {
       );
     },
 
+    _filenameFromDisposition(header, fallback) {
+      if (!header) return fallback;
+      const match = /filename="?([^";]+)"?/i.exec(header);
+      return match ? match[1].trim() : fallback;
+    },
+
+    async exportServer() {
+      // Download a self-contained, runnable FastMCP project (.zip) for the
+      // current code server. Uses a blob fetch (not apiRequest) since the
+      // response is binary; same-origin cookies carry auth, no CSRF needed (GET).
+      const server = this.selectedWorkspaceServer();
+      const name = String(server?.server || this.workspaceServerName() || "").trim();
+      if (!name) {
+        this.notify("Open a code server to export it.", "warning");
+        return;
+      }
+      if (this.state.exportingServer) return;
+      this.state.exportingServer = true;
+      try {
+        const url = new URL(
+          `/admin/servers/${encodeURIComponent(name)}/export`,
+          window.location.origin,
+        );
+        if (this.state.tenantId) url.searchParams.set("tenant_id", this.state.tenantId);
+        const response = await fetch(url.toString(), {
+          method: "GET",
+          headers: { Accept: "application/zip" },
+          credentials: "same-origin",
+        });
+        if (response.status === 401) {
+          window.location.href = `${this.uiPath}/login`;
+          return;
+        }
+        if (!response.ok) {
+          let detail = `${response.status} ${response.statusText}`;
+          try {
+            const payload = await response.json();
+            if (payload.detail) detail = payload.detail;
+          } catch (_) {
+            // non-JSON error body; keep the status text
+          }
+          throw new Error(detail);
+        }
+        const blob = await response.blob();
+        const filename = this._filenameFromDisposition(
+          response.headers.get("Content-Disposition"),
+          `${name}-mcp.zip`,
+        );
+        const toolCount = response.headers.get("X-Export-Tool-Count");
+        const objectUrl = window.URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = objectUrl;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        window.URL.revokeObjectURL(objectUrl);
+        const suffix =
+          toolCount && !Number.isNaN(Number(toolCount))
+            ? ` (${toolCount} tool${toolCount === "1" ? "" : "s"} wired up)`
+            : "";
+        this.notify(`Exported ${name}${suffix}.`, "success");
+      } catch (error) {
+        this.notify(`Export failed: ${error.message || error}`, "warning");
+      } finally {
+        this.state.exportingServer = false;
+      }
+    },
+
     async openServerWorkspace(server, tab = "tools") {
       if (!server || !String(server.server || "").trim()) return;
       this.activeSection = "servers";
@@ -929,6 +1014,7 @@ window.adminConsole = function adminConsole(config) {
         test_arguments: "{}",
         expanded: true,
         explore_open: false,
+        tools_open: false,
         explore_collection: "",
         explore_mode: "find",
         explore_filter: "{}",
@@ -965,6 +1051,7 @@ window.adminConsole = function adminConsole(config) {
         test_arguments: "{}",
         expanded: false,
         explore_open: false,
+        tools_open: false,
         explore_collection: "",
         explore_mode: "find",
         explore_filter: "{}",
@@ -1156,9 +1243,7 @@ window.adminConsole = function adminConsole(config) {
     addToolToServer() {
       const tool = this.emptyToolForm();
       this.forms.server.tools.push(tool);
-      if (!this.state.workspaceExploreTargetId) {
-        this.state.workspaceExploreTargetId = tool.local_id;
-      }
+      this._ensureSingleActiveTool(tool.local_id);
       this.$nextTick(() => this.refreshCodeEditors());
     },
 
@@ -1178,18 +1263,31 @@ window.adminConsole = function adminConsole(config) {
       return this.forms.server.transport === "code";
     },
 
-    toggleTool(localId) {
-      const tool = this._toolById(localId);
-      if (!tool) return;
-      tool.expanded = !tool.expanded;
+    // Master/detail: exactly one function is "active" (its editor is shown).
+    _ensureSingleActiveTool(preferId = null) {
+      const tools = this.forms.server.tools || [];
+      if (tools.length === 0) return null;
+      const active =
+        tools.find((t) => t.local_id === preferId) ||
+        tools.find((t) => t.expanded) ||
+        tools[0];
+      for (const t of tools) t.expanded = t === active;
+      this.state.workspaceExploreTargetId = active.local_id;
+      return active;
+    },
+
+    selectTool(localId) {
+      this._ensureSingleActiveTool(localId);
       this.$nextTick(() => this.refreshCodeEditors());
     },
 
+    // Back-compat shims (older callers); both now select a single function.
+    toggleTool(localId) {
+      this.selectTool(localId);
+    },
+
     expandTool(localId) {
-      const tool = this._toolById(localId);
-      if (!tool) return;
-      tool.expanded = true;
-      this.$nextTick(() => this.refreshCodeEditors());
+      this.selectTool(localId);
     },
 
     toolSummaryName(tool, idx) {
@@ -1338,6 +1436,116 @@ window.adminConsole = function adminConsole(config) {
       this.notify("Inserted query snippet into function source.", "success");
     },
 
+    // ---- context.tools palette (call sibling tools) -----------------------
+
+    toggleToolPalette(tool) {
+      if (!tool) return;
+      tool.tools_open = !tool.tools_open;
+      if (tool.tools_open) tool.explore_open = false;
+    },
+
+    _toolParams(entry) {
+      // Pull parameter names/types from the tool's JSON input schema so authors
+      // see exactly what to pass — required first, optional after.
+      const schema =
+        entry && typeof entry.input_schema === "object" ? entry.input_schema : {};
+      const props =
+        schema && typeof schema.properties === "object" ? schema.properties : {};
+      const required = new Set(
+        Array.isArray(schema.required) ? schema.required.map(String) : [],
+      );
+      const params = Object.keys(props).map((name) => ({
+        name,
+        type: String((props[name] || {}).type || ""),
+        required: required.has(name),
+      }));
+      params.sort((a, b) => Number(b.required) - Number(a.required));
+      return params;
+    },
+
+    callableToolGroups(currentTool) {
+      // Build the palette client-side from the tenant's servers: only code
+      // servers expose callable tools, mirroring the host's code-only policy.
+      const filter = String(this.state.toolPaletteFilter || "")
+        .trim()
+        .toLowerCase();
+      const currentName = String(currentTool?.name || "").trim();
+      const currentServer = String(this.workspaceServerName() || "").trim();
+      const groups = [];
+      for (const server of this.state.servers || []) {
+        if (String(server.transport || "") !== "code") continue;
+        const serverName = String(server.server || "").trim();
+        if (!serverName) continue;
+        const tools = [];
+        for (const t of server.tools || []) {
+          const name = String(t.name || "").trim();
+          if (!name) continue;
+          // Don't suggest a tool calling itself (the obvious infinite loop).
+          if (serverName === currentServer && name === currentName) continue;
+          const params = this._toolParams(t);
+          const entry = {
+            server: serverName,
+            name,
+            description: String(t.description || "").trim(),
+            params,
+            paramLabel: params.map((p) => p.name).join(", "),
+            input_schema: t.input_schema,
+          };
+          const haystack = `${serverName} ${name} ${entry.description}`.toLowerCase();
+          if (filter && !haystack.includes(filter)) continue;
+          tools.push(entry);
+        }
+        if (tools.length > 0) {
+          tools.sort((a, b) => a.name.localeCompare(b.name));
+          groups.push({ server: serverName, tools });
+        }
+      }
+      groups.sort((a, b) => a.server.localeCompare(b.server));
+      return groups;
+    },
+
+    _toolCallSnippet(entry) {
+      // Bracket form works for any server/tool name (incl. hyphens). Required
+      // params get a TODO sentinel; optional ones are omitted to keep it tidy.
+      const required = (entry.params || []).filter((p) => p.required);
+      const args = required.map((p) => `${p.name}=...`).join(", ");
+      return `result = context.tools[${JSON.stringify(
+        entry.server,
+      )}][${JSON.stringify(entry.name)}](${args})`;
+    },
+
+    async copyToolCall(entry) {
+      const snippet = this._toolCallSnippet(entry);
+      try {
+        await navigator.clipboard.writeText(snippet);
+        this.notify("Copied tool call.", "success");
+      } catch (_) {
+        this.notify("Clipboard permission denied. Copy manually.", "warning");
+      }
+    },
+
+    _insertIntoToolSource(tool, text) {
+      // Prefer inserting at the cursor in the live editor; fall back to append.
+      const view = this._codeEditors[String(tool.local_id)];
+      if (view) {
+        const insert = `${text}\n`;
+        view.dispatch(view.state.replaceSelection(insert));
+        tool.raw_code = view.state.doc.toString();
+        view.focus();
+        this.scheduleToolValidate(tool);
+        return;
+      }
+      const current = String(tool.raw_code || "").trimEnd();
+      this._setToolSource(tool, current ? `${current}\n${text}\n` : `${text}\n`);
+    },
+
+    insertToolCall(tool, entry) {
+      if (!tool || !entry) return;
+      this._insertIntoToolSource(tool, this._toolCallSnippet(entry));
+      tool.expanded = true;
+      this.notify(`Inserted call to ${entry.server}.${entry.name}.`, "success");
+    },
+
     // One-click "see the magic": drop in a complete, sandbox-safe function the
     // operator can immediately run in the sandbox and save as a real MCP tool.
     loadExampleTool() {
@@ -1380,7 +1588,7 @@ window.adminConsole = function adminConsole(config) {
       } else {
         this.forms.server.tools.push(example);
       }
-      this.state.workspaceExploreTargetId = example.local_id;
+      this._ensureSingleActiveTool(example.local_id);
       if (!String(this.forms.server.server || "").trim()) {
         this.forms.server.server = "my-tools";
       }
@@ -1393,14 +1601,15 @@ window.adminConsole = function adminConsole(config) {
         this.setError("A code server must include at least one function.");
         return;
       }
+      const removedActive = Boolean(this._toolById(localId)?.expanded);
       this.forms.server.tools = (this.forms.server.tools || []).filter(
         (tool) => tool.local_id !== localId,
       );
-      if (String(this.state.workspaceExploreTargetId) === String(localId)) {
-        const first = (this.forms.server.tools || [])[0];
-        this.state.workspaceExploreTargetId = first ? first.local_id : null;
-      }
       this._teardownCodeEditor(localId);
+      // Removing the visible function falls back to the first remaining one.
+      this._ensureSingleActiveTool(
+        removedActive ? null : this.state.workspaceExploreTargetId,
+      );
       this.$nextTick(() => this.refreshCodeEditors());
     },
 
@@ -1433,14 +1642,12 @@ window.adminConsole = function adminConsole(config) {
           this.normalizeToolForm(tool),
         );
         if (tools.length > 0) {
-          // Open the first function so the editor is visible right away; the
-          // rest stay collapsed for a clean, scannable manifest.
-          tools[0].expanded = true;
+          // Select the first function so its editor is visible right away.
           this.forms.server.tools = tools;
-          this.state.workspaceExploreTargetId = tools[0].local_id;
+          this._ensureSingleActiveTool(tools[0].local_id);
         } else {
           this.forms.server.tools = [this.emptyToolForm()];
-          this.state.workspaceExploreTargetId = this.forms.server.tools[0].local_id;
+          this._ensureSingleActiveTool(this.forms.server.tools[0].local_id);
         }
         this.state.toolTestResults = {};
         this.state.toolValidation = {};
@@ -2387,6 +2594,56 @@ window.adminConsole = function adminConsole(config) {
       }
     },
 
+    telemetryStatusKind(status) {
+      const s = String(status || "").toLowerCase();
+      if (/success|_hit|consumed|approved|resumed|updated|\bok\b/.test(s)) {
+        return "ok";
+      }
+      if (
+        /error|fail|forbidden|denied|timeout|quota|suspend|unknown|invalid|disabled|pending/.test(
+          s,
+        )
+      ) {
+        return "error";
+      }
+      return "neutral";
+    },
+
+    telemetryStatusLabel(status) {
+      return String(status || "—").replace(/_/g, " ");
+    },
+
+    telemetrySummary() {
+      const items = this.state.telemetry?.items || [];
+      const total = items.length;
+      let errors = 0;
+      const latencies = [];
+      for (const item of items) {
+        if (this.telemetryStatusKind(item.status) === "error") errors += 1;
+        if (typeof item.latency_ms === "number" && isFinite(item.latency_ms)) {
+          latencies.push(item.latency_ms);
+        }
+      }
+      latencies.sort((a, b) => a - b);
+      const avg = latencies.length
+        ? latencies.reduce((a, b) => a + b, 0) / latencies.length
+        : null;
+      const p95 = latencies.length
+        ? latencies[
+            Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))
+          ]
+        : null;
+      const successRate = total
+        ? Math.round(((total - errors) / total) * 100)
+        : null;
+      return { total, errors, avg, p95, successRate };
+    },
+
+    formatMs(value) {
+      if (value == null || !isFinite(value)) return "—";
+      return `${Number(value).toFixed(value < 10 ? 1 : 0)}ms`;
+    },
+
     async runSearch() {
       this.clearError();
       const serverName = String(this.state.serverWorkspace.server || "").trim();
@@ -2413,6 +2670,14 @@ window.adminConsole = function adminConsole(config) {
         );
       } catch (error) {
         this.setError(error);
+      }
+    },
+
+    setEmbeddingScope(scope) {
+      const next = scope === "tenant" ? "tenant" : "platform";
+      this.state.embeddingScope = next;
+      if (next === "tenant" && !this.state.tenantEmbedding) {
+        this.loadTenantEmbedding();
       }
     },
 

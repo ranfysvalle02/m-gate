@@ -11,6 +11,7 @@ from typing import Any
 from config.settings import Settings, get_settings
 from services.metrics import observe_sandbox_pool_event, set_sandbox_pool_workers
 from services.sandbox_errors import (
+    BRIDGE_RPC_FRAME_TYPES,
     SandboxError,
     SandboxProtocolError,
     SandboxTimeoutError,
@@ -265,10 +266,12 @@ class WorkerPool:
                 raise SandboxProtocolError("Sandbox worker returned a malformed frame.") from exc
             if not isinstance(frame, dict):
                 raise SandboxProtocolError("Sandbox worker frame was not a JSON object.")
-            if frame.get("type") != "db_rpc":
+            if frame.get("type") not in BRIDGE_RPC_FRAME_TYPES:
                 return frame
             if dispatch is None:
-                raise SandboxProtocolError("Sandbox worker requested DB RPC when bridge is disabled.")
+                raise SandboxProtocolError(
+                    "Sandbox worker requested a host bridge call when no bridge is enabled."
+                )
             response = await dispatch(frame)
             worker.process.stdin.write((json.dumps(response) + "\n").encode("utf-8"))
             await worker.process.stdin.drain()

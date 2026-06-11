@@ -423,3 +423,107 @@ async def test_allowlisted_requirements_install_wheels_only(monkeypatch):
     # The pip command forces wheels and disables transitive installs.
     assert "--only-binary=:all:" in captured["cmd"]
     assert "--no-deps" in captured["cmd"]
+
+
+async def _noop_invoker(server, tool, args):  # pragma: no cover - replaced per test
+    return {}
+
+
+@pytest.mark.asyncio
+async def test_run_routes_tool_rpc_frames_to_tool_bridge(monkeypatch):
+    tool_frame = (
+        b'{"type":"tool_rpc","id":7,"server":"analytics","tool":"track",'
+        b'"arguments":{"x":1}}\n'
+    )
+    final_frame = b'{"ok": true, "result": {"done": true}, "stdout": "", "stderr": ""}\n'
+    process = _FakeProcess(stdout=[tool_frame, final_frame], returncode=0)
+
+    class _ToolBridge:
+        def __init__(self, **_kwargs):
+            return None
+
+        async def handle(self, frame):
+            assert frame["type"] == "tool_rpc"
+            assert frame["server"] == "analytics"
+            assert frame["tool"] == "track"
+            return {
+                "type": "tool_rpc_result",
+                "id": frame["id"],
+                "ok": True,
+                "result": {"echo": frame["tool"]},
+            }
+
+    async def _spawn(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
+    monkeypatch.setattr("services.sandbox_executor.SandboxToolBridge", _ToolBridge)
+    executor = WasmExecutor(
+        settings=Settings(sandbox_tool_bridge_enabled=True), python_bin="python"
+    )
+    request = ExecRequest(**{**_request().__dict__, "tool_invoker": _noop_invoker})
+    result = await executor.run(request)
+    assert result.payload == {"done": True}
+    assert any(b'"type": "tool_rpc_result"' in line for line in process.stdin_writes)
+
+
+@pytest.mark.asyncio
+async def test_tool_rpc_frame_without_invoker_is_protocol_breach(monkeypatch):
+    # Bridge flag on but no invoker supplied => the run never enables the tool
+    # bridge, so an unexpected tool_rpc frame is a protocol error (fail closed).
+    tool_frame = b'{"type":"tool_rpc","id":1,"server":"a","tool":"t","arguments":{}}\n'
+    process = _FakeProcess(stdout=[tool_frame], returncode=0)
+
+    async def _spawn(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
+    executor = WasmExecutor(
+        settings=Settings(sandbox_tool_bridge_enabled=True), python_bin="python"
+    )
+    with pytest.raises(SandboxProtocolError):
+        await executor.run(_request())
+
+
+@pytest.mark.asyncio
+async def test_nested_request_gets_independent_tenant_semaphore():
+    executor = WasmExecutor(
+        settings=Settings(sandbox_max_concurrency_per_tenant=1), python_bin="python"
+    )
+    shared = await executor._tenant_semaphore("t1")
+    nested = await executor._tenant_semaphore("t1", nested=True)
+    assert nested is not shared
+    # Exhaust the shared per-tenant slot; a nested sibling call must not block.
+    await shared.acquire()
+    assert nested.locked() is False
+
+
+@pytest.mark.asyncio
+async def test_nested_global_guard_is_noop_at_capacity():
+    executor = WasmExecutor(
+        settings=Settings(sandbox_max_global_concurrency=1), python_bin="python"
+    )
+    nested = ExecRequest(**{**_request().__dict__, "call_depth": 1})
+
+    async def _enter() -> bool:
+        # Hold the only global slot, then a nested run must still pass through.
+        async with executor._global_guard():
+            async with executor._global_guard(nested):
+                return True
+
+    assert await asyncio.wait_for(_enter(), timeout=0.5) is True
+
+
+def test_job_payload_reflects_tool_bridge_state():
+    executor = WasmExecutor(
+        settings=Settings(sandbox_tool_bridge_enabled=True), python_bin="python"
+    )
+    limits = executor._resolve_limits(None)
+    enabled = executor._job_payload(
+        ExecRequest(**{**_request().__dict__, "tool_invoker": _noop_invoker}), [], limits
+    )
+    disabled = executor._job_payload(_request(), [], limits)
+    assert enabled["tool_bridge"] is True
+    assert disabled["tool_bridge"] is False
+    # The blocked parent gets headroom for nested sandbox latency.
+    assert enabled["db_rpc_wait_ms"] > disabled["db_rpc_wait_ms"]

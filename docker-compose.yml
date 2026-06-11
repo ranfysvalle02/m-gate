@@ -162,6 +162,9 @@ services:
       # Local demo defaults to running transport=code tools inside wasm sandbox.
       CODE_TOOL_EXECUTION_ENABLED: "true"
       SANDBOX_DB_BRIDGE_ENABLED: "true"
+      # Cross-tool calls (context.tools): code tools can call sibling code tools
+      # in the same tenant. Re-authorized against the caller, code-only, bounded.
+      SANDBOX_TOOL_BRIDGE_ENABLED: "true"
       # Keep prewarmed CPython-on-WASI workers resident. With pool size 0 every
       # call spawns a throwaway worker that does a full Cranelift compile of the
       # 26MB python.wasm under a tight RLIMIT_CPU -> SIGXCPU / rayon thread-spawn

@@ -163,12 +163,23 @@
   <div class="card server-workspace" x-show="state.serverWorkspace.open" x-transition.opacity>
     <div class="workspace-head">
       <div>
-        <div class="studio-eyebrow">Server workspace</div>
+        <div class="studio-eyebrow">Editing server</div>
         <h3 class="text-xl font-semibold" x-text="workspaceServerName() || 'Select a server'"></h3>
       </div>
-      <button type="button" class="btn-secondary" @click="closeServerWorkspace()">
-        Close workspace
-      </button>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="btn-secondary"
+          x-show="selectedWorkspaceServer()?.transport === 'code'"
+          :disabled="state.exportingServer"
+          @click="exportServer()"
+          title="Download a runnable FastMCP project (.zip) with all of this server's tools wired up"
+          x-text="state.exportingServer ? 'Packaging…' : '⬇ Export server (.zip)'"
+        ></button>
+        <button type="button" class="btn-secondary" @click="closeServerWorkspace()">
+          Done editing
+        </button>
+      </div>
     </div>
     <div class="workspace-tabs">
       <button
@@ -206,8 +217,8 @@
     </div>
 
     <div x-show="workspaceTabIs('tools')" class="text-sm text-slate-500">
-      Edit tools in the composer above. Search, DB explore, and env secrets are
-      scoped to this selected server.
+      Edit this server's tools in the composer above. Search, Explore DB, and
+      Secrets are all scoped to this server.
     </div>
 
     <div x-show="workspaceTabIs('search')" class="space-y-4">
@@ -724,8 +735,8 @@
 
   <div class="server-browse-actions card">
     <div class="studio-intro">
-      Pick a server, then use the workspace tabs for tools, search, database
-      exploration, and secure per-server env keys.
+      Pick a server and hit <strong>Edit</strong> to manage its tools, search,
+      database exploration, and secure per-server env keys.
     </div>
     <div class="builder-actions">
       <button
@@ -764,7 +775,7 @@
         class="btn-secondary"
         @click="closeServerWorkspace()"
       >
-        Close workspace
+        Done editing
       </button>
     </div>
     <div class="mb-2">
@@ -870,38 +881,7 @@
             >
               ✨ Start from example
             </button>
-            <button
-              type="button"
-              class="btn-secondary"
-              @click="addToolToServer()"
-            >
-              + Add function
-            </button>
           </div>
-        </div>
-
-        <div
-          class="manifest-row"
-          x-show="forms.server.tools.some(t => (t.name || '').trim())"
-        >
-          <span class="manifest-label">Exposes</span>
-          <template
-            x-for="(t, i) in forms.server.tools"
-            :key="'chip-' + t.local_id"
-          >
-            <button
-              type="button"
-              class="manifest-chip"
-              @click="expandTool(t.local_id)"
-              x-show="(t.name || '').trim()"
-            >
-              <span
-                class="manifest-dot"
-                :class="`dot-${t.action_type || 'read'}`"
-              ></span>
-              <span x-text="t.name"></span>
-            </button>
-          </template>
         </div>
 
         <div class="contract-card">
@@ -950,82 +930,146 @@
           </ul>
         </div>
 
-        <template
-          x-for="(tool, idx) in forms.server.tools"
-          :key="tool.local_id"
-        >
-          <article class="fn-card" :class="tool.expanded ? 'fn-card-open' : ''">
-            <div class="fn-summary">
-              <button
-                type="button"
-                class="fn-summary-main"
-                @click="toggleTool(tool.local_id)"
-                :aria-expanded="tool.expanded ? 'true' : 'false'"
-              >
-                <span
-                  class="fn-chevron"
-                  :class="tool.expanded ? 'open' : ''"
-                  aria-hidden="true"
-                  >▸</span
-                >
-                <span
-                  class="fn-summary-name"
-                  x-text="toolSummaryName(tool, idx)"
-                ></span>
-                <span
-                  class="action-badge"
-                  :class="`action-${tool.action_type || 'read'}`"
-                  x-text="tool.action_type || 'read'"
-                ></span>
-                <template x-if="getToolValidation(tool.local_id)?.validating">
-                  <span class="fn-status fn-status-checking" title="Validating">
-                    <span class="spinner"></span> checking
-                  </span>
-                </template>
-                <template
-                  x-if="!getToolValidation(tool.local_id)?.validating && toolErrorCount(tool) > 0"
-                >
-                  <span
-                    class="fn-status fn-status-err"
-                    :title="toolIssues(tool).map(i => i.message).join(' · ')"
-                    x-text="`⚠ ${toolErrorCount(tool)}`"
-                  ></span>
-                </template>
-                <template
-                  x-if="!getToolValidation(tool.local_id)?.validating && toolErrorCount(tool) === 0 && toolWarningCount(tool) > 0"
-                >
-                  <span
-                    class="fn-status fn-status-warn"
-                    :title="toolIssues(tool).map(i => i.message).join(' · ')"
-                    x-text="`${toolWarningCount(tool)} suggestion${toolWarningCount(tool) === 1 ? '' : 's'}`"
-                  ></span>
-                </template>
-                <template
-                  x-if="!getToolValidation(tool.local_id)?.validating && toolErrorCount(tool) === 0 && toolWarningCount(tool) === 0 && (tool.raw_code || '').trim()"
-                >
-                  <span class="fn-status fn-status-ok" title="Passes the sandbox contract"
-                    >✓ ready</span
-                  >
-                </template>
-              </button>
-              <div class="fn-summary-tools">
-                <span
-                  class="fn-summary-hint"
-                  x-text="tool.expanded ? 'Collapse' : 'Edit'"
-                ></span>
-                <button
-                  type="button"
-                  class="icon-btn icon-btn-danger"
-                  @click="removeToolFromServer(tool.local_id)"
-                  :disabled="forms.server.tools.length <= 1"
-                  title="Delete function"
-                >
-                  Delete
-                </button>
-              </div>
+        <div class="fn-workbench">
+          <aside class="fn-rail">
+            <div class="fn-rail-head">
+              <span class="fn-rail-title">Functions</span>
+              <span
+                class="fn-rail-count"
+                x-text="forms.server.tools.length"
+              ></span>
             </div>
+            <ul class="fn-rail-list">
+              <template
+                x-for="(t, i) in forms.server.tools"
+                :key="'rail-' + t.local_id"
+              >
+                <li>
+                  <button
+                    type="button"
+                    class="fn-rail-item"
+                    :class="t.expanded ? 'fn-rail-item-active' : ''"
+                    @click="selectTool(t.local_id)"
+                  >
+                    <span
+                      class="manifest-dot"
+                      :class="`dot-${t.action_type || 'read'}`"
+                    ></span>
+                    <span
+                      class="fn-rail-name"
+                      x-text="toolSummaryName(t, i)"
+                    ></span>
+                    <template x-if="getToolValidation(t.local_id)?.validating">
+                      <span
+                        class="fn-rail-mark fn-rail-mark-checking"
+                        title="Validating"
+                        ><span class="spinner"></span
+                      ></span>
+                    </template>
+                    <template
+                      x-if="!getToolValidation(t.local_id)?.validating && toolErrorCount(t) > 0"
+                    >
+                      <span
+                        class="fn-rail-mark fn-rail-mark-err"
+                        :title="`${toolErrorCount(t)} error(s)`"
+                        x-text="toolErrorCount(t)"
+                      ></span>
+                    </template>
+                    <template
+                      x-if="!getToolValidation(t.local_id)?.validating && toolErrorCount(t) === 0 && toolWarningCount(t) > 0"
+                    >
+                      <span
+                        class="fn-rail-mark fn-rail-mark-warn"
+                        :title="`${toolWarningCount(t)} suggestion(s)`"
+                        >!</span
+                      >
+                    </template>
+                    <template
+                      x-if="!getToolValidation(t.local_id)?.validating && toolErrorCount(t) === 0 && toolWarningCount(t) === 0 && (t.raw_code || '').trim()"
+                    >
+                      <span
+                        class="fn-rail-mark fn-rail-mark-ok"
+                        title="Ready"
+                        >✓</span
+                      >
+                    </template>
+                  </button>
+                </li>
+              </template>
+            </ul>
+            <button
+              type="button"
+              class="fn-rail-add"
+              @click="addToolToServer()"
+            >
+              <span aria-hidden="true">+</span> Add function
+            </button>
+          </aside>
 
-            <div class="fn-body" x-show="tool.expanded" x-transition.opacity>
+          <div class="fn-detail">
+            <template
+              x-for="(tool, idx) in forms.server.tools"
+              :key="tool.local_id"
+            >
+              <article class="fn-pane" x-show="tool.expanded" x-transition.opacity>
+                <div class="fn-pane-head">
+                  <div class="fn-pane-id">
+                    <span
+                      class="manifest-dot"
+                      :class="`dot-${tool.action_type || 'read'}`"
+                    ></span>
+                    <span
+                      class="fn-pane-name"
+                      x-text="toolSummaryName(tool, idx)"
+                    ></span>
+                    <span
+                      class="action-badge"
+                      :class="`action-${tool.action_type || 'read'}`"
+                      x-text="tool.action_type || 'read'"
+                    ></span>
+                    <template x-if="getToolValidation(tool.local_id)?.validating">
+                      <span class="fn-status fn-status-checking" title="Validating">
+                        <span class="spinner"></span> checking
+                      </span>
+                    </template>
+                    <template
+                      x-if="!getToolValidation(tool.local_id)?.validating && toolErrorCount(tool) > 0"
+                    >
+                      <span
+                        class="fn-status fn-status-err"
+                        :title="toolIssues(tool).map(i => i.message).join(' · ')"
+                        x-text="`⚠ ${toolErrorCount(tool)}`"
+                      ></span>
+                    </template>
+                    <template
+                      x-if="!getToolValidation(tool.local_id)?.validating && toolErrorCount(tool) === 0 && toolWarningCount(tool) > 0"
+                    >
+                      <span
+                        class="fn-status fn-status-warn"
+                        :title="toolIssues(tool).map(i => i.message).join(' · ')"
+                        x-text="`${toolWarningCount(tool)} suggestion${toolWarningCount(tool) === 1 ? '' : 's'}`"
+                      ></span>
+                    </template>
+                    <template
+                      x-if="!getToolValidation(tool.local_id)?.validating && toolErrorCount(tool) === 0 && toolWarningCount(tool) === 0 && (tool.raw_code || '').trim()"
+                    >
+                      <span class="fn-status fn-status-ok" title="Passes the sandbox contract"
+                        >✓ ready</span
+                      >
+                    </template>
+                  </div>
+                  <button
+                    type="button"
+                    class="icon-btn icon-btn-danger"
+                    @click="removeToolFromServer(tool.local_id)"
+                    :disabled="forms.server.tools.length <= 1"
+                    title="Delete function"
+                  >
+                    Delete
+                  </button>
+                </div>
+
+            <div class="fn-body">
               <div class="grid gap-6 md:grid-cols-12">
                 <!-- Config Column -->
                 <div class="md:col-span-4 space-y-4">
@@ -1128,8 +1172,23 @@
                         <button
                           type="button"
                           class="schema-sync"
+                          @click="openContextHelp('overview')"
+                          title="See what the context object gives your code"
+                        >
+                          ✦ What is context?
+                        </button>
+                        <button
+                          type="button"
+                          class="schema-sync"
                           @click="toggleExplore(tool)"
                           x-text="tool.explore_open ? 'Hide DB explorer' : 'Explore database'"
+                        ></button>
+                        <button
+                          type="button"
+                          class="schema-sync"
+                          @click="toggleToolPalette(tool)"
+                          title="Call another tool in this tenant from your code"
+                          x-text="tool.tools_open ? 'Hide tool palette' : '🧩 Call a tool'"
                         ></button>
                         <span class="field-hint">Cmd/Ctrl+S to save</span>
                       </div>
@@ -1167,11 +1226,102 @@
                       >
                       <span class="ei-sep">·</span>
                       <span
-                        ><strong>Virtual DB:</strong> use
-                        <code>context.db["collection"].find(...)</code> via
-                        Explore DB tools in this server workspace.</span
+                        ><strong>context:</strong>
+                        <code>context.db</code> &amp;
+                        <code>context.env</code> —
+                        <button
+                          type="button"
+                          class="ei-link"
+                          @click="openContextHelp('overview')"
+                        >
+                          see the magic</button
+                        >.</span
                       >
                     </p>
+
+                    <div class="explore-drawer" x-show="tool.tools_open" x-transition.opacity>
+                      <div class="explore-head">
+                        <span class="explore-title">🧩 Callable tools</span>
+                        <span class="field-hint"
+                          >Your tenant is a namespace — call sibling code tools from
+                          <code>context.tools</code>.</span
+                        >
+                      </div>
+                      <div class="tool-palette">
+                        <input
+                          class="field-input !py-1 !text-xs mb-2"
+                          type="text"
+                          x-model="state.toolPaletteFilter"
+                          placeholder="Filter by server or tool…"
+                        />
+                        <template x-if="callableToolGroups(tool).length === 0">
+                          <p class="field-hint">
+                            No other code tools in this tenant yet. Create one on any
+                            <code>transport=code</code> server, then call it here.
+                          </p>
+                        </template>
+                        <template
+                          x-for="group in callableToolGroups(tool)"
+                          :key="`palette-${group.server}`"
+                        >
+                          <div class="tp-group">
+                            <div class="tp-group-name">
+                              <span x-text="group.server"></span>
+                              <span class="tp-group-count" x-text="group.tools.length"></span>
+                            </div>
+                            <template
+                              x-for="entry in group.tools"
+                              :key="`palette-${group.server}-${entry.name}`"
+                            >
+                              <div class="tp-row">
+                                <div class="tp-row-main">
+                                  <code
+                                    class="tp-sig"
+                                    x-text="`${entry.name}(${entry.paramLabel})`"
+                                  ></code>
+                                  <span
+                                    class="tp-desc"
+                                    x-show="entry.description"
+                                    x-text="entry.description"
+                                  ></span>
+                                  <div class="tp-params" x-show="entry.params.length > 0">
+                                    <template
+                                      x-for="p in entry.params"
+                                      :key="`palette-${group.server}-${entry.name}-${p.name}`"
+                                    >
+                                      <span
+                                        class="tp-param"
+                                        :class="p.required ? 'tp-param-req' : ''"
+                                        :title="p.required ? 'required' : 'optional'"
+                                      >
+                                        <span x-text="p.name"></span>
+                                        <span class="tp-param-type" x-text="p.type"></span>
+                                      </span>
+                                    </template>
+                                  </div>
+                                </div>
+                                <div class="tp-row-actions">
+                                  <button
+                                    type="button"
+                                    class="schema-sync"
+                                    @click="copyToolCall(entry)"
+                                  >
+                                    Copy
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="schema-sync"
+                                    @click="insertToolCall(tool, entry)"
+                                  >
+                                    Insert
+                                  </button>
+                                </div>
+                              </div>
+                            </template>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
 
                     <div class="explore-drawer" x-show="tool.explore_open" x-transition.opacity>
                       <div class="explore-head">
@@ -1336,7 +1486,7 @@
                             class="btn-secondary !py-1 !px-2.5 !text-xs"
                             @click="runToolTest(tool)"
                           >
-                            Run
+                            ▶ Run
                           </button>
                         </div>
                       </div>
@@ -1375,11 +1525,31 @@
                           </template>
                         </div>
                       </template>
+                      <template
+                        x-if="getToolTestResult(tool.local_id)?.running"
+                      >
+                        <div class="test-empty test-empty-busy">
+                          <span class="spinner"></span>
+                          <div class="test-empty-copy">
+                            <div class="test-empty-title">Running…</div>
+                            <div class="test-empty-sub">
+                              Executing in the wasm sandbox.
+                            </div>
+                          </div>
+                        </div>
+                      </template>
                       <template x-if="!getToolTestResult(tool.local_id)">
-                        <div
-                          class="flex-1 rounded-md border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-center text-xs text-slate-400"
-                        >
-                          Run test to see output
+                        <div class="test-empty">
+                          <span class="test-empty-glyph" aria-hidden="true"
+                            >▶</span
+                          >
+                          <div class="test-empty-copy">
+                            <div class="test-empty-title">No run yet</div>
+                            <div class="test-empty-sub">
+                              Press <strong>Run</strong> to execute this function
+                              in the sandbox with your test arguments.
+                            </div>
+                          </div>
                         </div>
                       </template>
                     </div>
@@ -1452,8 +1622,10 @@
                 </div>
               </template>
             </div>
-          </article>
-        </template>
+              </article>
+            </template>
+          </div>
+        </div>
       </div>
     </template>
 
@@ -1477,7 +1649,7 @@
           class="btn-secondary"
           @click="closeServerWorkspace()"
         >
-          Close workspace
+          Done editing
         </button>
       </div>
       <template x-if="!canSaveServer() && saveBlockedReason()">
@@ -1521,7 +1693,7 @@
                 class="link-btn"
                 @click.prevent.stop="openServerWorkspace(server, 'tools')"
               >
-                Workspace
+                Edit
               </button>
               <button
                 type="button"
@@ -1660,10 +1832,46 @@
   x-transition:enter-start="view-from"
   x-transition:enter-end="view-to"
 >
-  <h2 class="text-2xl font-semibold">Telemetry</h2>
-  <button type="button" class="btn-secondary" @click="loadTelemetry()">
-    Refresh
-  </button>
+  <div class="studio-hero">
+    <div class="studio-hero-copy">
+      <div class="studio-eyebrow">Telemetry</div>
+      <h2 class="studio-h1">Recent gateway activity</h2>
+      <p class="studio-lede">
+        The latest request events for
+        <span class="font-medium" x-text="state.tenantId"></span> — method,
+        outcome, and latency, straight from the audit trail.
+      </p>
+    </div>
+    <button type="button" class="btn-secondary" @click="loadTelemetry()">
+      Refresh
+    </button>
+  </div>
+
+  <div class="grid gap-4 md:grid-cols-4">
+    <div class="card">
+      <div class="card-label">Events</div>
+      <div class="card-value" x-text="telemetrySummary().total"></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Success rate</div>
+      <div
+        class="card-value"
+        x-text="telemetrySummary().successRate == null ? '—' : `${telemetrySummary().successRate}%`"
+      ></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Errors</div>
+      <div class="card-value" x-text="telemetrySummary().errors"></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Latency · avg / p95</div>
+      <div
+        class="card-value text-lg"
+        x-text="`${formatMs(telemetrySummary().avg)} / ${formatMs(telemetrySummary().p95)}`"
+      ></div>
+    </div>
+  </div>
+
   <div class="table-wrap">
     <table class="table">
       <thead>
@@ -1690,11 +1898,15 @@
         >
           <tr>
             <td x-text="formatDate(item.timestamp)"></td>
-            <td x-text="item.method"></td>
-            <td x-text="item.status"></td>
-            <td
-              x-text="item.latency_ms == null ? '-' : `${item.latency_ms.toFixed(2)}ms`"
-            ></td>
+            <td><code x-text="item.method"></code></td>
+            <td>
+              <span
+                class="tpill"
+                :class="`tpill-${telemetryStatusKind(item.status)}`"
+                x-text="telemetryStatusLabel(item.status)"
+              ></span>
+            </td>
+            <td x-text="formatMs(item.latency_ms)"></td>
           </tr>
         </template>
       </tbody>
@@ -1779,21 +1991,64 @@
   x-transition:enter-start="view-from"
   x-transition:enter-end="view-to"
 >
+  <div class="studio-hero">
+    <div class="studio-hero-copy">
+      <div class="studio-eyebrow">Embeddings</div>
+      <h2 class="studio-h1">Vector embedding configuration</h2>
+      <p class="studio-lede">
+        Choose a scope to configure. The <strong>platform default</strong>
+        applies to every tenant; a <strong>tenant override</strong> lets one
+        tenant bring its own provider and stop following platform changes.
+      </p>
+    </div>
+  </div>
+
+  <div class="segment-ctrl max-w-xl">
+    <button
+      type="button"
+      class="segment-btn"
+      :class="state.embeddingScope === 'platform' ? 'segment-btn-active' : ''"
+      @click="setEmbeddingScope('platform')"
+    >
+      <span class="segment-emoji" aria-hidden="true">🧠</span>
+      Platform default
+      <span class="segment-tag">All tenants</span>
+    </button>
+    <button
+      type="button"
+      class="segment-btn"
+      :class="state.embeddingScope === 'tenant' ? 'segment-btn-active' : ''"
+      @click="setEmbeddingScope('tenant')"
+    >
+      <span class="segment-emoji" aria-hidden="true">🪪</span>
+      This tenant
+      <span class="segment-tag" x-text="state.tenantId"></span>
+    </button>
+  </div>
+</section>
+
+<section
+  x-show="activeSection === 'embeddings' && state.embeddingScope === 'platform'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
   <div class="flex items-center gap-3 flex-wrap">
-    <h2 class="text-2xl font-semibold">Platform Embeddings</h2>
+    <h3 class="text-lg font-semibold">Platform default</h3>
     <span
       class="inline-flex items-center rounded-full border border-sky-300 bg-sky-50 px-2.5 py-0.5 text-xs font-medium text-sky-700"
     >
-      Default for all tenants
+      Inherited by all tenants
     </span>
   </div>
   <p class="text-sm text-slate-600 max-w-3xl">
     The platform-wide default embedding provider.
     <span class="font-medium">Every tenant inherits this</span> unless it
-    defines its own override under
-    <span class="font-medium">Embeddings&nbsp;·&nbsp;Tenant</span>. Vector width
-    is detected automatically by embedding a probe string. Saving a change
-    re-embeds the tool catalog, semantic cache, and guardrail signatures across
+    defines its own override on the <span class="font-medium">This tenant</span>
+    scope above. Vector width is detected automatically by embedding a probe
+    string. Saving a change re-embeds the tool catalog, semantic cache, and
+    guardrail signatures across
     <span class="font-medium">all inheriting tenants</span> and rebuilds the
     vector indexes.
   </p>
@@ -1971,14 +2226,14 @@
 </section>
 
 <section
-  x-show="activeSection === 'tenantEmbeddings'"
+  x-show="activeSection === 'embeddings' && state.embeddingScope === 'tenant'"
   class="space-y-4"
   x-transition:enter="view-active"
   x-transition:enter-start="view-from"
   x-transition:enter-end="view-to"
 >
   <div class="flex items-center gap-3 flex-wrap">
-    <h2 class="text-2xl font-semibold">Tenant Embeddings</h2>
+    <h3 class="text-lg font-semibold">Tenant override</h3>
     <span
       class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium"
       :class="tenantEmbeddingIsOverride()

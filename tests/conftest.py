@@ -102,6 +102,7 @@ def patch_mongo(monkeypatch, fake_db):
         "services.cache_manager",
         "services.cache_migration",
         "services.proxy_registry",
+        "services.server_exporter",
         "services.hybrid_search",
         "services.telemetry_logger",
         "services.registry_watcher",

@@ -160,6 +160,21 @@ class Settings(BaseSettings):
     sandbox_db_query_timeout_ms: int = 1000
     sandbox_db_max_calls_per_invocation: int = 25
     sandbox_db_max_result_bytes: int = 131072
+    # Enable the tenant-scoped cross-tool call bridge (`context.tools` /
+    # `context.call`) so a code tool can invoke sibling code tools in the same
+    # tenant namespace. Calls are relayed through the host, re-authorized against
+    # the original caller's scopes, restricted to code tools, refuse
+    # confirmation-gated tools (no human in the loop), and are bounded by a
+    # nesting depth + per-invocation call budget. The sandbox stays
+    # network-isolated; only sibling code tools become reachable.
+    sandbox_tool_bridge_enabled: bool = False
+    # Max sibling tool calls a single code-tool invocation may issue.
+    sandbox_tool_max_calls_per_invocation: int = 10
+    # Max nesting depth for cross-tool calls (A->B->C). Bounds recursion + cycles
+    # so a tool that calls itself (directly or transitively) fails closed.
+    sandbox_tool_call_max_depth: int = 3
+    # Per-result size ceiling for a relayed cross-tool call response.
+    sandbox_tool_max_result_bytes: int = 262_144
     # When a request arrives for a tenant that has never been provisioned, create
     # its database + indexes on first use. Disable in environments where tenant
     # ids come from untrusted callers and provisioning must be an explicit step.

@@ -2,6 +2,65 @@
 
 ## Unreleased
 
+### Export a code server as a runnable FastMCP project (`.zip`)
+- Added `GET /admin/servers/{server_name}/export` and an **Export server (.zip)**
+  button in the server editor: download a self-contained
+  [FastMCP](https://github.com/jlowin/fastmcp) project that runs every tool on
+  the server outside the gateway.
+- Reconstructs the sandbox `context` locally so authored code runs **unmodified**:
+  `context.db` (real `pymongo`), `context.env` (per-server), and `context.tools`
+  / `context.call` (in-process sibling calls).
+- **Smart cross-tool bundling:** statically resolves `context.tools` /
+  `context.call` references and bundles the transitive closure of sibling code
+  tools (even across servers in the tenant), wiring them into an in-process
+  registry so `tool_a` calling `tool_b` keeps working. A depth guard
+  (`MCP_TOOL_CALL_MAX_DEPTH`) fails cyclic calls closed.
+- **Secrets are never exported** — only the *names* of `context.env` keys are
+  written to `.env.example` (blank placeholders). The project ships with
+  `server.py`, `requirements.txt` (gateway-pinned `fastmcp`/`pymongo` + each
+  tool's pins), a `mcp_context/` runtime, per-tool modules with the verbatim
+  authored source, a README, and `.gitignore`.
+
+### Cross-tool calls: `context.tools` (tenant-as-namespace)
+- Added `context.tools` / `context.call(...)` so a code tool can invoke sibling
+  code tools in the same tenant namespace
+  (`context.tools.<server>.<tool>(**kwargs)`), composing small tools into
+  workflows without duplicating logic.
+- Relays each call through the host over the existing sandbox bridge (new
+  `tool_rpc` frame kind) — the sandbox stays fully network-isolated.
+- Re-authorizes every relayed call against the **original caller's** scopes,
+  restricts targets to `transport="code"` servers, refuses
+  confirmation-gated tools, and bounds fan-out via nesting depth +
+  per-invocation call budget (cycles/recursion fail closed).
+- Made the executor's concurrency guards re-entrant so a nested sibling call
+  can't deadlock against the per-tenant/global semaphore.
+- Added settings `SANDBOX_TOOL_BRIDGE_ENABLED` (opt-in),
+  `SANDBOX_TOOL_CALL_MAX_DEPTH`, `SANDBOX_TOOL_MAX_CALLS_PER_INVOCATION`,
+  `SANDBOX_TOOL_MAX_RESULT_BYTES`.
+- Seeded an `analytics/track_and_report` demo that composes `track_click` +
+  `get_click_stats` through `context.tools`.
+- Added a **context.tools** tab to the *What is `context`?* guide and a
+  "Callable tools" insert palette (with parameter hints) in the function editor.
+
+### Admin Studio polish and `context` ergonomics
+- Redesigned the sandbox test panel's empty/running states (themed resting card
+  and a busy state) instead of the flat gray placeholder.
+- Renamed the per-server "Workspace" affordance to **Edit** / "Editing server"
+  for a more intuitive mental model.
+- Consolidated the two embeddings nav entries into a single **Embeddings**
+  section with a Platform / This-tenant scope toggle.
+- Reworked Telemetry with summary cards (events, success rate, errors, avg/p95
+  latency) and semantic status pills.
+- Made `context` resource-only: dropped `context.utcnow()` and moved the BSON id
+  helper to `context.db.ObjectId(...)`. Use stdlib `datetime` for timestamps.
+- Added PyMongo-style write results: `insert_one(...).inserted_id`,
+  `update_*` → `matched_count`/`modified_count`/`upserted_id`, `delete_*` →
+  `deleted_count`, plus `.acknowledged` (attribute and dict access).
+- Made function return values BSON-aware: return MongoDB documents, `ObjectId`s,
+  and `datetime`s directly and they serialize to JSON automatically.
+- Added a **What is `context`?** modal in the function editor — a live,
+  copy-paste guide to `context.db`, `context.env`, write results, and types.
+
 ### Server Workspace, Server-Scoped Auth, and Per-Server `context.env`
 - Refactored Admin Studio around a per-MCP-server workspace with tabs for Tools,
   Search, Explore DB, and Secrets. Search and Explore flows now run within the

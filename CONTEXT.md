@@ -9,11 +9,14 @@ Your function runs in a wasm sandbox and can use:
 - Python builtins + standard library (subject to sandbox lint policy)
 - `context` runtime helper object
 
-Key runtime helpers:
+`context` exposes exactly three resources — nothing else lives on it:
 
-- `context.db` for tenant-scoped database access (host-relayed, no DB creds in sandbox)
-- `context.env` for per-server encrypted environment values
-- `context.ObjectId(...)` and `context.utcnow()` for BSON/time helpers
+- `context.db` — tenant-scoped database access (host-relayed, no DB creds in sandbox)
+- `context.env` — per-server encrypted environment values
+- `context.tools` — call sibling tools in your tenant namespace (host-relayed, re-authorized)
+
+For BSON ids, use `context.db.ObjectId("...")` (it belongs to the database). For
+timestamps, use the standard library: `from datetime import datetime, timezone`.
 
 No legacy `secrets` argument or `SECRETS` global is injected.
 
@@ -46,6 +49,24 @@ def get_active_user(email: str) -> dict:
     return {"user": doc}
 ```
 
+### Write results (PyMongo-style)
+
+Write operations return a result object with both attribute and dict access:
+
+| Operation | Fields |
+| --- | --- |
+| `insert_one` | `.inserted_id` |
+| `insert_many` | `.inserted_ids` |
+| `update_one` / `update_many` | `.matched_count`, `.modified_count`, `.upserted_id` |
+| `delete_one` / `delete_many` | `.deleted_count` |
+| all | `.acknowledged` |
+
+```python
+def add(target: str) -> dict:
+    result = context.db.clicks.insert_one({"target": target})
+    return {"click_id": result.inserted_id}  # ObjectId is auto-serialized
+```
+
 ## `context.env` Virtual Environment
 
 Each MCP server can define encrypted env values from Admin Studio (Secrets tab).
@@ -57,6 +78,73 @@ def current_label() -> dict:
 ```
 
 Values are encrypted at rest and never returned by admin APIs after write.
+
+## `context.tools` — Calling Other Tools
+
+Your tenant is a **namespace**: it holds servers, and each server holds one or
+more tools. `context.tools` lets one tool call another, so you can compose small
+single-purpose tools into a workflow instead of duplicating logic.
+
+```python
+context.tools["<server>"]["<tool>"](**kwargs)   # works for any name
+context.tools.<server>.<tool>(**kwargs)          # attribute style (no hyphens)
+context.call("<server>", "<tool>", **kwargs)     # explicit, naming-agnostic
+```
+
+Pass arguments **by keyword** (they map to the target function's parameters).
+The return value is exactly what the other tool returns (BSON-aware, JSON-safe).
+
+```python
+def track_and_report(target: str, source: str = "web") -> dict:
+    recorded = context.tools.analytics.track_click(target=target, source=source)
+    stats = context.tools.analytics.get_click_stats(limit=5)
+    return {"recorded": recorded, "leaderboard": stats.get("top_targets", [])}
+```
+
+### How it stays safe
+
+Every cross-tool call is relayed to the host and re-checked before it runs:
+
+- **Re-authorized** against *your* caller's scopes — you can only call tools you
+  could already call directly (server scope + tool scopes still apply).
+- **Code tools only.** Sibling must be a `transport="code"` server in the same
+  tenant; proxied/network tools are not reachable (the sandbox stays isolated).
+- **No confirmation-gated tools.** A tool that requires human confirmation
+  cannot be called programmatically.
+- **Bounded.** Nesting depth (`SANDBOX_TOOL_CALL_MAX_DEPTH`) and a per-invocation
+  call budget (`SANDBOX_TOOL_MAX_CALLS_PER_INVOCATION`) prevent runaway or cyclic
+  fan-out — a tool that (transitively) calls itself fails closed at the limit.
+
+A denied call raises a clear error inside your function (`forbidden`,
+`confirmation_required`, `tool_not_callable`, `tool_call_depth_exceeded`, ...),
+which you can catch like any exception.
+
+## Export: run your server outside the gateway
+
+In Admin Studio, **Edit** a `transport="code"` server and click
+**Export server (.zip)** to download a self-contained
+[FastMCP](https://github.com/jlowin/fastmcp) project. It runs the exact source
+you authored, with `context` reconstructed locally:
+
+- `context.db` → a real MongoDB database (`pymongo`); set `MONGODB_URI` /
+  `MONGODB_DB`.
+- `context.env` → process environment values (see `.env.example` — **secrets are
+  never exported**, only key names).
+- `context.tools` / `context.call` → sibling tools resolved **in-process**. The
+  exporter statically follows your `context.tools` references and bundles the
+  whole dependency closure (even tools on other servers in your tenant), so
+  `tool_a` calling `tool_b` keeps working. A depth guard
+  (`MCP_TOOL_CALL_MAX_DEPTH`) fails cyclic calls closed.
+
+```bash
+pip install -r requirements.txt
+cp .env.example .env   # fill in MONGODB_URI + any context.env values
+python server.py       # stdio MCP server (see README.md for HTTP)
+```
+
+Because the runtime mirrors the gateway's return contract (`ObjectId` → string,
+`datetime` → ISO-8601 UTC), a tool's output is identical whether it runs in the
+sandbox or the exported server.
 
 ## Action-Type Security Gating
 
@@ -71,31 +159,42 @@ bridge rejects it.
 
 ## Extended JSON Helpers
 
-The bridge round-trips MongoDB types using Extended JSON.
-
-Helpers available in context:
-
-- `context.ObjectId("...")`
-- `context.utcnow()`
-
-Example:
+The bridge round-trips MongoDB types using Extended JSON automatically. Build
+typed queries with `context.db.ObjectId(...)`; native `datetime` values are
+serialized for you.
 
 ```python
 def by_id(user_id: str) -> dict:
-    return context.db.users.find_one({"_id": context.ObjectId(user_id)}) or {}
+    return context.db.users.find_one({"_id": context.db.ObjectId(user_id)}) or {}
 ```
+
+### BSON-aware return values
+
+You can return MongoDB documents, `ObjectId`s, and `datetime` values straight
+out of your function — the sandbox serializes them to JSON for you (`ObjectId`
+→ string, `datetime` → ISO-8601 UTC). No manual `str(...)` conversion needed.
+
+> In Admin Studio, the **What is `context`?** button (in the function editor)
+> opens a live, copy-paste guide to everything above.
 
 ## Click Tracker Example (`context.db` + `context.env`)
 
 ```python
+from datetime import datetime, timezone
+
+
 def track_click(target: str, source: str = "web") -> dict:
     item = (target or "").strip()
     if not item:
         raise ValueError("target is required")
     label = context.env.get("CLICK_LABEL", "anonymous")
-    created_at = context.utcnow()
     context.db.clicks.insert_one(
-        {"target": item, "source": (source or "web").strip() or "web", "label": label, "created_at": created_at}
+        {
+            "target": item,
+            "source": (source or "web").strip() or "web",
+            "label": label,
+            "created_at": datetime.now(timezone.utc),
+        }
     )
     total = context.db.clicks.count_documents({"target": item})
     return {"target": item, "count": int(total), "label": label}
@@ -117,11 +216,16 @@ This is the fastest way to discover query shape while authoring tools.
 - The sandbox is network-isolated.
 - DB operations are relayed through the host process and scoped to your tenant.
 - Bridge behavior is controlled by `SANDBOX_DB_BRIDGE_ENABLED` (enabled in local dev examples, opt-in for production).
-- Limits are controlled by:
+- DB limits are controlled by:
   - `SANDBOX_DB_MAX_DOCS`
   - `SANDBOX_DB_QUERY_TIMEOUT_MS`
   - `SANDBOX_DB_MAX_CALLS_PER_INVOCATION`
   - `SANDBOX_DB_MAX_RESULT_BYTES`
+- Cross-tool calling (`context.tools`) is controlled by:
+  - `SANDBOX_TOOL_BRIDGE_ENABLED` (opt-in, off by default)
+  - `SANDBOX_TOOL_CALL_MAX_DEPTH`
+  - `SANDBOX_TOOL_MAX_CALLS_PER_INVOCATION`
+  - `SANDBOX_TOOL_MAX_RESULT_BYTES`
 
 ## Authoring Checklist
 

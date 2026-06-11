@@ -8,18 +8,20 @@ import re
 import sys
 import tempfile
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Protocol
 
 from config.settings import Settings, get_settings
 from services.sandbox_db_bridge import SandboxDbBridge
 from services.sandbox_errors import (
+    BRIDGE_RPC_FRAME_TYPES,
     SandboxError,
     SandboxProtocolError,
     SandboxTimeoutError,
 )
+from services.sandbox_tool_bridge import SandboxToolBridge, ToolInvoker
 
 __all__ = [
     "ExecRequest",
@@ -56,6 +58,16 @@ class ExecRequest:
     env: dict[str, str]
     action_type: str = "read"
     limits: SandboxLimits | None = None
+    # Host-side callback the cross-tool bridge uses to run a sibling tool. When
+    # None (the default), ``context.tools`` is disabled for this run. Never
+    # serialized into the worker job; it stays in-process on the host.
+    tool_invoker: ToolInvoker | None = None
+    # Nesting depth of this run within a cross-tool call chain. 0 is a direct
+    # caller-initiated invocation; >0 is a sibling call relayed by the bridge.
+    # Nested runs skip the concurrency guards the originating run already holds
+    # (the originating run accounts for the slot), so a re-entrant call cannot
+    # deadlock against the per-tenant/global semaphore.
+    call_depth: int = 0
 
 
 @dataclass(frozen=True)
@@ -83,14 +95,17 @@ class WasmExecutor:
         self._global_semaphore = asyncio.Semaphore(global_limit) if global_limit > 0 else None
 
     @contextlib.asynccontextmanager
-    async def _global_guard(self) -> AsyncIterator[None]:
+    async def _global_guard(self, request: ExecRequest | None = None) -> AsyncIterator[None]:
         """Bound total concurrent sandbox executions across all tenants.
 
         Acquired OUTSIDE the per-tenant semaphore so the global ceiling caps the
         aggregate host load (workers + temp dirs + pip), not just per-tenant
-        fan-out. A no-op when ``sandbox_max_global_concurrency`` is 0.
+        fan-out. A no-op when ``sandbox_max_global_concurrency`` is 0, and a
+        no-op for a nested (re-entrant) sibling call -- the originating run
+        already holds the slot, so re-acquiring here would deadlock at limit 1.
         """
-        if self._global_semaphore is None:
+        nested = request is not None and request.call_depth > 0
+        if nested or self._global_semaphore is None:
             yield
             return
         async with self._global_semaphore:
@@ -108,10 +123,13 @@ class WasmExecutor:
         worker_timeout_ms = self._worker_timeout_ms(
             wall_timeout_ms=limits.wall_timeout_ms,
             db_bridge_enabled=self._db_bridge_enabled(),
+            tool_bridge_enabled=self._tool_bridge_enabled(request),
         )
-        dispatch = self._db_dispatcher(request)
-        async with self._global_guard():
-            semaphore = await self._tenant_semaphore(request.tenant_id)
+        dispatch = self._bridge_dispatcher(request)
+        async with self._global_guard(request):
+            semaphore = await self._tenant_semaphore(
+                request.tenant_id, nested=request.call_depth > 0
+            )
             async with semaphore:
                 with tempfile.TemporaryDirectory(prefix="mcp-sbx-") as temp_dir:
                     temp_path = Path(temp_dir)
@@ -187,26 +205,92 @@ class WasmExecutor:
     def _db_bridge_enabled(self) -> bool:
         return bool(self.settings.sandbox_db_bridge_enabled)
 
-    def _worker_timeout_ms(self, *, wall_timeout_ms: int, db_bridge_enabled: bool) -> int:
-        timeout_ms = max(1, int(wall_timeout_ms))
-        if not db_bridge_enabled:
-            return timeout_ms
-        max_calls = max(0, int(self.settings.sandbox_db_max_calls_per_invocation))
-        per_call = max(0, int(self.settings.sandbox_db_query_timeout_ms))
-        # Allow host-side DB RPC latency without treating it as guest compute time.
-        return timeout_ms + (max_calls * per_call)
+    def _tool_bridge_enabled(self, request: ExecRequest) -> bool:
+        # The cross-tool bridge only activates when the operator enables it AND
+        # the caller supplied an invoker (the host-side, authorized re-entry
+        # point). A run without an invoker can never reach a sibling tool.
+        return bool(self.settings.sandbox_tool_bridge_enabled) and request.tool_invoker is not None
 
-    def _db_dispatcher(
+    def _worker_timeout_ms(
+        self,
+        *,
+        wall_timeout_ms: int,
+        db_bridge_enabled: bool,
+        tool_bridge_enabled: bool = False,
+    ) -> int:
+        timeout_ms = max(1, int(wall_timeout_ms))
+        if db_bridge_enabled:
+            max_calls = max(0, int(self.settings.sandbox_db_max_calls_per_invocation))
+            per_call = max(0, int(self.settings.sandbox_db_query_timeout_ms))
+            # Allow host-side DB RPC latency without treating it as guest compute time.
+            timeout_ms += max_calls * per_call
+        if tool_bridge_enabled:
+            # A sibling tool runs in its own sandbox; give the blocked parent
+            # guest headroom for that nested latency. The real ceiling on the
+            # whole chain stays the caller's asyncio.wait_for over the run.
+            timeout_ms += max(1, int(wall_timeout_ms))
+        return timeout_ms
+
+    def _bridge_dispatcher(
         self, request: ExecRequest
     ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None:
-        if not self._db_bridge_enabled():
+        """Build the single host-side handler the worker pump relays frames to.
+
+        Routes each mid-execution frame to the matching bridge by ``type`` so a
+        DB RPC and a cross-tool RPC share one channel. Returns None when neither
+        bridge is active for this run (the pump then treats any bridge frame as
+        a protocol breach).
+        """
+        db_enabled = self._db_bridge_enabled()
+        tool_enabled = self._tool_bridge_enabled(request)
+        if not db_enabled and not tool_enabled:
             return None
-        bridge = SandboxDbBridge(
-            tenant_id=request.tenant_id,
-            action_type=request.action_type,
-            settings=self.settings,
+
+        db_bridge = (
+            SandboxDbBridge(
+                tenant_id=request.tenant_id,
+                action_type=request.action_type,
+                settings=self.settings,
+            )
+            if db_enabled
+            else None
         )
-        return bridge.handle
+        tool_bridge = (
+            SandboxToolBridge(
+                tenant_id=request.tenant_id,
+                invoker=request.tool_invoker,
+                settings=self.settings,
+            )
+            if tool_enabled and request.tool_invoker is not None
+            else None
+        )
+
+        async def _dispatch(frame: dict[str, Any]) -> dict[str, Any]:
+            if frame.get("type") == "tool_rpc":
+                if tool_bridge is None:
+                    return {
+                        "type": "tool_rpc_result",
+                        "id": frame.get("id"),
+                        "ok": False,
+                        "error": {
+                            "type": "tool_rpc_error",
+                            "message": "Cross-tool bridge is disabled for this run.",
+                        },
+                    }
+                return await tool_bridge.handle(frame)
+            if db_bridge is None:
+                return {
+                    "type": "db_rpc_result",
+                    "id": frame.get("id"),
+                    "ok": False,
+                    "error": {
+                        "type": "db_rpc_error",
+                        "message": "DB bridge is disabled for this run.",
+                    },
+                }
+            return await db_bridge.handle(frame)
+
+        return _dispatch
 
     async def _pump_worker_frames(
         self,
@@ -230,15 +314,25 @@ class WasmExecutor:
                 raise SandboxProtocolError("Sandbox worker returned a malformed frame.") from exc
             if not isinstance(frame, dict):
                 raise SandboxProtocolError("Sandbox worker frame was not a JSON object.")
-            if frame.get("type") != "db_rpc":
+            if frame.get("type") not in BRIDGE_RPC_FRAME_TYPES:
                 return frame
             if dispatch is None:
-                raise SandboxProtocolError("Sandbox worker requested DB RPC when bridge is disabled.")
+                raise SandboxProtocolError(
+                    "Sandbox worker requested a host bridge call when no bridge is enabled."
+                )
             response = await dispatch(frame)
             writer.write((json.dumps(response) + "\n").encode("utf-8"))
             await writer.drain()
 
-    async def _tenant_semaphore(self, tenant_id: str) -> asyncio.Semaphore:
+    async def _tenant_semaphore(
+        self, tenant_id: str, *, nested: bool = False
+    ) -> asyncio.Semaphore:
+        if nested:
+            # A re-entrant sibling call must not contend on (and stall behind)
+            # the per-tenant slot the originating run already holds. A fresh,
+            # uncontended semaphore keeps the `async with` shape without gating;
+            # depth + per-invocation call budgets bound the real fan-out.
+            return asyncio.Semaphore(1)
         async with self._tenant_limits_lock:
             semaphore = self._tenant_limits.get(tenant_id)
             if semaphore is None:
@@ -284,9 +378,11 @@ class WasmExecutor:
             "env": request.env,
             "action_type": request.action_type,
             "db_bridge": self._db_bridge_enabled(),
+            "tool_bridge": self._tool_bridge_enabled(request),
             "db_rpc_wait_ms": self._worker_timeout_ms(
                 wall_timeout_ms=limits.wall_timeout_ms,
                 db_bridge_enabled=self._db_bridge_enabled(),
+                tool_bridge_enabled=self._tool_bridge_enabled(request),
             ),
             "limits": self._limits_payload(limits),
         }
@@ -461,10 +557,13 @@ class PooledWasmExecutor(WasmExecutor):
         worker_timeout_ms = self._worker_timeout_ms(
             wall_timeout_ms=limits.wall_timeout_ms,
             db_bridge_enabled=self._db_bridge_enabled(),
+            tool_bridge_enabled=self._tool_bridge_enabled(request),
         )
-        dispatch = self._db_dispatcher(request)
-        async with self._global_guard():
-            semaphore = await self._tenant_semaphore(request.tenant_id)
+        dispatch = self._bridge_dispatcher(request)
+        async with self._global_guard(request):
+            semaphore = await self._tenant_semaphore(
+                request.tenant_id, nested=request.call_depth > 0
+            )
             async with semaphore:
                 with tempfile.TemporaryDirectory(prefix="mcp-sbx-") as temp_dir:
                     temp_path = Path(temp_dir)

@@ -10,9 +10,9 @@ from models.admin import (
     AdminSearchRequest,
     CacheMigrateRequest,
     CodeToolTestRequest,
+    EgressAllowlistUpdateRequest,
     ExploreQueryRequest,
     ExploreSampleRequest,
-    EgressAllowlistUpdateRequest,
     QuotaUpdateRequest,
     ServerEnvUpdateRequest,
     ServerPatchRequest,
@@ -212,6 +212,82 @@ async def test_patch_and_delete_server(patch_mongo, monkeypatch):
 
     deleted = await admin.delete_server(req, "orders", tenant_id=None)
     assert deleted["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_export_server_returns_zip_attachment(patch_mongo, monkeypatch):
+    import io
+    import zipfile
+
+    import gateway.routers.admin as admin
+    from services import server_exporter
+
+    async def _identity(_tenant, stored, *_a, **_k):
+        return stored or ""
+
+    monkeypatch.setattr(server_exporter, "decrypt_raw_code", _identity)
+
+    get_tenant_database("local-dev")["routing_registry"].docs.append(
+        {
+            "_id": "utilities",
+            "tenant_id": "local-dev",
+            "server": "utilities",
+            "transport": "code",
+            "enabled": True,
+            "metadata": {},
+            "tools": [
+                {
+                    "name": "echo",
+                    "description": "echo text",
+                    "raw_code": "def echo(text: str) -> dict:\n    return {'text': text}\n",
+                    "requirements": [],
+                    "metadata": {"action_type": "read"},
+                    "input_schema": {},
+                    "scopes": [],
+                }
+            ],
+        }
+    )
+
+    req = _Req(roles=[admin.settings.platform_admin_role])
+    response = await admin.export_server(req, "utilities", tenant_id=None)
+    assert response.media_type == "application/zip"
+    assert response.headers["content-disposition"] == 'attachment; filename="utilities-mcp.zip"'
+
+    with zipfile.ZipFile(io.BytesIO(response.body)) as zf:
+        names = set(zf.namelist())
+    assert "utilities-mcp/server.py" in names
+    assert "utilities-mcp/tools/utilities/echo.py" in names
+
+
+@pytest.mark.asyncio
+async def test_export_non_code_server_returns_400(patch_mongo):
+    import gateway.routers.admin as admin
+
+    get_tenant_database("local-dev")["routing_registry"].docs.append(
+        {
+            "_id": "weather",
+            "tenant_id": "local-dev",
+            "server": "weather",
+            "transport": "streamable_http",
+            "endpoint": "http://weather:8101/mcp",
+            "tools": [],
+        }
+    )
+    req = _Req(roles=[admin.settings.platform_admin_role])
+    with pytest.raises(HTTPException) as excinfo:
+        await admin.export_server(req, "weather", tenant_id=None)
+    assert excinfo.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_export_missing_server_returns_404(patch_mongo):
+    import gateway.routers.admin as admin
+
+    req = _Req(roles=[admin.settings.platform_admin_role])
+    with pytest.raises(HTTPException) as excinfo:
+        await admin.export_server(req, "ghost", tenant_id=None)
+    assert excinfo.value.status_code == 404
 
 
 @pytest.mark.asyncio

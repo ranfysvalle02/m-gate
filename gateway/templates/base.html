@@ -479,6 +479,259 @@
           </div>
         </div>
       </div>
+
+      <!-- ============================ The magic of context ===================== -->
+      <div
+        class="modal-overlay"
+        x-show="state.contextHelpOpen"
+        x-cloak
+        @click.self="closeContextHelp()"
+        @keydown.escape.window="closeContextHelp()"
+        x-transition:enter="modal-overlay-enter-active"
+        x-transition:enter-start="modal-overlay-enter-from"
+        x-transition:enter-end="modal-overlay-enter-to"
+        x-transition:leave="modal-overlay-leave-active"
+        x-transition:leave-start="modal-overlay-leave-from"
+        x-transition:leave-end="modal-overlay-leave-to"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="context-modal-title"
+      >
+        <div
+          class="modal-card"
+          x-show="state.contextHelpOpen"
+          x-transition:enter="modal-card-enter-active"
+          x-transition:enter-start="modal-card-enter-from"
+          x-transition:enter-end="modal-card-enter-to"
+        >
+          <div class="modal-header">
+            <div>
+              <div class="modal-eyebrow">Runtime guide</div>
+              <h2 class="modal-title" id="context-modal-title">
+                The magic of <code>context</code>
+              </h2>
+              <p class="modal-subtitle">
+                Every code tool runs in a network-isolated wasm sandbox — yet
+                gets a tenant-scoped database and encrypted secrets through one
+                tiny object. No credentials, no connection strings, no sockets.
+              </p>
+            </div>
+            <button type="button" class="modal-close" @click="closeContextHelp()" title="Close (Esc)" aria-label="Close">✕</button>
+          </div>
+
+          <div class="modal-tabs" role="tablist">
+            <button type="button" class="modal-tab" :class="state.contextHelpTab === 'overview' ? 'modal-tab-active' : ''" @click="state.contextHelpTab = 'overview'">🪄 Overview</button>
+            <button type="button" class="modal-tab" :class="state.contextHelpTab === 'db' ? 'modal-tab-active' : ''" @click="state.contextHelpTab = 'db'">🗄️ context.db</button>
+            <button type="button" class="modal-tab" :class="state.contextHelpTab === 'env' ? 'modal-tab-active' : ''" @click="state.contextHelpTab = 'env'">🔐 context.env</button>
+            <button type="button" class="modal-tab" :class="state.contextHelpTab === 'tools' ? 'modal-tab-active' : ''" @click="state.contextHelpTab = 'tools'">🧩 context.tools</button>
+            <button type="button" class="modal-tab" :class="state.contextHelpTab === 'results' ? 'modal-tab-active' : ''" @click="state.contextHelpTab = 'results'">✅ Results &amp; types</button>
+          </div>
+
+          <div class="modal-body">
+            <!-- TAB: Overview -->
+            <div x-show="state.contextHelpTab === 'overview'">
+              <div class="tldr">
+                <span aria-hidden="true">💡</span>
+                <span><strong>In one line:</strong> <code>context</code> hands your function three superpowers — <code>context.db</code>, <code>context.env</code>, and <code>context.tools</code> — with zero credentials and zero network access.</span>
+              </div>
+
+              <div class="ctx-grid">
+                <div class="ctx-card">
+                  <div class="ctx-card-icon">🗄️</div>
+                  <div class="ctx-card-title"><code>context.db</code></div>
+                  <p>Tenant-scoped MongoDB. Every read/write is relayed through the host, isolated to your tenant, and gated by the tool's <code>action_type</code>.</p>
+                </div>
+                <div class="ctx-card">
+                  <div class="ctx-card-icon">🔐</div>
+                  <div class="ctx-card-title"><code>context.env</code></div>
+                  <p>Per-server encrypted secrets. Set them in <strong>Edit → Secrets</strong>; read them with <code>context.env.get(...)</code>. Never logged, never in process env.</p>
+                </div>
+                <div class="ctx-card">
+                  <div class="ctx-card-icon">🧩</div>
+                  <div class="ctx-card-title"><code>context.tools</code></div>
+                  <p>Call sibling tools in your tenant namespace: <code>context.tools.&lt;server&gt;.&lt;tool&gt;(...)</code>. Re-authorized against you, code-only, depth-bounded.</p>
+                </div>
+              </div>
+
+              <h4>Why it's safe</h4>
+              <ul>
+                <li><strong>No secrets in code</strong> — the sandbox never sees a connection string or API key.</li>
+                <li><strong>No network</strong> — the wasm jail has no sockets; the host performs every DB op on your behalf.</li>
+                <li><strong>Scoped &amp; gated</strong> — a <code>read</code> tool literally cannot call <code>insert_one</code>; the host rejects it.</li>
+                <li><strong>BSON-aware</strong> — return MongoDB documents, <code>ObjectId</code>s, and <code>datetime</code>s directly and they serialize to JSON for you.</li>
+              </ul>
+
+              <h4>Take it with you</h4>
+              <p>Use <strong>Export server (.zip)</strong> (in the server editor) to download a runnable FastMCP project with every tool wired up — <code>context</code> is reconstructed locally, and <code>context.tools</code> calls between your tools keep working. Secrets are never exported.</p>
+
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">The whole surface, at a glance</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'context overview')">Copy</button>
+                </div>
+                <pre>context.db["collection"]              # or context.db.collection
+context.db.ObjectId("656f...")        # build a BSON id for a query
+context.env.get("API_KEY", "")        # per-server encrypted secret
+context.tools.billing.charge(amount=5)  # call a sibling tool</pre>
+              </div>
+            </div>
+
+            <!-- TAB: context.db -->
+            <div x-show="state.contextHelpTab === 'db'">
+              <div class="tldr">
+                <span aria-hidden="true">💡</span>
+                <span>Use it like a PyMongo collection. Reads return plain dicts/lists; <code>find()</code> is capped by <code>SANDBOX_DB_MAX_DOCS</code>.</span>
+              </div>
+
+              <h4>Read</h4>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">find_one + ObjectId</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'find_one example')">Copy</button>
+                </div>
+                <pre>def by_id(user_id: str) -> dict:
+    # context.db.ObjectId builds the BSON id — it lives on the db
+    return context.db.users.find_one({"_id": context.db.ObjectId(user_id)}) or {}</pre>
+              </div>
+
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">aggregate (top targets)</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'aggregate example')">Copy</button>
+                </div>
+                <pre>def top_targets(limit: int = 5) -> dict:
+    rows = context.db.clicks.aggregate([
+        {"$group": {"_id": "$target", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": max(1, min(int(limit), 25))},
+    ])
+    return {"top": [{"target": r["_id"], "count": r["count"]} for r in rows]}</pre>
+              </div>
+
+              <h4>Available operations</h4>
+              <ul>
+                <li><strong>read</strong>: <code>find_one</code>, <code>find</code>, <code>aggregate</code>, <code>count_documents</code>, <code>distinct</code></li>
+                <li><strong>write</strong>: the above plus <code>insert_one</code>, <code>insert_many</code>, <code>update_one</code>, <code>update_many</code></li>
+                <li><strong>destructive</strong>: the above plus <code>delete_one</code>, <code>delete_many</code></li>
+              </ul>
+              <p>Your tool's <strong>action type</strong> decides which of these the host will run — anything outside the tier is rejected before it touches the database.</p>
+            </div>
+
+            <!-- TAB: context.env -->
+            <div x-show="state.contextHelpTab === 'env'">
+              <div class="tldr">
+                <span aria-hidden="true">💡</span>
+                <span>Each MCP server has its own encrypted <code>.env</code>. Values are written once in the UI and only ever decrypted into the sandbox at runtime.</span>
+              </div>
+
+              <h4>Read a secret</h4>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">context.env</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'env example')">Copy</button>
+                </div>
+                <pre>def current_label() -> dict:
+    # falls back to a default when the key isn't configured
+    return {"label": context.env.get("CLICK_LABEL", "anonymous")}</pre>
+              </div>
+
+              <h4>Set a value</h4>
+              <ol>
+                <li>Open the server with <strong>Edit</strong>, then the <strong>Secrets</strong> tab.</li>
+                <li>Add a <code>KEY</code> / value pair and save.</li>
+                <li>Read it anywhere in that server's tools via <code>context.env["KEY"]</code>.</li>
+              </ol>
+              <p>Values are encrypted at rest, scoped to the server, and <strong>never returned</strong> by the admin API after they're written.</p>
+            </div>
+
+            <!-- TAB: context.tools -->
+            <div x-show="state.contextHelpTab === 'tools'">
+              <div class="tldr">
+                <span aria-hidden="true">💡</span>
+                <span>Your tenant is a <strong>namespace</strong> of servers, each with tools. <code>context.tools</code> lets one tool call another — compose small tools into a workflow instead of duplicating logic.</span>
+              </div>
+
+              <h4>Call a sibling tool</h4>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">namespace → server → tool</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'context.tools example')">Copy</button>
+                </div>
+                <pre>def track_and_report(target: str, source: str = "web") -> dict:
+    # Each call is relayed to the host, re-authorized, and run in its own sandbox.
+    recorded = context.tools.analytics.track_click(target=target, source=source)
+    stats = context.tools.analytics.get_click_stats(limit=5)
+    return {"recorded": recorded, "leaderboard": stats.get("top_targets", [])}</pre>
+              </div>
+
+              <h4>Three equivalent forms</h4>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">pick whichever reads best</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'context.tools forms')">Copy</button>
+                </div>
+                <pre>context.tools.analytics.track_click(target="home")     # attribute style
+context.tools["my-funcs"]["track-click"](target="home")  # bracket style (hyphens)
+context.call("analytics", "track_click", target="home")  # explicit</pre>
+              </div>
+              <p>Pass arguments <strong>by keyword</strong> — they map to the target function's parameters. The return value is exactly what the other tool returns (BSON-aware, JSON-safe).</p>
+
+              <h4>How it stays safe</h4>
+              <ul>
+                <li><strong>Re-authorized as you</strong> — the call uses your scopes, so you can only reach tools you could already call directly.</li>
+                <li><strong>Code tools only</strong> — siblings must be <code>transport="code"</code> in the same tenant; network/proxied tools stay unreachable.</li>
+                <li><strong>No confirmation-gated tools</strong> — anything that needs a human approval can't be triggered programmatically.</li>
+                <li><strong>Bounded</strong> — depth + per-run call budgets stop runaway or cyclic fan-out; a tool that calls itself fails closed.</li>
+              </ul>
+              <p>A blocked call raises a clear error you can <code>try/except</code> (<code>forbidden</code>, <code>confirmation_required</code>, <code>tool_not_callable</code>, <code>tool_call_depth_exceeded</code>, …). Enable with <code>SANDBOX_TOOL_BRIDGE_ENABLED</code>.</p>
+            </div>
+
+            <!-- TAB: Results & types -->
+            <div x-show="state.contextHelpTab === 'results'">
+              <div class="tldr">
+                <span aria-hidden="true">💡</span>
+                <span><strong>The clever part:</strong> writes return PyMongo-style result objects, and you can return raw BSON types straight out of your function.</span>
+              </div>
+
+              <h4>Write results</h4>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">insert → .inserted_id</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'inserted_id example')">Copy</button>
+                </div>
+                <pre>def track_click(target: str) -> dict:
+    result = context.db.clicks.insert_one({"target": target})
+    # ObjectId is auto-serialized to a string in the response
+    return {"click_id": result.inserted_id}</pre>
+              </div>
+
+              <p>Every write returns a result object with attribute <em>and</em> dict access:</p>
+              <ul>
+                <li><code>insert_one</code> → <code>.inserted_id</code></li>
+                <li><code>insert_many</code> → <code>.inserted_ids</code></li>
+                <li><code>update_one</code> / <code>update_many</code> → <code>.matched_count</code>, <code>.modified_count</code>, <code>.upserted_id</code></li>
+                <li><code>delete_one</code> / <code>delete_many</code> → <code>.deleted_count</code></li>
+                <li>all of them → <code>.acknowledged</code></li>
+              </ul>
+
+              <h4>Return Mongo types directly</h4>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">BSON-aware serialization</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'serialization example')">Copy</button>
+                </div>
+                <pre>from datetime import datetime, timezone
+
+def latest(user_id: str) -> dict:
+    doc = context.db.users.find_one({"_id": context.db.ObjectId(user_id)})
+    # _id (ObjectId) and any datetime fields serialize cleanly — no manual str() needed
+    return {"user": doc, "checked_at": datetime.now(timezone.utc)}</pre>
+              </div>
+              <p><code>ObjectId</code> becomes a string and <code>datetime</code> becomes an ISO-8601 UTC timestamp automatically, so you can hand documents straight back to the caller.</p>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </body>
 </html>

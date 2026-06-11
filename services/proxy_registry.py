@@ -13,6 +13,7 @@ from fastmcp.client.transports import SSETransport, StdioTransport, StreamableHt
 
 from config.settings import get_settings
 from database.mongo import get_tenant_database
+from services.authorization import get_authorization_service
 from services.code_tools import decrypt_raw_code
 from services.credential_broker import (
     CallerIdentity,
@@ -31,6 +32,7 @@ from services.sandbox_executor import (
     SandboxTimeoutError,
     get_executor,
 )
+from services.sandbox_tool_bridge import ToolCallDenied, ToolInvoker
 from services.server_guard import assert_mountable
 from services.tracing import set_span_attribute, start_span
 from services.usage_metering import emit_billing_event, record_usage
@@ -233,6 +235,7 @@ class InMemoryFastMCPRegistry:
         *,
         tenant_id: str | None = None,
         caller: CallerIdentity | None = None,
+        call_depth: int = 0,
     ) -> dict[str, Any]:
         resolved_tenant = tenant_id or self.settings.default_tenant_id
         server = self.get_server(server_name, tenant_id=resolved_tenant)
@@ -245,6 +248,8 @@ class InMemoryFastMCPRegistry:
                 server=server,
                 tool_name=tool_name,
                 arguments=arguments,
+                caller=caller,
+                call_depth=call_depth,
             )
         attempts = 3
         timeout_seconds = self.settings.downstream_timeout_ms / 1000
@@ -284,12 +289,94 @@ class InMemoryFastMCPRegistry:
                     await asyncio.sleep(0.25 * attempt)
         return {}
 
+    def make_tool_invoker(
+        self,
+        *,
+        tenant_id: str,
+        caller: CallerIdentity | None,
+        call_depth: int,
+    ) -> ToolInvoker | None:
+        """Build the host-side callback that runs a sibling code tool.
+
+        Returns None (cross-tool calls disabled for the run) unless the operator
+        enabled the bridge, an authenticated caller is present, and there is at
+        least one more level of nesting budget left. Every relayed call is
+        re-authorized against the ORIGINAL caller's scopes/roles, refuses
+        confirmation-gated tools (no human in the loop), and is restricted to
+        code servers in the same tenant -- the sandbox never gains network reach.
+        """
+        if not self.settings.sandbox_tool_bridge_enabled:
+            return None
+        if caller is None:
+            return None
+        max_depth = max(0, int(self.settings.sandbox_tool_call_max_depth))
+        if call_depth >= max_depth:
+            return None
+
+        next_depth = call_depth + 1
+        caller_scopes = [scope for scope in (getattr(caller, "scopes", None) or []) if scope]
+        caller_roles = [role for role in (getattr(caller, "roles", None) or []) if role]
+
+        async def _invoke(target_server: str, target_tool: str, target_args: dict[str, Any]) -> Any:
+            authz = await get_authorization_service().authorize_tool_call(
+                tenant_id=tenant_id,
+                server=target_server,
+                name=target_tool,
+                caller_scopes=caller_scopes,
+                caller_roles=caller_roles,
+            )
+            if not authz.allowed:
+                raise ToolCallDenied(
+                    "forbidden",
+                    f"Not authorized to call {target_server}/{target_tool} ({authz.reason}).",
+                )
+            tool_meta = (
+                (authz.tool or {}).get("metadata", {}) if isinstance(authz.tool, dict) else {}
+            )
+            if bool(tool_meta.get("requires_confirmation")):
+                raise ToolCallDenied(
+                    "confirmation_required",
+                    f"{target_server}/{target_tool} requires human confirmation and "
+                    "cannot be called from another tool.",
+                )
+            target = self.get_server(target_server, tenant_id=tenant_id)
+            if target is None:
+                raise ToolCallDenied(
+                    "tool_not_found",
+                    f"Server '{target_server}' is not mounted for this tenant.",
+                )
+            if target.transport != "code":
+                raise ToolCallDenied(
+                    "tool_not_callable",
+                    f"'{target_server}' is not a code server; only code tools can be "
+                    "invoked through context.tools.",
+                )
+            try:
+                return await self.call_tool(
+                    target_server,
+                    target_tool,
+                    target_args,
+                    tenant_id=tenant_id,
+                    caller=caller,
+                    call_depth=next_depth,
+                )
+            except (DownstreamTimeout, SandboxTimeoutError) as exc:
+                raise ToolCallDenied("tool_timeout", str(exc)) from exc
+            except KeyError as exc:
+                raise ToolCallDenied("tool_not_found", str(exc)) from exc
+            except DownstreamError as exc:
+                raise ToolCallDenied("tool_error", str(exc)) from exc
+
+        return _invoke
+
     async def _execute_code_tool(
         self,
         *,
         server: DownstreamServer,
         tool_name: str,
         arguments: dict[str, Any],
+        caller: CallerIdentity | None = None,
+        call_depth: int = 0,
     ) -> dict[str, Any]:
         if not self.settings.code_tool_execution_enabled:
             raise DownstreamProtocolError("Code tool execution is disabled.")
@@ -322,6 +409,11 @@ class InMemoryFastMCPRegistry:
         ]
         metadata = tool_doc.get("metadata") if isinstance(tool_doc.get("metadata"), dict) else {}
         env = await self._read_server_env(server.tenant_id, server.server)
+        tool_invoker = self.make_tool_invoker(
+            tenant_id=server.tenant_id,
+            caller=caller,
+            call_depth=call_depth,
+        )
         request = ExecRequest(
             tenant_id=server.tenant_id,
             server=server.server,
@@ -331,6 +423,8 @@ class InMemoryFastMCPRegistry:
             arguments=arguments,
             env=env,
             action_type=str(metadata.get("action_type") or "read"),
+            tool_invoker=tool_invoker,
+            call_depth=call_depth,
         )
         timeout_seconds = self.settings.sandbox_wall_timeout_ms / 1000
         try:

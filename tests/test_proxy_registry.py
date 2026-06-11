@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from services.code_tools import encrypt_raw_code
-from services.credential_broker import MintedCredential
+from services.credential_broker import CallerIdentity, MintedCredential
 from services.proxy_registry import (
     DownstreamError,
     DownstreamProtocolError,
@@ -13,6 +13,7 @@ from services.proxy_registry import (
     InMemoryFastMCPRegistry,
 )
 from services.sandbox_executor import ExecResult
+from services.sandbox_tool_bridge import ToolCallDenied
 from services.server_guard import StdioNotAllowed
 
 
@@ -603,3 +604,160 @@ async def test_aclose_closes_all_pooled_clients(monkeypatch):
     await registry.aclose()
     assert registry._clients == {}
     assert client.closes >= 1
+
+
+# ---- cross-tool bridge invoker (context.tools) ------------------------------
+
+
+def _enable_tool_bridge(registry, **overrides):
+    s = registry.settings
+    object.__setattr__(s, "sandbox_tool_bridge_enabled", True)
+    for key, value in overrides.items():
+        object.__setattr__(s, key, value)
+    return s
+
+
+def _caller(scopes, roles=None):
+    return CallerIdentity(user_id="u1", scopes=list(scopes), roles=list(roles or []))
+
+
+@pytest.mark.asyncio
+async def test_make_tool_invoker_disabled_when_flag_off():
+    registry = InMemoryFastMCPRegistry()
+    object.__setattr__(registry.settings, "sandbox_tool_bridge_enabled", False)
+    assert (
+        registry.make_tool_invoker(
+            tenant_id="local-dev", caller=_caller(["server:*"]), call_depth=0
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_make_tool_invoker_disabled_without_caller():
+    registry = InMemoryFastMCPRegistry()
+    _enable_tool_bridge(registry)
+    assert registry.make_tool_invoker(tenant_id="local-dev", caller=None, call_depth=0) is None
+
+
+@pytest.mark.asyncio
+async def test_make_tool_invoker_none_at_max_depth():
+    registry = InMemoryFastMCPRegistry()
+    _enable_tool_bridge(registry, sandbox_tool_call_max_depth=2)
+    caller = _caller(["server:*"])
+    assert registry.make_tool_invoker(tenant_id="local-dev", caller=caller, call_depth=2) is None
+    assert (
+        registry.make_tool_invoker(tenant_id="local-dev", caller=caller, call_depth=1) is not None
+    )
+
+
+@pytest.mark.asyncio
+async def test_invoker_denies_when_scope_missing(patch_mongo):
+    from database.mongo import get_tenant_database
+
+    registry = InMemoryFastMCPRegistry()
+    _enable_tool_bridge(registry)
+    db = get_tenant_database("local-dev")
+    db["tool_catalog"].docs.append(
+        {"server": "a", "name": "t", "scopes": ["analytics:write"], "metadata": {}}
+    )
+    registry._servers[("local-dev", "a")] = DownstreamServer(
+        tenant_id="local-dev", server="a", transport="code"
+    )
+    inv = registry.make_tool_invoker(
+        tenant_id="local-dev", caller=_caller(["server:a"]), call_depth=0
+    )
+    with pytest.raises(ToolCallDenied) as excinfo:
+        await inv("a", "t", {})
+    assert excinfo.value.kind == "forbidden"
+
+
+@pytest.mark.asyncio
+async def test_invoker_rejects_confirmation_gated_tool(patch_mongo):
+    from database.mongo import get_tenant_database
+
+    registry = InMemoryFastMCPRegistry()
+    _enable_tool_bridge(registry)
+    db = get_tenant_database("local-dev")
+    db["tool_catalog"].docs.append(
+        {"server": "a", "name": "t", "scopes": [], "metadata": {"requires_confirmation": True}}
+    )
+    registry._servers[("local-dev", "a")] = DownstreamServer(
+        tenant_id="local-dev", server="a", transport="code"
+    )
+    inv = registry.make_tool_invoker(
+        tenant_id="local-dev", caller=_caller(["server:*"]), call_depth=0
+    )
+    with pytest.raises(ToolCallDenied) as excinfo:
+        await inv("a", "t", {})
+    assert excinfo.value.kind == "confirmation_required"
+
+
+@pytest.mark.asyncio
+async def test_invoker_rejects_non_code_target(patch_mongo):
+    from database.mongo import get_tenant_database
+
+    registry = InMemoryFastMCPRegistry()
+    _enable_tool_bridge(registry)
+    db = get_tenant_database("local-dev")
+    db["tool_catalog"].docs.append({"server": "a", "name": "t", "scopes": [], "metadata": {}})
+    registry._servers[("local-dev", "a")] = DownstreamServer(
+        tenant_id="local-dev",
+        server="a",
+        transport="streamable_http",
+        endpoint="http://a:8101/mcp",
+    )
+    inv = registry.make_tool_invoker(
+        tenant_id="local-dev", caller=_caller(["server:*"]), call_depth=0
+    )
+    with pytest.raises(ToolCallDenied) as excinfo:
+        await inv("a", "t", {})
+    assert excinfo.value.kind == "tool_not_callable"
+
+
+@pytest.mark.asyncio
+async def test_invoker_executes_sibling_code_tool_at_next_depth(patch_mongo):
+    from database.mongo import get_tenant_database
+
+    class _Executor:
+        def __init__(self):
+            self.captured = None
+
+        async def run(self, request):
+            self.captured = request
+            return ExecResult(
+                payload={"ok": True, "depth": request.call_depth},
+                stdout="",
+                stderr="",
+                elapsed_ms=1,
+            )
+
+    executor = _Executor()
+    registry = InMemoryFastMCPRegistry(executor=executor)
+    _enable_tool_bridge(registry, code_tool_execution_enabled=True)
+    db = get_tenant_database("local-dev")
+    db["tool_catalog"].docs.append(
+        {"server": "a", "name": "t", "scopes": [], "metadata": {"action_type": "read"}}
+    )
+    encrypted = await encrypt_raw_code("local-dev", "def t():\n    return {}\n")
+    db["routing_registry"].docs.append(
+        {
+            "_id": "a",
+            "tenant_id": "local-dev",
+            "server": "a",
+            "transport": "code",
+            "tools": [{"name": "t", "raw_code": encrypted, "requirements": []}],
+        }
+    )
+    registry._servers[("local-dev", "a")] = DownstreamServer(
+        tenant_id="local-dev", server="a", transport="code"
+    )
+    inv = registry.make_tool_invoker(
+        tenant_id="local-dev", caller=_caller(["server:*"]), call_depth=0
+    )
+    result = await inv("a", "t", {"k": 1})
+    assert result == {"ok": True, "depth": 1}
+    assert executor.captured.call_depth == 1
+    assert executor.captured.arguments == {"k": 1}
+    # The sibling run also carries an invoker so it can fan out one level deeper.
+    assert executor.captured.tool_invoker is not None

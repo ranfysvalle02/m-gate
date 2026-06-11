@@ -196,22 +196,30 @@ _UTIL_REGEX_EXTRACT_CODE = """def regex_extract(text: str, pattern: str, max_mat
     return {"count": len(matches), "matches": matches, "source": "sandbox-code"}
 """
 
-_ANALYTICS_TRACK_CLICK_CODE = """def track_click(target: str, source: str = "web") -> dict:
+_ANALYTICS_TRACK_CLICK_CODE = """from datetime import datetime, timezone
+
+
+def track_click(target: str, source: str = "web") -> dict:
     item = (target or "").strip()
     if not item:
         raise ValueError("target is required")
     actor = context.env.get("CLICK_LABEL", "anonymous")
-    stamp = context.utcnow()
-    context.db.clicks.insert_one(
+    result = context.db.clicks.insert_one(
         {
             "target": item,
             "source": (source or "web").strip() or "web",
             "label": actor,
-            "created_at": stamp,
+            "created_at": datetime.now(timezone.utc),
         }
     )
     total = context.db.clicks.count_documents({"target": item})
-    return {"target": item, "count": int(total), "label": actor, "source": "sandbox-code"}
+    return {
+        "target": item,
+        "count": int(total),
+        "label": actor,
+        "click_id": result.inserted_id,
+        "source": "sandbox-code",
+    }
 """
 
 _ANALYTICS_GET_STATS_CODE = """def get_click_stats(limit: int = 5) -> dict:
@@ -225,6 +233,19 @@ _ANALYTICS_GET_STATS_CODE = """def get_click_stats(limit: int = 5) -> dict:
     )
     top = [{"target": row.get("_id"), "count": row.get("count", 0)} for row in rows]
     return {"top_targets": top, "source": "sandbox-code"}
+"""
+
+_ANALYTICS_TRACK_AND_REPORT_CODE = """def track_and_report(target: str, source: str = "web") -> dict:
+    # The tenant is a namespace: context.tools[<server>][<tool>](**kwargs) calls a
+    # sibling tool. Each hop is re-authorized against the caller and runs in its
+    # own sandbox, so this one tool composes a write + a read with no glue code.
+    recorded = context.tools.analytics.track_click(target=target, source=source)
+    stats = context.tools.analytics.get_click_stats(limit=5)
+    return {
+        "recorded": recorded,
+        "leaderboard": stats.get("top_targets", []),
+        "source": "sandbox-code",
+    }
 """
 
 
@@ -608,6 +629,31 @@ def routing_registry_seed(tenant_id: str | None = None) -> list[dict]:
                     "input_schema": {
                         "type": "object",
                         "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 25}},
+                    },
+                },
+                {
+                    "server": "analytics",
+                    "name": "track_and_report",
+                    "description": (
+                        "Cross-tool demo: records a click via track_click and returns the "
+                        "leaderboard from get_click_stats, all through context.tools."
+                    ),
+                    "scopes": ["analytics", "server:analytics"],
+                    "raw_code": _ANALYTICS_TRACK_AND_REPORT_CODE,
+                    "requirements": [],
+                    "metadata": {
+                        "cacheable": False,
+                        "cache_ttl_seconds": 0,
+                        "invalidates": ["get_click_stats"],
+                        "action_type": "write",
+                    },
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "target": {"type": "string"},
+                            "source": {"type": "string"},
+                        },
+                        "required": ["target"],
                     },
                 },
             ],

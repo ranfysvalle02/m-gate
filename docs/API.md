@@ -85,6 +85,15 @@ require the `platform-admin` role.
   - `GET /admin/servers/{server_name}`
   - `PATCH /admin/servers/{server_name}`
   - `DELETE /admin/servers/{server_name}`
+  - `GET /admin/servers/{server_name}/export` — download the code server as a
+    self-contained, runnable FastMCP project (`application/zip`). Bundles every
+    tool plus the transitive closure of sibling code tools they call via
+    `context.tools`/`context.call`, reconstructs `context` locally
+    (`context.db` via `pymongo`, `context.env`, in-process `context.tools`), and
+    pins `fastmcp`/`pymongo` + each tool's requirements. Secrets are never
+    exported — only `context.env` key *names* land in `.env.example`. Response
+    headers include `X-Export-Tool-Count` and `X-Export-Servers`. Tenant-admin
+    gated; platform-admin may target any tenant via `tenant_id`.
   - `GET /admin/servers/{server_name}/env` — list configured per-server env keys
     for code-tool sandbox execution (values are always redacted; optional `tenant_id` query).
   - `PUT /admin/servers/{server_name}/env` — upsert per-server encrypted env
@@ -227,6 +236,12 @@ For `transport="code"` catalog entries:
   action type (`read`/`write`/`destructive`).
 - Per-server encrypted env values are injected into sandboxed code as
   `context.env["KEY"]` / `context.env.get("KEY")`.
+- When `SANDBOX_TOOL_BRIDGE_ENABLED=true`, code tools can call sibling code
+  tools in the same tenant via `context.tools[<server>][<tool>](**kwargs)` /
+  `context.call(<server>, <tool>, **kwargs)`. Each relayed call is
+  re-authorized against the original caller's scopes, restricted to
+  `transport="code"` servers, refuses confirmation-gated tools, and is bounded
+  by `SANDBOX_TOOL_CALL_MAX_DEPTH` + `SANDBOX_TOOL_MAX_CALLS_PER_INVOCATION`.
 - For any tool call, tenant quota is enforced in-band. When exceeded, `tools/call`
   returns JSON-RPC `RATE_LIMITED` (`-32029`) with
   `{"reason":"quota_exceeded","usage":...,"quota":...}`.
