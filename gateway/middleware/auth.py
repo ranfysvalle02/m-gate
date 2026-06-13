@@ -241,8 +241,8 @@ class AuthMiddleware:
                 request.state.roles = self._normalize_roles(claims.get("roles"))
                 claim_scopes = claims.get("groups") or claims.get("scopes") or []
                 request.state.scopes = self._normalize_scopes(claim_scopes)
-                roles = set(request.state.roles)
-                if "admin" in roles or self.settings.platform_admin_role in roles:
+                role_set = set(request.state.roles)
+                if "admin" in role_set or self.settings.platform_admin_role in role_set:
                     request.state.is_admin_principal = True
             except Exception as exc:
                 response = self._auth_failure_response(exc, request)
@@ -264,10 +264,7 @@ class AuthMiddleware:
     @staticmethod
     def _is_mcp_path(path: str) -> bool:
         return (
-            path == "/rpc"
-            or path.startswith("/rpc/")
-            or path == "/mcp"
-            or path.startswith("/mcp/")
+            path == "/rpc" or path.startswith("/rpc/") or path == "/mcp" or path.startswith("/mcp/")
         )
 
     @staticmethod

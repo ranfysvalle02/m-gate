@@ -216,7 +216,9 @@ async def test_protected_resource_metadata_present_under_jwks(reset_settings, mo
     monkeypatch.setenv("AUTH_MODE", "jwks")
     monkeypatch.setenv("JWT_ISSUER", "https://idp.example.com")
     monkeypatch.setenv("JWT_AUDIENCE", "mcp-gateway")
-    response = await protected_resource_metadata(_request("GET", "/.well-known/oauth-protected-resource"))
+    response = await protected_resource_metadata(
+        _request("GET", "/.well-known/oauth-protected-resource")
+    )
     assert response.status_code == 200
     data = _body(response)
     assert data["authorization_servers"] == ["https://idp.example.com"]
@@ -228,7 +230,9 @@ async def test_protected_resource_metadata_present_under_jwks(reset_settings, mo
 async def test_protected_resource_metadata_404_when_disabled(reset_settings, monkeypatch):
     monkeypatch.setenv("AUTH_MODE", "disabled")
     monkeypatch.setenv("OAUTH_METADATA_ENABLED", "false")
-    response = await protected_resource_metadata(_request("GET", "/.well-known/oauth-protected-resource"))
+    response = await protected_resource_metadata(
+        _request("GET", "/.well-known/oauth-protected-resource")
+    )
     assert response.status_code == 404
 
 
