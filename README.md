@@ -189,7 +189,8 @@ This repository now includes a working end-to-end MCP Gateway with:
 - **GA-safe hybrid fallback**: application-side RRF keeps hybrid retrieval working when `$rankFusion` preview features are unavailable
 - **Resiliency**: a hard downstream deadline (`DOWNSTREAM_TIMEOUT_MS`, default 2000ms) with protocol-safe JSON-RPC error frames
 - **Active-active-safe registry watching**: each gateway replica persists its own change-stream resume token (`routing_registry::<instance_id>`) so pods do not overwrite each other's stream position
-- **JIT downstream credentials**: every `tools/call` mints a short-lived RS256 bearer JWT (tenant-scoped workload identity) and rotates pooled downstream clients when a token nears expiry
+- **Downstream auth, kept minimal**: per-server `metadata.auth.scheme` is gateway-minted workload JWT (default) or `none` (the downstream/tenant owns its own auth); credentials rotate/reconnect through the existing warm-client cache path
+- **Inbound MCP-client auth**: username/password via `POST /auth/token` (OAuth2 password grant) plus optional HTTP Basic on the MCP surface; full OAuth is bring-your-own-IdP via `AUTH_MODE=jwks` with RFC 9728 resource-metadata discovery
 - **Queryable Encryption for downstream secrets**: `routing_registry.env` / `command` / `args` / `metadata` can be encrypted at rest with DEKs in `encryption.__keyVault`, backed by LocalStack AWS KMS (default Compose) or a local 96-byte master key
 - **Embedding resiliency**: retries + circuit breaker + lexical fallback when embedding providers are unavailable
 - **Pluggable, admin-configurable embeddings**: Ollama, OpenAI, Azure OpenAI, Voyage AI, and Google Gemini — switchable at runtime from the admin panel, with vector width auto-detected per provider (see [Embeddings](#embeddings))
@@ -603,33 +604,70 @@ boundary burst). Tune it with `RATE_LIMIT_WINDOW_SECONDS` and `RATE_LIMIT_MAX_RE
 replicas from clobbering each other's stream position. Resume-token docs are TTL'd by
 `WATCHER_RESUME_TTL_SECONDS`, so stale pod IDs self-clean.
 
-### JIT downstream JWT brokering
+### Downstream auth brokering
 
-The gateway never hands a long-lived secret to a downstream MCP server. Instead it
-mints a short-lived RS256 JWT — a **tenant-scoped workload identity** asserting "the
-gateway, acting for this tenant, is calling this server" (claims: `iss`, `aud`, `sub =
-tenant:<id>:gateway`, `tenant_id`, `iat`, `exp`, `jti`) — and injects it into
-downstream transports:
+The gateway brokers only a **workload identity** to third-party downstream servers,
+selected per server via `metadata.auth.scheme`:
 
-- HTTP/SSE: `Authorization: Bearer <token>`
-- stdio: `MCP_DOWNSTREAM_TOKEN=<token>` in child env
+- `jwt` (default): gateway-minted short-lived RS256 workload identity (`iss`, `aud`,
+  `sub=tenant:<id>:gateway`, `tenant_id`, `iat`, `exp`, `jti`)
+- `none`: no injected transport credential — the **downstream service or the tenant**
+  presents its own authentication (vendor API key, basic auth, OAuth, mTLS, ...)
 
-The token is deliberately caller-independent: a single warm client is pooled per
-`(tenant, server)` and shared across every caller, so embedding volatile per-caller
-claims would be wrong for all but the first caller. End-user authorization is already
-enforced upstream by `AuthorizationService` before the call is made, and the caller is
-recorded on the `downstream.jsonrpc` span (`mcp.actor`) for audit/trace.
+Third-party credentials (API keys, passwords, OAuth client secrets) are intentionally
+**not** brokered per-server by the gateway; they belong to the downstream/tenant. When a
+downstream needs its own credential, set `scheme=none` and terminate that auth downstream
+(or in front of it). For a code (`transport=code`) server's own logic, per-server secrets
+remain available via `context.env` (`PUT /admin/servers/{server}/env`).
 
-The broker (`services/credential_broker.py`) caches tokens per `(tenant, server)` until
-they enter the refresh-skew window; the proxy pool checks the same skew on the warm-hit
-path and evicts/reconnects with a freshly minted token only when a (re)connect is
-actually needed, so steady-state calls never contend on the broker. Tokens are never
-logged. Configure via `DOWNSTREAM_JWT_*` and `DOWNSTREAM_TOKEN_*` settings; the bundled
-dev key is rejected in `ENVIRONMENT=production` so it can never sign real traffic.
+The broker (`services/credential_broker.py`) caches credentials per `(tenant, server)`,
+and the warm client pool reconnects only when a cached credential is near expiry. `jwt`
+keeps TTL + refresh-skew rotation; `none` uses a long-lived cache entry.
 
-For downstream HTTP/SSE integrations (for example `deepwiki`), bearer verification
-is configured per target server and can be tightened with `DOWNSTREAM_JWT_*`
-settings (issuer, audience, JWKS/private-key inputs).
+Security defaults:
+
+- Credential material is never logged.
+- The `jwt` bearer is refused on plaintext `http://` downstream endpoints unless
+  `DOWNSTREAM_ALLOW_INSECURE_CREDENTIALS=true`.
+- In production, the bundled dev JWT signing key remains rejected; configure your own
+  `DOWNSTREAM_JWT_PRIVATE_KEY(_FILE)`.
+
+Quick metadata snippets:
+
+- Gateway workload identity (default)
+  ```json
+  { "auth": { "scheme": "jwt", "audience": "downstream-service" } }
+  ```
+- Downstream owns its own auth
+  ```json
+  { "auth": { "scheme": "none" } }
+  ```
+
+### Inbound MCP-client auth (username/password + OAuth)
+
+MCP clients connecting to the gateway's own surface (`/rpc`, `/mcp`) can authenticate with
+a username/password in addition to the bearer/JWT flows (`AUTH_MODE=hs256|jwks`):
+
+- `POST /auth/token` — OAuth2 password grant. Exchanges username + password (the same
+  managed users + bootstrap admin used by the console login) for a short-lived bearer:
+  ```bash
+  curl -X POST http://localhost:8000/auth/token \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d 'grant_type=password&username=$EMAIL&password=$PASSWORD'
+  # -> {"access_token":"...","token_type":"bearer","expires_in":28800}
+  # then call /rpc or /mcp with: Authorization: Bearer <access_token>
+  ```
+- Optional HTTP Basic directly on `/rpc`/`/mcp` via `MCP_BASIC_AUTH_ENABLED=true`.
+- **OAuth is bring-your-own-IdP**: run the gateway as a resource server with
+  `AUTH_MODE=jwks`; spec-compliant MCP clients discover the issuer via
+  `GET /.well-known/oauth-protected-resource` (RFC 9728), advertised when `AUTH_MODE=jwks`
+  or `OAUTH_METADATA_ENABLED=true`.
+
+Authorization is unchanged: `/rpc` still requires the principal to carry `admin` or
+`tool:invoke`.
+
+See [`AUTH.md`](AUTH.md) for the complete authentication & authorization reference
+(inbound pipeline, RBAC, downstream credential brokering, settings, and recipes).
 
 ### From the blog post to this repo
 

@@ -9,12 +9,27 @@ import json
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from starlette.requests import Request
 
 from gateway.middleware.auth import (
     AuthMiddleware,
     JWKSKeyResolver,
     JWKSUnavailableError,
 )
+
+
+def _dummy_request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/rpc",
+            "headers": [],
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "query_string": b"",
+        }
+    )
 
 # --------------------------------------------------------------------------
 # Normalization helpers (pure)
@@ -268,10 +283,11 @@ def test_classify_auth_failure_buckets():
 
 def test_auth_failure_response_maps_idp_outage_to_503_and_token_error_to_401():
     mw = AuthMiddleware(lambda *a: None)
+    request = _dummy_request()
     # A server-side IdP outage is retryable -> 503, not a credential rejection.
-    assert mw._auth_failure_response(JWKSUnavailableError("down")).status_code == 503
+    assert mw._auth_failure_response(JWKSUnavailableError("down"), request).status_code == 503
     # A genuinely bad token stays an opaque 401.
-    assert mw._auth_failure_response(jwt.ExpiredSignatureError()).status_code == 401
+    assert mw._auth_failure_response(jwt.ExpiredSignatureError(), request).status_code == 401
 
 
 def test_auth_failure_response_emits_metric(monkeypatch):
@@ -281,7 +297,7 @@ def test_auth_failure_response_emits_metric(monkeypatch):
     monkeypatch.setattr(auth_mod, "observe_auth_failure", recorded.append)
 
     mw = AuthMiddleware(lambda *a: None)
-    mw._auth_failure_response(jwt.ExpiredSignatureError())
+    mw._auth_failure_response(jwt.ExpiredSignatureError(), _dummy_request())
     assert recorded == ["expired"]
 
 

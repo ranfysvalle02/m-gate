@@ -828,6 +828,12 @@
           x-model="forms.server.metadata"
           placeholder='{"domain":"custom"}'
         />
+        <p class="mt-2 text-xs text-slate-500">
+          Third-party downstream servers use <code>metadata.auth.scheme</code> of
+          <code>jwt</code> (default; gateway workload identity) or <code>none</code>
+          (the downstream or tenant presents its own credential). For
+          credentialed HTTP/SSE targets, use <code>https://</code> endpoints.
+        </p>
       </div>
     </div>
 
@@ -2604,8 +2610,10 @@
           </template>
           <template x-if="authModeLabel() !== 'disabled'">
             <span
-              >Use a bearer token with <code>tenant_id</code>,
-              <code>roles:["tool:invoke"]</code>, and scopes/groups.</span
+              >Get a bearer from <code>POST /auth/token</code>
+              (username/password), or bring your own JWT with
+              <code>tenant_id</code>, <code>roles:["tool:invoke"]</code>, and
+              scopes/groups.</span
             >
           </template>
         </span>
@@ -2626,7 +2634,39 @@
         <pre x-text="rpcEndpoint()"></pre>
       </div>
 
-      <h4>2) Call the gateway</h4>
+      <template x-if="authModeLabel() !== 'disabled'">
+        <div class="space-y-3">
+          <h4>2) Get a token</h4>
+          <div class="code-block">
+            <div class="code-head">
+              <span class="code-cap">Username/password (OAuth2 password grant)</span>
+              <button
+                type="button"
+                class="code-copy"
+                @click="copyText(passwordTokenCommand(), 'token request')"
+              >
+                Copy
+              </button>
+            </div>
+            <pre x-text="passwordTokenCommand()"></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-head">
+              <span class="code-cap">Or mint a local dev token</span>
+              <button
+                type="button"
+                class="code-copy"
+                @click="copyText(tokenMintCommand(), 'mint token command')"
+              >
+                Copy
+              </button>
+            </div>
+            <pre x-text="tokenMintCommand()"></pre>
+          </div>
+        </div>
+      </template>
+
+      <h4 x-text="authModeLabel() === 'disabled' ? '2) Call the gateway' : '3) Call the gateway'"></h4>
       <div class="code-block">
         <div class="code-head">
           <span class="code-cap">curl sample</span>
@@ -2641,23 +2681,7 @@
         <pre x-text="rpcCurlSample()"></pre>
       </div>
 
-      <template x-if="authModeLabel() !== 'disabled'">
-        <div class="code-block">
-          <div class="code-head">
-            <span class="code-cap">Mint a local dev token</span>
-            <button
-              type="button"
-              class="code-copy"
-              @click="copyText(tokenMintCommand(), 'mint token command')"
-            >
-              Copy
-            </button>
-          </div>
-          <pre x-text="tokenMintCommand()"></pre>
-        </div>
-      </template>
-
-      <h4>3) MCP client configuration</h4>
+      <h4 x-text="authModeLabel() === 'disabled' ? '3) MCP client configuration' : '4) MCP client configuration'"></h4>
       <div class="code-block">
         <div class="code-head">
           <span class="code-cap">Client snippet</span>
@@ -2672,7 +2696,9 @@
         <pre x-text="mcpClientSnippet()"></pre>
       </div>
 
-      <h4>4) Egress allowlist (security guardrail)</h4>
+      <h4
+        x-text="authModeLabel() === 'disabled' ? '4) Egress allowlist (security guardrail)' : '5) Egress allowlist (security guardrail)'"
+      ></h4>
       <p>
         Limit outbound connections for this tenant to approved domains/IPs. One
         entry per line, supports host globs, exact hosts, and CIDRs.

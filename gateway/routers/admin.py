@@ -72,7 +72,7 @@ from services.code_tools import (
     suggest_input_schema,
     validate_code_tool,
 )
-from services.credential_broker import CallerIdentity
+from services.credential_broker import CallerIdentity, resolve_auth_scheme
 from services.egress_policy import EgressNotAllowed, check_endpoint_allowed, parse_allowlist
 from services.embedding_config import (
     EmbeddingConfig,
@@ -188,6 +188,55 @@ def _validate_secret_key(key: str) -> str:
             detail="Secret keys may not contain '.' or start with '$'.",
         )
     return normalized
+
+
+def _requires_secure_credential_transport(server_doc: dict[str, Any], scheme: str) -> bool:
+    if scheme == "none":
+        return False
+    transport = str(server_doc.get("transport") or "")
+    endpoint = server_doc.get("endpoint")
+    return (
+        transport in {"streamable_http", "sse"}
+        and isinstance(endpoint, str)
+        and endpoint.strip().lower().startswith("http://")
+    )
+
+
+async def _validate_server_auth(server_doc: dict[str, Any]) -> None:
+    # Code-backed tools execute in-process sandbox and do not call downstream transports.
+    if str(server_doc.get("transport") or "") == CODE_TRANSPORT:
+        return
+    scheme = resolve_auth_scheme(server_doc.get("metadata"))
+    allowed = {"jwt", "none"}
+    if scheme not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Unsupported metadata.auth.scheme '{scheme}'. Use one of: jwt, none. "
+                "Third-party downstream credentials (API keys, basic auth, OAuth) are owned "
+                "by the downstream service or the tenant, not brokered per-server by the "
+                "gateway; use scheme=none and let the downstream present its own credential."
+            ),
+        )
+    if scheme == "jwt" and not settings.downstream_jwt_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "metadata.auth.scheme=jwt requires DOWNSTREAM_JWT_ENABLED=true. "
+                "Use scheme=none if JWT brokering is disabled."
+            ),
+        )
+    if (
+        _requires_secure_credential_transport(server_doc, scheme)
+        and not settings.downstream_allow_insecure_credentials
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"metadata.auth.scheme={scheme} may not be used with insecure http:// endpoints "
+                "unless DOWNSTREAM_ALLOW_INSECURE_CREDENTIALS=true."
+            ),
+        )
 
 
 async def _require_server_exists(tenant_id: str, server_name: str) -> None:
@@ -774,6 +823,8 @@ async def put_server_env(
         )
     else:
         await collection.delete_one({"_id": server_name})
+    registry = get_proxy_registry()
+    await registry.refresh_server_credentials(server_name, tenant_id=target_tenant)
     return await _server_env_response(target_tenant, server_name)
 
 
@@ -930,6 +981,7 @@ async def create_or_update_server(request: Request, payload: ServerUpsertRequest
     doc = _to_server_doc(payload.model_dump(), tenant_id)
     _validate_server_doc(doc)
     doc = await _apply_server_policy(doc, is_platform_admin=_is_platform_admin(request))
+    await _validate_server_auth(doc)
     doc = await _prepare_code_server(doc, tenant_id)
     collection = get_tenant_database(tenant_id)["routing_registry"]
     await collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
@@ -1231,6 +1283,7 @@ async def patch_server(
             detail="Only platform-admin may modify platform-origin servers.",
         )
     merged = await _apply_server_policy(merged, is_platform_admin=is_platform_admin)
+    await _validate_server_auth(merged)
     merged = await _prepare_code_server(merged, target_tenant)
     await collection.replace_one({"_id": server_name}, merged, upsert=True)
     if merged.get("enabled", True):

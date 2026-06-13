@@ -20,6 +20,7 @@ from gateway.middleware.ratelimit import RateLimitMiddleware
 from gateway.middleware.rbac import RbacMiddleware
 from gateway.middleware.request_context import RequestContextMiddleware
 from gateway.routers.admin import router as admin_router
+from gateway.routers.auth import router as auth_router
 from gateway.routers.health import router as health_router
 from gateway.routers.metrics import router as metrics_router
 from gateway.routers.rpc import router as rpc_router
@@ -46,6 +47,7 @@ _OPENAPI_TAGS = [
     {"name": "health", "description": "Liveness and readiness probes."},
     {"name": "metrics", "description": "Prometheus scrape endpoint."},
     {"name": "rpc", "description": "Gateway JSON-RPC methods under `/rpc`."},
+    {"name": "auth", "description": "Inbound MCP-client auth: token endpoint and OAuth discovery."},
     {"name": "admin", "description": "Control plane and operational admin APIs."},
     {"name": "ui", "description": "Admin UI and login routes."},
 ]
@@ -163,6 +165,7 @@ def create_app() -> FastAPI:
     app.add_middleware(AuthMiddleware)
     app.include_router(health_router)
     app.include_router(metrics_router)
+    app.include_router(auth_router)
     app.include_router(rpc_router)
     app.include_router(admin_router)
     if settings.admin_ui_enabled:

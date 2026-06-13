@@ -83,6 +83,14 @@ class Settings(BaseSettings):
     # instead of waiting for the cache TTL — but no more than once per interval so
     # a flood of bogus `kid`s cannot hammer the IdP.
     jwks_min_refresh_seconds: int = 60
+    # Inbound auth for the gateway's own ("virtual") MCP surface (/rpc, /mcp).
+    # mcp_basic_auth_enabled lets MCP clients send HTTP Basic (username/password)
+    # directly on the MCP surface; otherwise clients exchange credentials for a
+    # bearer at POST /auth/token. oauth_metadata_enabled advertises RFC 9728
+    # OAuth 2.0 Protected Resource Metadata so spec-compliant MCP clients can
+    # discover the configured IdP; it is auto-on under auth_mode=jwks.
+    mcp_basic_auth_enabled: bool = False
+    oauth_metadata_enabled: bool = False
     admin_ui_enabled: bool = True
     admin_ui_path: str = "/ui"
     admin_email: str | None = None
@@ -220,6 +228,7 @@ class Settings(BaseSettings):
     downstream_token_refresh_skew_seconds: int = 15
     downstream_auth_header: str = "Authorization"
     downstream_token_env_var: str = "MCP_DOWNSTREAM_TOKEN"
+    downstream_allow_insecure_credentials: bool = False
 
     enable_metrics: bool = True
     enable_tracing: bool = False

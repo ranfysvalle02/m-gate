@@ -19,6 +19,7 @@ from services.credential_broker import (
     CallerIdentity,
     MintedCredential,
     get_credential_broker,
+    resolve_auth_scheme,
 )
 from services.egress_policy import EgressNotAllowed
 from services.egress_transport import make_egress_client_factory
@@ -149,6 +150,7 @@ class InMemoryFastMCPRegistry:
         # The connection target may have changed; drop any warm client so the next
         # call reconnects against the new transport/endpoint rather than a stale one.
         await self._evict_client((tenant_id, server_name))
+        await self.credential_broker.invalidate(server_name, tenant_id=tenant_id)
         await self.sync_tool_catalog(server_doc)
 
     async def unmount(self, server_name: str, tenant_id: str | None = None) -> None:
@@ -156,12 +158,18 @@ class InMemoryFastMCPRegistry:
         async with self._lock:
             self._servers.pop((resolved_tenant, server_name), None)
         await self._evict_client((resolved_tenant, server_name))
+        await self.credential_broker.invalidate(server_name, tenant_id=resolved_tenant)
         await get_tenant_database(resolved_tenant)["tool_catalog"].delete_many(
             {"server": server_name}
         )
 
     async def unmount_by_id(self, server_name: str, tenant_id: str | None = None) -> None:
         await self.unmount(server_name, tenant_id=tenant_id)
+
+    async def refresh_server_credentials(self, server_name: str, tenant_id: str) -> None:
+        """Drop warm client + cached credential so next call re-authenticates."""
+        await self._evict_client((tenant_id, server_name))
+        await self.credential_broker.invalidate(server_name, tenant_id=tenant_id)
 
     async def sync_tool_catalog(self, server_doc: dict[str, Any]) -> None:
         tenant_id = str(server_doc.get("tenant_id") or self.settings.default_tenant_id)
@@ -264,6 +272,7 @@ class InMemoryFastMCPRegistry:
                 "mcp.actor": caller.user_id if caller else "unknown-user",
                 "downstream.transport": server.transport,
                 "downstream.endpoint": server.endpoint,
+                "downstream.auth_scheme": self._auth_scheme(server.metadata),
                 "downstream.timeout_ms": self.settings.downstream_timeout_ms,
             },
         ) as span:
@@ -476,15 +485,14 @@ class InMemoryFastMCPRegistry:
         if server is None:
             return []
         try:
-            credential = None
-            if self.settings.downstream_jwt_enabled:
-                # Discovery must also present a JIT credential so catalogs can be
-                # synced against JWT-protected downstreams.
-                credential = await self.credential_broker.mint(
-                    server_name=server.server,
-                    tenant_id=server.tenant_id,
-                    metadata=server.metadata,
-                )
+            # Discovery must also present downstream auth so catalogs can be
+            # synced against protected downstream servers.
+            credential = await self.credential_broker.mint(
+                server_name=server.server,
+                tenant_id=server.tenant_id,
+                metadata=server.metadata,
+            )
+            self._assert_credential_transport_security(server=server, credential=credential)
             client = self._build_client(server, credential=credential)
             async with client:
                 tools = await client.list_tools()
@@ -589,6 +597,7 @@ class InMemoryFastMCPRegistry:
                     f"Failed to mint downstream credential for '{target}': {exc}"
                 ) from exc
 
+            self._assert_credential_transport_security(server=server, credential=credential)
             client = self._build_client(server, credential=credential)
             await client.__aenter__()
             self._clients[key] = PooledClient(client=client, credential=credential)
@@ -802,6 +811,31 @@ class InMemoryFastMCPRegistry:
         if server.transport in {"streamable_http", "sse"}:
             return str(server.endpoint)
         return f"{server.command} {' '.join(server.args or [])}".strip()
+
+    @staticmethod
+    def _auth_scheme(metadata: dict[str, Any] | None) -> str:
+        return resolve_auth_scheme(metadata)
+
+    def _assert_credential_transport_security(
+        self, *, server: DownstreamServer, credential: MintedCredential
+    ) -> None:
+        if self.settings.downstream_allow_insecure_credentials:
+            return
+        if server.transport not in {"streamable_http", "sse"}:
+            return
+        endpoint = str(server.endpoint or "").strip().lower()
+        if not endpoint.startswith("http://"):
+            return
+        scheme = self._auth_scheme(server.metadata)
+        # ``none`` intentionally sends no auth material.
+        if scheme == "none":
+            return
+        if not credential.headers and not credential.env:
+            return
+        target = self._target(server)
+        raise DownstreamError(
+            f"Refusing to send downstream '{scheme}' credentials over insecure endpoint '{target}'."
+        )
 
     @staticmethod
     def _schema_hash(

@@ -12,6 +12,26 @@ from services.code_tools import (
     lint_code_tool,
 )
 
+_GATEWAY_DEMO_HELLO_CODE = """def gateway_hello(name: str = "Cursor") -> dict:
+    who = (name or "").strip() or "Cursor"
+    return {
+        "greeting": f"Hello, {who} - you are connected to the MongoDB MCP Gateway.",
+        "you_reached": "mdb-mcp-gateway",
+        "how_it_routed": [
+            "Your MCP client opened ONE connection to the gateway and saw a few meta-tools.",
+            "search_tools matched this tool by meaning via $rankFusion hybrid search on Atlas.",
+            "call_downstream_tool routed the invocation to the 'gateway_demo' virtual server.",
+            "This Python ran inside the gateway's WASM sandbox - no shell, network, or host access.",
+        ],
+        "try_next": [
+            "search_tools(query='current weather for a city')",
+            "call_downstream_tool(server='weather', name='get_current_weather', "
+            "arguments={'city': 'Montreal'})",
+        ],
+        "source": "sandbox-code",
+    }
+"""
+
 _WEATHER_CURRENT_CODE = """def get_current_weather(city: str, unit: str = "celsius") -> dict:
     city_name = (city or "").strip() or "Unknown"
     unit_name = "fahrenheit" if unit == "fahrenheit" else "celsius"
@@ -252,6 +272,43 @@ _ANALYTICS_TRACK_AND_REPORT_CODE = """def track_and_report(target: str, source: 
 def routing_registry_seed(tenant_id: str | None = None) -> list[dict]:
     resolved_tenant = tenant_id or get_settings().default_tenant_id
     return [
+        {
+            "_id": "gateway_demo",
+            "tenant_id": resolved_tenant,
+            "origin": "platform",
+            "server": "gateway_demo",
+            "transport": CODE_TRANSPORT,
+            "endpoint": None,
+            "cwd": None,
+            "enabled": True,
+            "metadata": {"domain": "demo", "runtime": "wasm"},
+            "tools": [
+                {
+                    "server": "gateway_demo",
+                    "name": "gateway_hello",
+                    "description": (
+                        "Smoke-test the gateway end to end. Returns a friendly greeting that "
+                        "confirms your MCP client (for example Cursor) reached the gateway, was "
+                        "routed by hybrid search, and executed code in the WASM sandbox. "
+                        "Read-only and safe; takes an optional name. Great first call to verify a "
+                        "new connection works."
+                    ),
+                    "scopes": ["gateway_demo", "readonly"],
+                    "raw_code": _GATEWAY_DEMO_HELLO_CODE,
+                    "requirements": [],
+                    "metadata": {
+                        "cacheable": True,
+                        "cache_ttl_seconds": 300,
+                        "invalidates": [],
+                        "action_type": "read",
+                    },
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                    },
+                },
+            ],
+        },
         {
             "_id": "weather",
             "tenant_id": resolved_tenant,
@@ -797,6 +854,7 @@ async def seed_bootstrap_data() -> None:
                 "user_id": "admin",
                 "roles": ["admin", "tool:invoke"],
                 "scopes": [
+                    "gateway_demo",
                     "weather",
                     "orders",
                     "utilities",
@@ -804,6 +862,7 @@ async def seed_bootstrap_data() -> None:
                     "analytics",
                     "readonly",
                     "orders:write",
+                    "server:gateway_demo",
                     "server:weather",
                     "server:orders",
                     "server:utilities",

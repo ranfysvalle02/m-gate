@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,20 @@ from services.sandbox_executor import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+def _skip_if_wasm_runtime_unavailable(settings) -> None:
+    """Skip when the wasm runtime is not usable on this host.
+
+    The worker is spawned as a subprocess that imports ``wasmtime`` and loads the
+    pinned ``python.wasm``. If either is missing the worker dies on startup, so
+    the test would otherwise fail (or, for ``pytest.raises(SandboxError)`` cases,
+    *falsely pass* by catching the wrong error) instead of skipping honestly.
+    """
+    if not Path(settings.sandbox_python_wasm_path).exists():
+        pytest.skip("python.wasm is missing; run `make fetch-wasm` first.")
+    if importlib.util.find_spec("wasmtime") is None:
+        pytest.skip("wasmtime is not installed; the sandbox runtime is unavailable.")
 
 
 def _request(
@@ -37,11 +52,7 @@ def _request(
 
 @pytest.fixture
 def sandbox_executor(settings):
-    if not Path(settings.sandbox_python_wasm_path).exists():
-        pytest.skip(
-            "python.wasm is missing; run `make fetch-wasm` first.",
-            allow_module_level=True,
-        )
+    _skip_if_wasm_runtime_unavailable(settings)
     return WasmExecutor(settings=settings, python_bin="python")
 
 
@@ -162,8 +173,7 @@ async def test_wasm_bounds_oversized_result(sandbox_executor):
 
 @pytest.mark.asyncio
 async def test_pooled_worker_survives_output_bomb_then_serves(settings):
-    if not Path(settings.sandbox_python_wasm_path).exists():
-        pytest.skip("python.wasm is missing; run `make fetch-wasm` first.")
+    _skip_if_wasm_runtime_unavailable(settings)
     from services.sandbox_executor import PooledWasmExecutor
 
     pooled_settings = settings.model_copy(update={"sandbox_pool_size": 1})

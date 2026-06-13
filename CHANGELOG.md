@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Inbound MCP-client auth (username/password + OAuth seam)
+- Added `POST /auth/token` — an OAuth2 Resource Owner Password Credentials grant
+  that exchanges a username/password (managed users + bootstrap admin) for a
+  short-lived bearer the gateway already accepts on `/rpc` and `/mcp`. Works in
+  every `AUTH_MODE`.
+- Added optional HTTP Basic on the MCP surface behind `MCP_BASIC_AUTH_ENABLED`
+  (default off); bad Basic credentials return `401` with a `WWW-Authenticate: Basic`
+  challenge.
+- Added an OAuth discovery seam: `GET /.well-known/oauth-protected-resource`
+  (RFC 9728) advertises the configured issuer when `AUTH_MODE=jwks` or
+  `OAUTH_METADATA_ENABLED=true`, and bearer `401`s carry a
+  `WWW-Authenticate: Bearer resource_metadata=...` hint. Full OAuth remains
+  bring-your-own-IdP via `AUTH_MODE=jwks`; the gateway is a resource server, not
+  an authorization server.
+- Extracted the shared `resolve_login_principal` so the admin UI login and the
+  token endpoint authenticate against a single source of truth.
+- Added Admin Studio connect-modal snippet showing the `/auth/token`
+  username/password flow.
+
+### Simplified downstream auth (workload identity only)
+- Reduced downstream credential brokering to a gateway workload identity:
+  `metadata.auth.scheme` is now `jwt` (default) or `none`. Third-party
+  credentials (API keys, basic auth, OAuth client secrets) are intentionally not
+  brokered per-server by the gateway — they are owned by the downstream service
+  or the tenant; use `scheme=none` and terminate that auth downstream.
+- Removed the `basic` / `api_key` strategies, the `oauth2_client_credentials`
+  stub, and the related save-time secret-key / header / stdio validation and
+  Admin Studio metadata snippets / secret-key presets.
+- Kept credential-transport hardening: the `jwt` bearer is refused over plaintext
+  `http://` unless `DOWNSTREAM_ALLOW_INSECURE_CREDENTIALS=true`. Cache
+  invalidation on server update/secret rotation and the `downstream.auth_scheme`
+  span attribute are retained.
+
 ### Export a code server as a runnable FastMCP project (`.zip`)
 - Added `GET /admin/servers/{server_name}/export` and an **Export server (.zip)**
   button in the server editor: download a self-contained

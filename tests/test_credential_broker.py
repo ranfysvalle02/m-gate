@@ -106,6 +106,32 @@ async def test_metadata_audience_override_is_honored(reset_settings):
 
 
 @pytest.mark.asyncio
+async def test_unsupported_scheme_is_rejected(reset_settings):
+    settings = get_settings()
+    broker = _broker(settings)
+    with pytest.raises(ValueError, match="Unsupported downstream auth scheme"):
+        await broker.mint(
+            "weather",
+            tenant_id="tenant-a",
+            metadata={"auth": {"scheme": "basic"}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_none_scheme_returns_empty_credential(reset_settings):
+    settings = get_settings()
+    broker = _broker(settings)
+    credential = await broker.mint(
+        "weather",
+        tenant_id="tenant-a",
+        metadata={"auth": {"scheme": "none"}},
+    )
+    assert credential.headers == {}
+    assert credential.env == {}
+    assert broker.near_expiry(credential) is False
+
+
+@pytest.mark.asyncio
 async def test_near_expiry_reflects_refresh_skew(reset_settings):
     settings = get_settings()
     broker = _broker(
@@ -129,6 +155,19 @@ async def test_mint_fails_when_disabled(reset_settings):
 
 
 @pytest.mark.asyncio
+async def test_non_jwt_schemes_do_not_require_downstream_jwt_enabled(reset_settings):
+    settings = get_settings()
+    object.__setattr__(settings, "downstream_jwt_enabled", False)
+    broker = JwtCredentialBroker(settings=settings)
+    credential = await broker.mint(
+        "orders",
+        tenant_id="tenant-a",
+        metadata={"auth": {"scheme": "none"}},
+    )
+    assert credential.headers == {}
+
+
+@pytest.mark.asyncio
 async def test_mint_fails_without_signing_key(reset_settings):
     settings = get_settings()
     object.__setattr__(settings, "downstream_jwt_private_key", "")
@@ -136,3 +175,16 @@ async def test_mint_fails_without_signing_key(reset_settings):
 
     with pytest.raises(ValueError, match="private key"):
         await broker.mint("orders", tenant_id="tenant-a")
+
+
+@pytest.mark.asyncio
+async def test_invalidate_evicts_targeted_cached_credentials(reset_settings):
+    settings = get_settings()
+    broker = _broker(settings, downstream_token_ttl_seconds=600)
+    first = await broker.mint("orders", tenant_id="tenant-a")
+    same = await broker.mint("orders", tenant_id="tenant-a")
+    assert first.token_id == same.token_id
+
+    await broker.invalidate("orders", tenant_id="tenant-a")
+    refreshed = await broker.mint("orders", tenant_id="tenant-a")
+    assert refreshed.token_id != first.token_id

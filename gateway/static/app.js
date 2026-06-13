@@ -312,6 +312,22 @@ window.adminConsole = function adminConsole(config) {
       return `python -m scripts.mint_token --tenant-id ${tenantId} --groups weather readonly server:weather --roles tool:invoke`;
     },
 
+    tokenEndpoint() {
+      return `${window.location.origin}/auth/token`;
+    },
+
+    passwordTokenCommand() {
+      return [
+        "# Exchange a username/password for a bearer (OAuth2 password grant):",
+        "curl -X POST " + this.tokenEndpoint() + " \\",
+        '  -H "Content-Type: application/x-www-form-urlencoded" \\',
+        "  -d 'grant_type=password&username=$EMAIL&password=$PASSWORD'",
+        "",
+        '# Response: {"access_token":"...","token_type":"bearer","expires_in":...}',
+        "# Then call the gateway with: Authorization: Bearer <access_token>",
+      ].join("\n");
+    },
+
     rpcCurlSample() {
       const tenantId =
         this.state.tenantConnectTenant || this.state.tenantId || "local-dev";
@@ -1677,8 +1693,7 @@ window.adminConsole = function adminConsole(config) {
     },
 
     parseMetadata(raw) {
-      if (!raw || !raw.trim()) return {};
-      return JSON.parse(raw);
+      return this.parseJsonObject(raw, "Metadata");
     },
 
     parseJsonObject(raw, fieldName) {

@@ -311,6 +311,8 @@ Full list with defaults: [`.env.example`](.env.example). The essentials:
 | `CRYPT_SHARED_LIB_PATH` | Path to `mongo_crypt_v1.so` (required when QE is enabled) |
 | `AUTH_MODE` | `disabled` \| `hs256` \| `jwks` |
 | `JWT_SECRET` / `JWT_ISSUER` / `JWT_AUDIENCE` / `JWKS_URI` | Auth config |
+| `MCP_BASIC_AUTH_ENABLED` | Accept HTTP Basic (username/password) on `/rpc` + `/mcp` |
+| `OAUTH_METADATA_ENABLED` | Advertise RFC 9728 resource metadata (auto-on under `jwks`) |
 | `CORS_ALLOW_ORIGINS` | Comma-separated allowed origins (no `*` in prod) |
 | `ADMIN_UI_ENABLED` / `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Admin console |
 | `ADMIN_SESSION_SECRET` | Signs admin session cookies |

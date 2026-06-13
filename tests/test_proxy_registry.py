@@ -105,6 +105,40 @@ async def test_mount_or_update_rejects_tenant_origin_stdio():
 
 
 @pytest.mark.asyncio
+async def test_mount_or_update_invalidates_broker_cache():
+    class _Broker:
+        def __init__(self):
+            self.calls: list[tuple[str, str | None]] = []
+
+        async def mint(self, **_kwargs):
+            return _credential("unused")
+
+        def near_expiry(self, credential, now=None):
+            return False
+
+        async def invalidate(self, server_name, *, tenant_id=None):
+            self.calls.append((server_name, tenant_id))
+
+    broker = _Broker()
+    registry = InMemoryFastMCPRegistry(credential_broker=broker)
+
+    async def _noop_sync(_doc):
+        return None
+
+    registry.sync_tool_catalog = _noop_sync  # type: ignore[method-assign]
+    await registry.mount_or_update(
+        {
+            "tenant_id": "local-dev",
+            "server": "weather",
+            "transport": "streamable_http",
+            "endpoint": "https://weather:8101/mcp",
+            "enabled": True,
+        }
+    )
+    assert broker.calls == [("weather", "local-dev")]
+
+
+@pytest.mark.asyncio
 async def test_build_client_injects_bearer_headers_and_env():
     registry = InMemoryFastMCPRegistry()
     minted = _credential("abc")
@@ -204,6 +238,12 @@ async def test_call_tool_surfaces_broker_mint_failures():
         async def mint(self, **_kwargs):
             raise ValueError("signing key unavailable")
 
+        def near_expiry(self, credential, now=None):
+            return False
+
+        async def invalidate(self, server_name, *, tenant_id=None):
+            return None
+
     registry = InMemoryFastMCPRegistry(credential_broker=_FailingBroker())
     registry._servers[("local-dev", "weather")] = _weather_server()
 
@@ -218,7 +258,7 @@ async def test_call_via_client_maps_timeout_to_downstream_timeout(monkeypatch):
         tenant_id="local-dev",
         server="weather",
         transport="streamable_http",
-        endpoint="http://weather:8101/mcp",
+        endpoint="https://weather:8101/mcp",
     )
 
     class _TimeoutClient:
@@ -246,8 +286,23 @@ def _weather_server() -> DownstreamServer:
         tenant_id="local-dev",
         server="weather",
         transport="streamable_http",
+        endpoint="https://weather:8101/mcp",
+    )
+
+
+@pytest.mark.asyncio
+async def test_connect_rejects_jwt_credential_on_insecure_http_endpoint(reset_settings):
+    # The default `jwt` scheme attaches a Bearer header; sending it over plaintext
+    # http:// must be refused unless DOWNSTREAM_ALLOW_INSECURE_CREDENTIALS=true.
+    registry = InMemoryFastMCPRegistry()
+    server = DownstreamServer(
+        tenant_id="local-dev",
+        server="weather",
+        transport="streamable_http",
         endpoint="http://weather:8101/mcp",
     )
+    with pytest.raises(DownstreamError, match="insecure endpoint"):
+        await registry._get_or_connect_client(("local-dev", "weather"), server)  # noqa: SLF001
 
 
 @pytest.mark.asyncio
@@ -411,11 +466,15 @@ async def test_pool_reconnects_when_credential_near_expiry(monkeypatch):
             self.mint_calls = 0
 
         async def mint(self, server_name, *, tenant_id, metadata=None):
+            del server_name, tenant_id, metadata
             self.mint_calls += 1
             return _credential(f"tok-{self.mint_calls}")
 
         def near_expiry(self, credential, now=None):
             return True
+
+        async def invalidate(self, server_name, *, tenant_id=None):
+            return None
 
     broker = _ExpiringBroker()
     registry = InMemoryFastMCPRegistry(credential_broker=broker)

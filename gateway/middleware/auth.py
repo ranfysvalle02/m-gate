@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import time
@@ -16,6 +18,7 @@ from jwt.algorithms import RSAAlgorithm
 from config.settings import get_settings
 from services.admin_session import ADMIN_SESSION_COOKIE, verify_session
 from services.metrics import observe_auth_failure
+from services.users import resolve_login_principal
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +162,7 @@ class AuthMiddleware:
         )
         request.state.is_admin_principal = False
         request.state.admin_auth_via_cookie = False
+        request.state.authenticated_via_basic = False
 
         admin_claims, via_cookie = self._resolve_admin_session(request)
         if admin_claims is not None:
@@ -175,11 +179,47 @@ class AuthMiddleware:
             request.state.is_admin_principal = self._has_admin_role(session_roles)
             request.state.admin_auth_via_cookie = via_cookie
 
-        if self.settings.auth_mode != "disabled" and not request.state.is_admin_principal:
+        # Optional HTTP Basic on the MCP surface: let an MCP client present
+        # username/password directly instead of exchanging it at /auth/token.
+        # Only meaningful when auth is actually enforced — in disabled mode the
+        # gateway already trusts every caller, so attempting (and possibly
+        # rejecting) Basic there would be contradictory.
+        if (
+            self.settings.auth_mode != "disabled"
+            and not request.state.is_admin_principal
+            and self.settings.mcp_basic_auth_enabled
+            and self._is_mcp_path(request.url.path)
+        ):
+            basic = self._basic_credentials(request)
+            if basic is not None:
+                principal = await resolve_login_principal(basic[0], basic[1])
+                if principal is None:
+                    response = JSONResponse(
+                        status_code=401,
+                        content={"detail": "Invalid username or password."},
+                        headers={"WWW-Authenticate": 'Basic realm="mcp"'},
+                    )
+                    return await response(scope, receive, send)
+                roles = self._normalize_roles(principal.get("roles"))
+                request.state.user_id = str(principal.get("email") or "unknown-user")
+                request.state.tenant_id = str(
+                    principal.get("tenant_id") or self.settings.default_tenant_id
+                )
+                request.state.roles = roles
+                request.state.scopes = []
+                request.state.is_admin_principal = self._has_admin_role(roles)
+                request.state.authenticated_via_basic = True
+
+        if (
+            self.settings.auth_mode != "disabled"
+            and not request.state.is_admin_principal
+            and not request.state.authenticated_via_basic
+        ):
             path = request.url.path
             if (
                 self._is_observability_path(path)
                 or self._is_public_path(path)
+                or self._is_auth_public_path(path)
                 or self._is_ui_path(path)
             ):
                 await self.app(scope, request.receive, send)
@@ -188,7 +228,9 @@ class AuthMiddleware:
             token = self._bearer_token(request)
             if token is None:
                 response = JSONResponse(
-                    status_code=401, content={"detail": "Missing bearer token."}
+                    status_code=401,
+                    content={"detail": "Missing bearer token."},
+                    headers=self._challenge_headers(request),
                 )
                 return await response(scope, receive, send)
 
@@ -203,7 +245,7 @@ class AuthMiddleware:
                 if "admin" in roles or self.settings.platform_admin_role in roles:
                     request.state.is_admin_principal = True
             except Exception as exc:
-                response = self._auth_failure_response(exc)
+                response = self._auth_failure_response(exc, request)
                 return await response(scope, receive, send)
 
         await self.app(scope, request.receive, send)
@@ -218,6 +260,48 @@ class AuthMiddleware:
         if not auth_header.startswith("Bearer "):
             return None
         return auth_header.replace("Bearer ", "", 1)
+
+    @staticmethod
+    def _is_mcp_path(path: str) -> bool:
+        return (
+            path == "/rpc"
+            or path.startswith("/rpc/")
+            or path == "/mcp"
+            or path.startswith("/mcp/")
+        )
+
+    @staticmethod
+    def _basic_credentials(request: Request) -> tuple[str, str] | None:
+        header = request.headers.get("authorization", "")
+        if header[:6].lower() != "basic ":
+            return None
+        try:
+            decoded = base64.b64decode(header[6:].strip(), validate=True).decode("utf-8")
+        except (binascii.Error, ValueError, UnicodeDecodeError):
+            return None
+        if ":" not in decoded:
+            return None
+        username, password = decoded.split(":", 1)
+        return username, password
+
+    def _oauth_metadata_enabled(self) -> bool:
+        return self.settings.oauth_metadata_enabled or self.settings.auth_mode == "jwks"
+
+    def _challenge_headers(self, request: Request) -> dict[str, str]:
+        """RFC 9728 ``WWW-Authenticate`` hint pointing at resource metadata.
+
+        Only emitted when OAuth discovery is advertised, so non-OAuth deployments
+        keep returning a bare 401.
+        """
+        if not self._oauth_metadata_enabled():
+            return {}
+        base = str(request.base_url).rstrip("/")
+        resource_metadata = f"{base}/.well-known/oauth-protected-resource"
+        return {"WWW-Authenticate": f'Bearer resource_metadata="{resource_metadata}"'}
+
+    def _is_auth_public_path(self, path: str) -> bool:
+        """Inbound auth endpoints must be reachable without an existing token."""
+        return path in {"/auth/token", "/.well-known/oauth-protected-resource"}
 
     def _session_roles(self, claims: dict[str, Any]) -> list[str]:
         raw = claims.get("roles")
@@ -275,7 +359,7 @@ class AuthMiddleware:
         ui_path = self.settings.admin_ui_path
         return path == ui_path or path.startswith(f"{ui_path}/")
 
-    def _auth_failure_response(self, exc: Exception) -> JSONResponse:
+    def _auth_failure_response(self, exc: Exception, request: Request) -> JSONResponse:
         """Classify an auth failure for observability, then return a response.
 
         The client-facing body stays deliberately opaque (no leaking of *why* a
@@ -294,7 +378,11 @@ class AuthMiddleware:
                 content={"detail": "Authentication temporarily unavailable."},
             )
         logger.info("Rejected bearer token (%s).", reason)
-        return JSONResponse(status_code=401, content={"detail": "Invalid bearer token."})
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid bearer token."},
+            headers=self._challenge_headers(request),
+        )
 
     @staticmethod
     def _classify_auth_failure(exc: Exception) -> str:

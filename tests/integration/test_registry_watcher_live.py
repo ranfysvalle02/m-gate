@@ -139,15 +139,6 @@ async def test_watcher_mounts_server_on_insert(live_db, watcher_registry, temp_s
     assert watcher_registry.get_server(temp_server) is not None
 
 
-async def test_watcher_initial_sync_includes_seeded_secure_stdio_server(watcher_registry):
-    secure_stdio = watcher_registry.get_server("secure-stdio", tenant_id="local-dev")
-    assert secure_stdio is not None
-    assert secure_stdio.transport == "stdio"
-    assert secure_stdio.command == "python"
-    assert secure_stdio.env is not None
-    assert secure_stdio.env.get("DOWNSTREAM_API_TOKEN") == "demo-secret-token"
-
-
 async def test_watcher_unmounts_server_on_disable(live_db, watcher_registry, temp_server):
     doc = _server_doc(temp_server, enabled=True)
     await _mount_via_watcher(live_db, watcher_registry, doc)

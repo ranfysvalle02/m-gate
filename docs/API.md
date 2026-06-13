@@ -16,6 +16,24 @@ represented in OpenAPI docs.
 - `hs256`: bearer JWT required except public/observability paths.
 - `jwks`: bearer JWT verified via JWKS (remote `JWKS_URI` or local `JWKS_LOCAL_PATH`).
 
+### Inbound MCP-client auth (username/password + OAuth)
+
+MCP clients can authenticate to the gateway surface (`/rpc`, `/mcp`) with a
+username/password, in addition to presenting a pre-issued bearer:
+
+- `POST /auth/token` — OAuth2 Resource Owner Password Credentials grant. Accepts
+  `application/x-www-form-urlencoded` (`grant_type=password`, `username`, `password`) or
+  JSON. Returns `{"access_token","token_type":"bearer","expires_in"}`; send the
+  `access_token` as `Authorization: Bearer <token>`. `400` for a non-password grant or
+  missing fields; `401` for bad credentials. Always reachable (any `AUTH_MODE`).
+- `MCP_BASIC_AUTH_ENABLED=true` lets clients send HTTP Basic directly on `/rpc`/`/mcp`.
+- `GET /.well-known/oauth-protected-resource` — RFC 9728 Protected Resource Metadata
+  describing the configured authorization server. Returned when `AUTH_MODE=jwks` or
+  `OAUTH_METADATA_ENABLED=true`; otherwise `404`. The gateway is an OAuth2/OIDC *resource
+  server* (bring your own IdP) and does not implement an authorization server.
+
+Authorization is unchanged: `/rpc` requires the principal to carry `admin` or `tool:invoke`.
+
 Observability endpoints remain reachable without bearer auth:
 
 - `GET /health`
@@ -95,10 +113,23 @@ require the `platform-admin` role.
     headers include `X-Export-Tool-Count` and `X-Export-Servers`. Tenant-admin
     gated; platform-admin may target any tenant via `tenant_id`.
   - `GET /admin/servers/{server_name}/env` — list configured per-server env keys
-    for code-tool sandbox execution (values are always redacted; optional `tenant_id` query).
+    for code-tool sandbox execution and downstream auth secrets (values are always redacted;
+    optional `tenant_id` query).
   - `PUT /admin/servers/{server_name}/env` — upsert per-server encrypted env
     values (`{"values":{"KEY":"value"}}`, empty string clears a key). Platform-admin
     may target any tenant via `tenant_id`; tenant-admins are scoped to their own tenant.
+  - Downstream auth is configured on each server via `metadata.auth` and is limited to a
+    gateway-brokered workload identity:
+    - `scheme`: `jwt` (default) or `none`
+    - `jwt`: optional `audience`
+    - `none`: the downstream service or the tenant presents its own credential; the gateway
+      injects nothing. Third-party API keys / passwords / OAuth secrets are not brokered
+      per-server by the gateway.
+  - Save-time validation rejects unknown schemes and the `jwt` bearer over a credentialed
+    `http://` endpoint unless `DOWNSTREAM_ALLOW_INSECURE_CREDENTIALS=true`.
+  - Example snippets:
+    - Workload JWT: `{"auth":{"scheme":"jwt","audience":"downstream-service"}}`
+    - Downstream owns its auth: `{"auth":{"scheme":"none"}}`
   - **Code-backed tools** (`transport="code"`): a server may host user-authored
     Python functions instead of a downstream endpoint. Each entry in `tools[]`
     carries `raw_code`, pinned `requirements[]` (`name==version`), and

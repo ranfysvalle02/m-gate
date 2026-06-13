@@ -46,7 +46,7 @@ async def test_downstream_call_tool_success(patch_mongo, fake_embeddings):
         tenant_id="local-dev",
         server="weather",
         transport="streamable_http",
-        endpoint="http://weather:8101/mcp",
+        endpoint="https://weather:8101/mcp",
     )
 
     async def _ok(**kwargs):
@@ -67,7 +67,7 @@ async def test_downstream_error_raises_downstream_error(patch_mongo, fake_embedd
         tenant_id="local-dev",
         server="weather",
         transport="streamable_http",
-        endpoint="http://weather:8101/mcp",
+        endpoint="https://weather:8101/mcp",
     )
 
     async def _raise(*args, **kwargs):
@@ -88,7 +88,7 @@ async def test_discover_tools_parses_tools_list(patch_mongo, fake_embeddings):
         tenant_id="local-dev",
         server="weather",
         transport="streamable_http",
-        endpoint="http://weather:8101/mcp",
+        endpoint="https://weather:8101/mcp",
     )
 
     class _Client:

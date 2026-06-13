@@ -63,7 +63,7 @@ async def test_create_server_upserts_registry_and_mounts(patch_mongo, monkeypatc
     payload = ServerUpsertRequest(
         server="weather",
         transport="streamable_http",
-        endpoint="http://weather:8101/mcp",
+        endpoint="https://weather:8101/mcp",
         metadata={"domain": "weather"},
     )
     req = _Req(roles=[admin.settings.platform_admin_role])
@@ -74,8 +74,71 @@ async def test_create_server_upserts_registry_and_mounts(patch_mongo, monkeypatc
 
     docs = get_tenant_database("local-dev")["routing_registry"].docs
     assert len(docs) == 1
-    assert docs[0]["endpoint"] == "http://weather:8101/mcp"
+    assert docs[0]["endpoint"] == "https://weather:8101/mcp"
     assert mounted and mounted[0]["server"] == "weather"
+
+
+@pytest.mark.asyncio
+async def test_create_server_rejects_unknown_auth_scheme(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    async def fake_provision(tenant_id: str, wait_for_queryable_indexes: bool = True):
+        return f"tenant_{tenant_id}"
+
+    class _Registry:
+        async def mount_or_update(self, doc):
+            return None
+
+        async def unmount(self, server_name, tenant_id=None):
+            return None
+
+    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin, "get_proxy_registry", lambda: _Registry())
+    payload = ServerUpsertRequest(
+        server="weather",
+        transport="streamable_http",
+        endpoint="https://weather:8101/mcp",
+        metadata={"auth": {"scheme": "custom"}},
+    )
+    with pytest.raises(HTTPException) as exc:
+        await admin.create_or_update_server(
+            _Req(roles=[admin.settings.platform_admin_role]),
+            payload,
+        )
+    assert exc.value.status_code == 422
+    assert "Unsupported metadata.auth.scheme" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_server_blocks_insecure_endpoint_for_jwt_credential(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    async def fake_provision(tenant_id: str, wait_for_queryable_indexes: bool = True):
+        return f"tenant_{tenant_id}"
+
+    class _Registry:
+        async def mount_or_update(self, doc):
+            return None
+
+        async def unmount(self, server_name, tenant_id=None):
+            return None
+
+    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin, "get_proxy_registry", lambda: _Registry())
+    monkeypatch.setattr(admin.settings, "downstream_allow_insecure_credentials", False)
+    payload = ServerUpsertRequest(
+        server="weather",
+        transport="streamable_http",
+        endpoint="http://weather:8101/mcp",
+        metadata={"auth": {"scheme": "jwt"}},
+    )
+    with pytest.raises(HTTPException) as exc:
+        await admin.create_or_update_server(
+            _Req(roles=[admin.settings.platform_admin_role]),
+            payload,
+        )
+    assert exc.value.status_code == 422
+    assert "DOWNSTREAM_ALLOW_INSECURE_CREDENTIALS" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
@@ -141,7 +204,7 @@ async def test_cross_tenant_server_write_requires_platform_admin(patch_mongo, mo
         tenant_id="tenant-b",
         server="weather",
         transport="streamable_http",
-        endpoint="http://weather:8101/mcp",
+        endpoint="https://weather:8101/mcp",
     )
     with pytest.raises(HTTPException) as exc:
         await admin.create_or_update_server(_Req(tenant_id="local-dev", roles=["admin"]), payload)
@@ -183,7 +246,7 @@ async def test_patch_and_delete_server(patch_mongo, monkeypatch):
             "tenant_id": "local-dev",
             "server": "orders",
             "transport": "streamable_http",
-            "endpoint": "http://orders:8102/mcp",
+            "endpoint": "https://orders:8102/mcp",
             "enabled": True,
             "metadata": {},
             "tools": [],
@@ -538,9 +601,24 @@ async def test_list_tenants_surfaces_status(patch_mongo):
 
 
 @pytest.mark.asyncio
-async def test_put_and_get_server_env_redacts_values(patch_mongo):
+async def test_put_and_get_server_env_redacts_values(patch_mongo, monkeypatch):
     import gateway.routers.admin as admin
 
+    evicted: list[tuple[str, str]] = []
+    invalidated: list[tuple[str, str | None]] = []
+
+    class _CredentialBroker:
+        async def invalidate(self, server_name, *, tenant_id=None):
+            invalidated.append((server_name, tenant_id))
+
+    class _Registry:
+        credential_broker = _CredentialBroker()
+
+        async def refresh_server_credentials(self, server_name, *, tenant_id):
+            evicted.append((tenant_id, server_name))
+            await self.credential_broker.invalidate(server_name, tenant_id=tenant_id)
+
+    monkeypatch.setattr(admin, "get_proxy_registry", lambda: _Registry())
     req = _Req(tenant_id="local-dev", roles=["admin"])
     get_tenant_database("local-dev")["routing_registry"].docs.append(
         {"_id": "analytics", "server": "analytics", "tenant_id": "local-dev"}
@@ -561,6 +639,8 @@ async def test_put_and_get_server_env_redacts_values(patch_mongo):
 
     listed = await admin.get_server_env(req, "analytics", tenant_id="local-dev")
     assert listed.keys == ["API_KEY"]
+    assert evicted == [("local-dev", "analytics")]
+    assert invalidated == [("analytics", "local-dev")]
 
 
 @pytest.mark.asyncio

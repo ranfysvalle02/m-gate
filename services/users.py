@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
+from config.settings import get_settings
 from database.mongo import get_control_database
+from services.admin_session import verify_credentials
 from services.passwords import hash_password, verify_password
+
+logger = logging.getLogger(__name__)
 
 # Users live in the control DB (not a tenant DB): authentication happens before a
 # tenant is resolved, and a platform-admin spans every tenant.
@@ -163,6 +168,37 @@ async def authenticate(email: str, password: str) -> dict[str, Any] | None:
     if not verify_password(password, str(doc.get("password_hash", ""))):
         return None
     return public_user(doc)
+
+
+async def resolve_login_principal(email: str, password: str) -> dict[str, Any] | None:
+    """Resolve credentials to a login principal ``{email, tenant_id, roles}``.
+
+    Single source of truth shared by the admin UI login and the ``/auth/token``
+    endpoint. Managed users (control-DB ``users`` collection) take precedence;
+    the env ``ADMIN_EMAIL``/``ADMIN_PASSWORD`` pair survives only as a bootstrap
+    superuser. The DB lookup is best-effort: before the control plane is
+    provisioned (or in unit tests without a database) it is skipped so the
+    bootstrap admin can still sign in.
+    """
+    settings = get_settings()
+    try:
+        user = await authenticate(email, password)
+    except Exception as exc:  # pragma: no cover - defensive: DB not yet reachable
+        logger.warning("User store unavailable during login, using bootstrap admin only: %s", exc)
+        user = None
+    if user is not None:
+        return {
+            "email": user["email"],
+            "tenant_id": user["tenant_id"],
+            "roles": user["roles"],
+        }
+    if verify_credentials(email, password):
+        return {
+            "email": normalize_email(email),
+            "tenant_id": settings.default_tenant_id,
+            "roles": [settings.platform_admin_role, "admin"],
+        }
+    return None
 
 
 async def sync_session_context(user: dict[str, Any]) -> None:

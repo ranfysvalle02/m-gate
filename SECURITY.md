@@ -81,6 +81,9 @@ All references point at the code that implements the control.
 
 ### Authentication
 
+> For the full end-to-end picture (request pipeline, settings reference,
+> recipes), see [`AUTH.md`](AUTH.md).
+
 - **Three modes** via `AUTH_MODE` (`config/settings.py`): `disabled` (local dev only),
   `hs256` (shared-secret JWT), `jwks` (asymmetric RS256 verified against a JWKS).
 - Bearer tokens are verified in `gateway/middleware/auth.py`. Issuer (`JWT_ISSUER`)
@@ -102,6 +105,22 @@ All references point at the code that implements the control.
   is never stored and the hash is never returned by the API. Login resolves against this
   store first; the env `ADMIN_EMAIL`/`ADMIN_PASSWORD` pair survives only as a bootstrap
   superuser fallback.
+- **Inbound MCP-client auth** (`gateway/routers/auth.py`): MCP clients connecting to the
+  gateway's own surface (`/rpc`, `/mcp`) can authenticate with username/password:
+  - `POST /auth/token` — OAuth2 Resource Owner Password Credentials grant. Exchanges
+    username + password (resolved by the same `resolve_login_principal` used by the admin
+    login) for a short-lived bearer (the signed session token), returned as
+    `{access_token, token_type, expires_in}`. Works in every `AUTH_MODE`.
+  - Optional HTTP Basic directly on `/rpc`/`/mcp` behind `MCP_BASIC_AUTH_ENABLED` (default
+    off): credentials are decoded and resolved per request; failures return `401` with a
+    `WWW-Authenticate: Basic` challenge.
+  - **OAuth is bring-your-own-IdP**: the gateway is an OAuth2/OIDC *resource server* via
+    `AUTH_MODE=jwks` and does **not** implement an authorization server. When OAuth metadata
+    is advertised (`AUTH_MODE=jwks` or `OAUTH_METADATA_ENABLED=true`),
+    `GET /.well-known/oauth-protected-resource` (RFC 9728) describes the configured issuer
+    and bearer 401s carry a `WWW-Authenticate: Bearer resource_metadata=...` discovery hint.
+  - Authorization is unchanged: `/rpc` still requires the principal to carry `admin` or
+    `tool:invoke` (`gateway/middleware/rbac.py`).
 
 ### Authorization
 
@@ -226,12 +245,18 @@ per tenant, exactly which hosts/networks the gateway may reach:
 
 ### Downstream credential brokering (JIT)
 
-- The gateway never hands a long-lived secret to a downstream server. For each
-  `(tenant, server)` it mints a **short-lived RS256 JWT** — a tenant-scoped *workload
-  identity* — and injects it as a transport credential (`Authorization: Bearer` for
-  HTTP/SSE, `MCP_DOWNSTREAM_TOKEN` env for stdio). See `services/credential_broker.py`.
-- Tokens are cached per `(tenant, server)` and rotated before expiry; the warm-client
-  pool reconnects with a fresh token on rotation. **Tokens are never logged.**
+- Downstream auth is intentionally minimal. The gateway brokers only a **workload
+  identity**, selected per server via `metadata.auth.scheme`:
+  - `jwt` (default): gateway-minted short-lived RS256 workload identity
+  - `none`: no transport credential — the **downstream service or the tenant** presents
+    its own authentication (vendor API keys, basic auth, OAuth, mTLS, etc.)
+- Third-party credentials (API keys, passwords, OAuth client secrets) are deliberately
+  **not** brokered per-server by the gateway: they belong to the downstream/tenant, not
+  to the gateway's control plane. Use `scheme=none` and terminate that auth downstream.
+- Credentials are cached per `(tenant, server)` and rotated/reconnected via the same
+  near-expiry logic used by the warm-client pool. **Credential material is never logged.**
+- Credentialed (`jwt`) downstream `http://` endpoints are rejected by default at
+  save/connect time unless `DOWNSTREAM_ALLOW_INSECURE_CREDENTIALS=true`.
 - The **bundled dev signing key is rejected** when `ENVIRONMENT=production` — you must
   configure your own `DOWNSTREAM_JWT_PRIVATE_KEY(_FILE)`.
 
