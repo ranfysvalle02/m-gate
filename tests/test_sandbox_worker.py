@@ -390,8 +390,7 @@ def test_apply_serve_rlimits_sets_noncumulative_limits(monkeypatch):
     # FSIZE backstop must clear the frame budget so a legitimate near-cap result
     # (written full to /job/sandbox.result.json with JSON framing) is bounded
     # gracefully by _bounded_frame rather than killed by EFBIG.
-    expected_fsize = worker.frame_budget_bytes(128 * 1024)
-    assert expected_fsize > 128 * 1024
+    expected_fsize = max(worker.frame_budget_bytes(128 * 1024), 16 * 1024 * 1024, 64 * 1024)
     assert calls["rlimits"][fake_resource.RLIMIT_FSIZE] == (expected_fsize, expected_fsize)
     assert calls["rlimits"][fake_resource.RLIMIT_NOFILE] == (256, 256)
     # SIGXFSZ is ignored so an over-limit write fails the job, not the worker.

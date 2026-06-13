@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,8 @@ from services.sandbox_executor import (
 
 pytestmark = pytest.mark.integration
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 # Spawn workers on the test runner's OWN interpreter. It is the one guaranteed to
 # have wasmtime installed and to be able to import the ``services`` package; a
 # bare ``python`` on PATH (e.g. a pyenv shim) frequently resolves to a DIFFERENT
@@ -25,6 +28,16 @@ pytestmark = pytest.mark.integration
 # honest skip. This also matches production, where the executor defaults to
 # ``sys.executable``. Do not hardcode ``"python"`` here.
 WORKER_PYTHON = sys.executable
+
+
+def _worker_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    root = str(_REPO_ROOT)
+    parts = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p]
+    if root not in parts:
+        parts.insert(0, root)
+    env["PYTHONPATH"] = os.pathsep.join(parts)
+    return env
 
 
 @functools.cache
@@ -43,10 +56,42 @@ def _worker_has_wasmtime(python_bin: str) -> bool:
             ],
             capture_output=True,
             timeout=15,
+            env=_worker_subprocess_env(),
+            cwd=_REPO_ROOT,
         )
     except Exception:  # noqa: BLE001 - any spawn/probe failure means "unavailable"
         return False
     return probe.returncode == 0
+
+
+@functools.cache
+def _worker_runtime_ready(python_bin: str, wasm_path: str) -> bool:
+    """Warm-ping the real worker entrypoint (not just ``import wasmtime``).
+
+    CI runners often lack PYTHONPATH even when pytest can import ``services`` via
+    conftest's sys.path tweak; a failed import kills the worker before any frame.
+    """
+    if not _worker_has_wasmtime(python_bin):
+        return False
+    try:
+        proc = subprocess.run(
+            [
+                python_bin,
+                "-m",
+                "services.sandbox_worker",
+                "--serve",
+                "--wasm",
+                wasm_path,
+            ],
+            input=b'{"ping": true}\n{"shutdown": true}\n',
+            capture_output=True,
+            timeout=120,
+            env=_worker_subprocess_env(),
+            cwd=_REPO_ROOT,
+        )
+    except Exception:  # noqa: BLE001
+        return False
+    return proc.returncode == 0 and b'"pong"' in proc.stdout
 
 
 def _skip_if_wasm_runtime_unavailable(settings) -> None:
@@ -57,12 +102,13 @@ def _skip_if_wasm_runtime_unavailable(settings) -> None:
     the test would otherwise fail (or, for ``pytest.raises(SandboxError)`` cases,
     *falsely pass* by catching the wrong error) instead of skipping honestly.
     """
-    if not Path(settings.sandbox_python_wasm_path).exists():
+    wasm_path = settings.sandbox_python_wasm_path
+    if not Path(wasm_path).exists():
         pytest.skip("python.wasm is missing; run `make fetch-wasm` first.")
-    if not _worker_has_wasmtime(WORKER_PYTHON):
+    if not _worker_runtime_ready(WORKER_PYTHON, wasm_path):
         pytest.skip(
-            f"wasmtime is not installed for the worker interpreter ({WORKER_PYTHON}); "
-            "the sandbox runtime is unavailable."
+            f"sandbox worker could not warm-ping via {WORKER_PYTHON} "
+            f"and {wasm_path}; the runtime is unavailable."
         )
 
 

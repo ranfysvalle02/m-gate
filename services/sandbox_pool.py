@@ -21,6 +21,8 @@ from services.sandbox_errors import (
 
 logger = logging.getLogger(__name__)
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
 # Extra time the parent waits past a job's wall timeout before declaring the
 # worker hung and killing it. Lets a worker self-report a clean timeout frame
 # (and stay reusable) when it is only slightly over deadline.
@@ -40,6 +42,11 @@ def _subprocess_env() -> dict[str, str]:
         value = os.environ.get(key)
         if value:
             env[key] = value
+    root = str(_REPO_ROOT)
+    parts = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p]
+    if root not in parts:
+        parts.insert(0, root)
+    env["PYTHONPATH"] = os.pathsep.join(parts)
     return env
 
 

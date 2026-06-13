@@ -70,6 +70,11 @@ def is_index_not_queryable_yet(exc: OperationFailure) -> bool:
     message = str(exc)
     if "IndexNotFound" in message:
         return True
+    lowered = message.lower()
+    # Atlas Local / mongot also surface a plain "not initialized" message while
+    # a freshly-created vector index is still materializing (code 8 / UnknownError).
+    if "not initialized" in lowered:
+        return True
     # Atlas vector indexes briefly report a transient build state (NOT_STARTED,
     # UNKNOWN, …) while materializing; querying that early is a "not ready yet"
     # signal callers should retry, not a hard failure.

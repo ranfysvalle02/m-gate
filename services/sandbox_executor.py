@@ -23,6 +23,8 @@ from services.sandbox_errors import (
 )
 from services.sandbox_tool_bridge import SandboxToolBridge, ToolInvoker
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
 __all__ = [
     "ExecRequest",
     "ExecResult",
@@ -503,6 +505,13 @@ class WasmExecutor:
             value = os.environ.get(key)
             if value:
                 env[key] = value
+        # Pytest and other runners often put the repo on sys.path without exporting
+        # PYTHONPATH; child workers must still resolve ``services.*``.
+        root = str(_REPO_ROOT)
+        parts = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p]
+        if root not in parts:
+            parts.insert(0, root)
+        env["PYTHONPATH"] = os.pathsep.join(parts)
         return env
 
     @staticmethod

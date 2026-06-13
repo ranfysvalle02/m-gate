@@ -423,7 +423,10 @@ def _apply_serve_rlimits(*, max_output_bytes: int) -> None:
     # LARGER than max_output_bytes once JSON framing/escaping is added, so the
     # ceiling must clear the frame budget or a legitimate near-limit result
     # would trip EFBIG before the graceful output_limit frame can be produced.
-    fsize_cap = max(frame_budget_bytes(max_output_bytes), 64 * 1024)
+    # Oversized *caller* results (output bombs) must also be allowed to land on
+    # disk so the host can replace them with a small output_limit frame rather
+    # than leaving the worker in an EFBIG poisoned state for the next job.
+    fsize_cap = max(frame_budget_bytes(max_output_bytes), 16 * 1024 * 1024, 64 * 1024)
     try:
         resource.setrlimit(resource.RLIMIT_FSIZE, (fsize_cap, fsize_cap))
         resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
@@ -443,14 +446,16 @@ def _apply_posix_rlimits(*, wall_timeout_ms: int, memory_bytes: int, max_output_
     # JSON framing don't get SIGXCPU-killed before parent-side timeout/fuel
     # enforcement can produce a protocol-safe frame.
     cpu_seconds = max(5, math.ceil(wall_timeout_ms / 1000) + 5)
-    rss_cap = max(memory_bytes * 2, 64 * 1024 * 1024)
     # Clear the frame budget (the guest-written result.json exceeds the raw
     # output cap once JSON-framed) so a legitimate near-limit result is bounded
     # gracefully by _bounded_frame instead of being killed by EFBIG.
     fsize_cap = max(frame_budget_bytes(max_output_bytes), 64 * 1024)
     try:
         resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 5))
-        resource.setrlimit(resource.RLIMIT_AS, (rss_cap, rss_cap))
+        # Do NOT set RLIMIT_AS here: wasmtime reserves a large virtual address
+        # space for the module and a tight cap kills the worker on Linux CI
+        # before any result frame is emitted (serve mode omits it for the same
+        # reason). Per-job memory stays bounded by store.set_limits + fuel.
         resource.setrlimit(resource.RLIMIT_FSIZE, (fsize_cap, fsize_cap))
         resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
     except Exception:

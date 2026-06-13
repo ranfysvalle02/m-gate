@@ -77,6 +77,16 @@ def test_is_index_not_queryable_yet_via_index_not_found_code():
     assert is_index_not_queryable_yet(exc) is True
 
 
+def test_is_index_not_queryable_yet_handles_not_initialized_message():
+    exc = OperationFailure(
+        "PlanExecutor error during aggregation :: caused by :: "
+        "Index semantic-cache-v-nomic-embed-text-768 not initialized",
+        code=8,
+        details={"codeName": "UnknownError"},
+    )
+    assert is_index_not_queryable_yet(exc) is True
+
+
 def test_predicates_return_false_for_unrelated_error():
     exc = OperationFailure("some unrelated failure", code=11000)
     assert is_index_already_exists(exc) is False
