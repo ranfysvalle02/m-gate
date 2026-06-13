@@ -3,7 +3,7 @@ gateway open an outbound connection to this endpoint?".
 
 Two gates consume this module:
 
-- registration (`gateway/routers/admin.py`): a friendly, fail-fast 422 when an
+- registration (`gateway/routers/admin/servers.py`): a friendly, fail-fast 422 when an
   operator/tenant saves a server whose endpoint is not permitted, and
 - connect time (`services/egress_transport.py`): the authoritative,
   DNS-rebinding-proof gate that re-resolves and pins a validated IP on every

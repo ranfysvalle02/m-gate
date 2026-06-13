@@ -17,6 +17,7 @@ server (``auth_mode=jwks``).
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -43,7 +44,7 @@ async def _read_credentials(request: Request) -> tuple[str, str, str]:
     if content_type.startswith("application/json"):
         try:
             payload = await request.json()
-        except Exception:
+        except json.JSONDecodeError:
             return "password", "", ""
         if not isinstance(payload, dict):
             return "password", "", ""

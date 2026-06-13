@@ -182,7 +182,9 @@ Runs right after `AuthMiddleware`, reading the hydrated `request.state`.
   not subject to CSRF.
 - **Admin UI** (non-login paths) requires an admin principal, else a `303`
   redirect to the login page.
-- **`/rpc`** (when `AUTH_MODE != disabled`):
+- **`/rpc` and `/mcp`** (when `AUTH_MODE != disabled`): the JSON-RPC data plane and
+  the mounted FastMCP meta-tool surface are held at **parity** — the coarse gate
+  below applies to both:
   1. Looks up `session_context` for `(tenant_id, user_id)`. A managed user whose
      mirrored `status` is not `active` is cut off immediately with `403 Account
      suspended` — a standing token stops working the instant an admin disables
@@ -193,8 +195,36 @@ Runs right after `AuthMiddleware`, reading the hydrated `request.state`.
 
 `session_context` is kept in lockstep with the `users` collection by
 `sync_session_context`, so a user managed in the console is authorized
-consistently whether they arrive via the admin API (cookie) or `/rpc` (bearer
-with the same `sub`/`tenant_id`).
+consistently whether they arrive via the admin API (cookie) or `/rpc`/`/mcp`
+(bearer with the same `sub`/`tenant_id`).
+
+### 3.1 `/mcp` meta-tool authorization (`gateway/mcp_server.py`)
+
+The meta-tools Cursor connects to (`search_tools`, `list_catalog_tools`,
+`call_downstream_tool`) authorize identically to `/rpc`, reading the
+gateway-verified `request.state` (tenant, roles, scopes) via FastMCP's
+`get_http_request()`:
+
+- **Tenant is bound to the verified claim.** The resolved tenant comes from the
+  authenticated token, not from tool arguments. When `AUTH_MODE != disabled`, a
+  `tenant_id` argument that does not equal the verified tenant is rejected with a
+  `ToolError` (`cross_tenant_forbidden`) — there is no cross-tenant override on
+  `/mcp`; cross-tenant work stays on the platform-admin `/admin` API. In
+  `disabled` mode (local dev, everyone is already trusted/admin) an explicit
+  `tenant_id` is still honored.
+- **Per-call authorization.** `call_downstream_tool` runs the same
+  `authorize_tool_call` the `/rpc` `tools/call` path uses: the tool must exist in
+  the tenant catalog and the caller must satisfy its required scopes (or be
+  `admin`), else `ToolError` (`forbidden`). Discovery (`search_tools`,
+  `list_catalog_tools`) is likewise tenant-bound and scope-filtered.
+- **Quota, metering, and audit.** After authorization, `call_downstream_tool`
+  enforces the tenant usage quota (`ToolError` `quota_exceeded` when the ceiling is
+  hit), meters the billable call, and writes an `audit_telemetry` row for the
+  outcome (`live_execution_success` / `forbidden` / `quota_exceeded` /
+  `tenant_suspended`) under the same `method="tools/call"` label as `/rpc`. The
+  billable-call step is shared via `services/data_plane.py` so the two surfaces
+  meter identically and cannot drift. Net result: `/mcp` is a full peer of `/rpc`,
+  not a weaker bypass.
 
 ---
 

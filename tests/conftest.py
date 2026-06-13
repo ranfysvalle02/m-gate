@@ -119,7 +119,9 @@ def patch_mongo(monkeypatch, fake_db):
         "gateway.middleware.rbac",
         "gateway.middleware.ratelimit",
         "gateway.routers.health",
-        "gateway.routers.admin",
+        # The admin surface is now a package; its routers reach the database
+        # through the shared _common module, so that is the single patch target.
+        "gateway.routers.admin._common",
     ]:
         module = sys.modules.get(mod_name)
         if module:

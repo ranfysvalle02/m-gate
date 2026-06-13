@@ -57,8 +57,8 @@ async def test_create_server_upserts_registry_and_mounts(patch_mongo, monkeypatc
         async def unmount(self, server_name, tenant_id=None):
             return None
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
-    monkeypatch.setattr(admin, "get_proxy_registry", lambda: _Registry())
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "get_proxy_registry", lambda: _Registry())
 
     payload = ServerUpsertRequest(
         server="weather",
@@ -92,8 +92,8 @@ async def test_create_server_rejects_unknown_auth_scheme(patch_mongo, monkeypatc
         async def unmount(self, server_name, tenant_id=None):
             return None
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
-    monkeypatch.setattr(admin, "get_proxy_registry", lambda: _Registry())
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "get_proxy_registry", lambda: _Registry())
     payload = ServerUpsertRequest(
         server="weather",
         transport="streamable_http",
@@ -123,8 +123,8 @@ async def test_create_server_blocks_insecure_endpoint_for_jwt_credential(patch_m
         async def unmount(self, server_name, tenant_id=None):
             return None
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
-    monkeypatch.setattr(admin, "get_proxy_registry", lambda: _Registry())
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "get_proxy_registry", lambda: _Registry())
     monkeypatch.setattr(admin.settings, "downstream_allow_insecure_credentials", False)
     payload = ServerUpsertRequest(
         server="weather",
@@ -155,8 +155,8 @@ async def test_code_server_save_preserves_multiple_tools(patch_mongo, monkeypatc
         async def unmount(self, server_name, tenant_id=None):
             return None
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
-    monkeypatch.setattr(admin, "get_proxy_registry", lambda: _Registry())
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "get_proxy_registry", lambda: _Registry())
 
     payload = ServerUpsertRequest(
         server="utilities",
@@ -199,7 +199,7 @@ async def test_cross_tenant_server_write_requires_platform_admin(patch_mongo, mo
     async def fake_provision(tenant_id: str, wait_for_queryable_indexes: bool = True):
         return f"tenant_{tenant_id}"
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
     payload = ServerUpsertRequest(
         tenant_id="tenant-b",
         server="weather",
@@ -262,7 +262,7 @@ async def test_patch_and_delete_server(patch_mongo, monkeypatch):
         async def unmount(self, server_name, tenant_id=None):
             unmounted.append(f"{tenant_id}:{server_name}")
 
-    monkeypatch.setattr(admin, "get_proxy_registry", lambda: _Registry())
+    monkeypatch.setattr(admin._common, "get_proxy_registry", lambda: _Registry())
     req = _Req(roles=[admin.settings.platform_admin_role])
     patched = await admin.patch_server(
         req,
@@ -360,7 +360,7 @@ async def test_tenant_admin_cannot_create_stdio_server(patch_mongo, monkeypatch)
     async def fake_provision(tenant_id: str, wait_for_queryable_indexes: bool = True):
         return f"tenant_{tenant_id}"
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
     payload = ServerUpsertRequest(
         server="secure-stdio",
         transport="stdio",
@@ -389,7 +389,7 @@ async def test_test_code_tool_endpoint_executes_and_returns_payload(patch_mongo,
             assert request.action_type == "read"
             return _Result()
 
-    monkeypatch.setattr(admin, "get_executor", lambda: _Executor())
+    monkeypatch.setattr(admin._common, "get_executor", lambda: _Executor())
 
     response = await admin.test_code_tool(
         _Req(roles=["admin"]),
@@ -493,7 +493,7 @@ async def test_tenant_admin_cannot_create_private_http_endpoint(patch_mongo, mon
     async def fake_provision(tenant_id: str, wait_for_queryable_indexes: bool = True):
         return f"tenant_{tenant_id}"
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
     monkeypatch.setattr(
         server_guard.socket,
         "getaddrinfo",
@@ -517,7 +517,7 @@ async def test_create_and_list_tenant_scoped_view(patch_mongo, monkeypatch):
     async def fake_provision(tenant_id: str, wait_for_queryable_indexes: bool = True):
         return f"tenant_{tenant_id}"
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
     created = await admin.create_tenant(_Req(), TenantCreateRequest(tenant_id="local-dev"))
     assert created.tenant_id == "local-dev"
 
@@ -540,7 +540,7 @@ async def test_suspend_and_resume_tenant(patch_mongo, monkeypatch):
         def log_background(self, **kwargs):
             events.append(kwargs)
 
-    monkeypatch.setattr(admin, "get_telemetry_logger", lambda: _Telemetry())
+    monkeypatch.setattr(admin._common, "get_telemetry_logger", lambda: _Telemetry())
     platform_admin = _Req(roles=[admin.settings.platform_admin_role])
 
     suspended = await admin.suspend_tenant(
@@ -575,7 +575,7 @@ async def test_suspend_unknown_tenant_returns_404(patch_mongo, monkeypatch):
         def log_background(self, **kwargs):
             return None
 
-    monkeypatch.setattr(admin, "get_telemetry_logger", lambda: _Telemetry())
+    monkeypatch.setattr(admin._common, "get_telemetry_logger", lambda: _Telemetry())
     with pytest.raises(HTTPException) as exc:
         await admin.suspend_tenant(_Req(roles=[admin.settings.platform_admin_role]), "ghost", None)
     assert exc.value.status_code == 404
@@ -618,7 +618,7 @@ async def test_put_and_get_server_env_redacts_values(patch_mongo, monkeypatch):
             evicted.append((tenant_id, server_name))
             await self.credential_broker.invalidate(server_name, tenant_id=tenant_id)
 
-    monkeypatch.setattr(admin, "get_proxy_registry", lambda: _Registry())
+    monkeypatch.setattr(admin._common, "get_proxy_registry", lambda: _Registry())
     req = _Req(tenant_id="local-dev", roles=["admin"])
     get_tenant_database("local-dev")["routing_registry"].docs.append(
         {"_id": "analytics", "server": "analytics", "tenant_id": "local-dev"}
@@ -741,7 +741,7 @@ async def test_approve_action_and_reject_action_are_audited(patch_mongo, monkeyp
         def log_background(self, **kwargs):
             events.append(kwargs)
 
-    monkeypatch.setattr(admin, "get_telemetry_logger", lambda: _Telemetry())
+    monkeypatch.setattr(admin._common, "get_telemetry_logger", lambda: _Telemetry())
     approver = _Req(roles=["admin"], user_id="approver")
 
     approved = await admin.approve_pending_action(approver, "approve-me", tenant_id=None)
@@ -911,7 +911,7 @@ async def test_delete_tenant_requires_platform_admin_and_deletes_when_allowed(
         def log_background(self, **kwargs):
             return None
 
-    monkeypatch.setattr(admin, "get_telemetry_logger", lambda: _Telemetry())
+    monkeypatch.setattr(admin._common, "get_telemetry_logger", lambda: _Telemetry())
     await tp.provision_tenant("tenant-z", wait_for_queryable_indexes=False)
 
     with pytest.raises(HTTPException) as exc:
@@ -938,8 +938,8 @@ async def test_cache_migrate_defaults_to_caller_tenant(patch_mongo, monkeypatch)
         async def migrate(self, *, tenant_ids, mode, batch_size):
             return {"tenant_ids": tenant_ids, "mode": mode, "batch_size": batch_size}
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
-    monkeypatch.setattr(admin, "cache_migration_service", _Migrator())
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "cache_migration_service", _Migrator())
     result = await admin.migrate_cache(_Req(tenant_id="tenant-a"), CacheMigrateRequest())
     assert result["tenant_ids"] == ["tenant-a"]
     assert result["mode"] == "status"
@@ -956,8 +956,8 @@ async def test_cache_migrate_cross_tenant_requires_platform_admin(patch_mongo, m
         async def migrate(self, *, tenant_ids, mode, batch_size):
             return {"tenant_ids": tenant_ids, "mode": mode, "batch_size": batch_size}
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
-    monkeypatch.setattr(admin, "cache_migration_service", _Migrator())
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "cache_migration_service", _Migrator())
     with pytest.raises(HTTPException) as exc:
         await admin.migrate_cache(
             _Req(tenant_id="tenant-a"),
@@ -1070,7 +1070,7 @@ async def test_admin_search_delegates_to_hybrid_service(patch_mongo, monkeypatch
                 }
             ]
 
-    monkeypatch.setattr(admin, "hybrid_search_service", _Search())
+    monkeypatch.setattr(admin._common, "hybrid_search_service", _Search())
     payload = AdminSearchRequest(query="weather", mode="hybrid", limit=3, server="weather")
     response = await admin.admin_search(_Req(), payload)
     assert response["tenant_id"] == "local-dev"
@@ -1110,7 +1110,7 @@ async def test_put_and_get_egress_allowlist_round_trip(patch_mongo, monkeypatch)
         def log_background(self, **kwargs):
             return None
 
-    monkeypatch.setattr(admin, "get_telemetry_logger", lambda: _Telemetry())
+    monkeypatch.setattr(admin._common, "get_telemetry_logger", lambda: _Telemetry())
 
     updated = await admin.put_egress_allowlist(
         _Req(roles=["admin"], user_id="ops@example.com"),
@@ -1133,7 +1133,7 @@ async def test_put_egress_allowlist_rejects_invalid_entry(patch_mongo, monkeypat
     control = patch_mongo._control_db
     await control["tenants"].insert_one({"tenant_id": "local-dev", "db_name": "db"})
     monkeypatch.setattr(
-        admin,
+        admin._common,
         "get_telemetry_logger",
         lambda: type("T", (), {"log_background": lambda *a, **k: None})(),
     )
@@ -1152,7 +1152,7 @@ async def test_put_egress_allowlist_unknown_tenant_404(patch_mongo, monkeypatch)
     import gateway.routers.admin as admin
 
     monkeypatch.setattr(
-        admin,
+        admin._common,
         "get_telemetry_logger",
         lambda: type("T", (), {"log_background": lambda *a, **k: None})(),
     )
@@ -1182,7 +1182,7 @@ async def test_register_server_blocked_by_global_allowlist(patch_mongo, monkeypa
     async def fake_provision(tenant_id: str, wait_for_queryable_indexes: bool = True):
         return f"tenant_{tenant_id}"
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
     monkeypatch.setattr(
         admin.settings, "egress_global_allowlist", "*.allowed.example", raising=False
     )
@@ -1218,8 +1218,8 @@ async def test_register_server_allowed_by_global_allowlist(patch_mongo, monkeypa
         async def unmount(self, server_name, tenant_id=None):
             return None
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
-    monkeypatch.setattr(admin, "get_proxy_registry", lambda: _Registry())
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "get_proxy_registry", lambda: _Registry())
     monkeypatch.setattr(
         admin.settings, "egress_global_allowlist", "*.allowed.example", raising=False
     )
@@ -1252,7 +1252,7 @@ async def test_register_server_blocked_by_tenant_allowlist(patch_mongo, monkeypa
         {"tenant_id": "local-dev", "db_name": "db", "egress_allowlist": ["api.vendor.com"]}
     )
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
     monkeypatch.setattr(
         egress_policy.socket, "getaddrinfo", lambda *_a, **_k: _addrinfo_for("93.184.216.34")
     )
@@ -1301,8 +1301,8 @@ def _patch_code_admin(monkeypatch, admin, mounted=None):
         async def unmount(self, server_name, tenant_id=None):
             return None
 
-    monkeypatch.setattr(admin, "provision_tenant", fake_provision)
-    monkeypatch.setattr(admin, "get_proxy_registry", lambda: _Registry())
+    monkeypatch.setattr(admin._common, "provision_tenant", fake_provision)
+    monkeypatch.setattr(admin._common, "get_proxy_registry", lambda: _Registry())
 
 
 @pytest.mark.asyncio

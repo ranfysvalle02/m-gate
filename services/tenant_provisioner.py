@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from datetime import UTC, datetime
 
-from pymongo.errors import OperationFailure
+from pymongo.errors import OperationFailure, PyMongoError
 
 import database.mongo as mongo_module
 from config.settings import Settings, get_settings
@@ -22,6 +23,8 @@ from database.mongo import (
 from services.cache_manager import semantic_cache_index_spec
 from services.embedding_config import active_embedding_identity, tenant_embedding_identity
 from services.guardrails import guardrail_signature_index_spec
+
+logger = logging.getLogger(__name__)
 
 
 class UnknownTenantError(Exception):
@@ -164,7 +167,7 @@ async def _ensure_watcher_state_ttl_index(*, control_db, ttl_seconds: int) -> No
             if asyncio.iscoroutine(index_cursor):
                 index_cursor = await index_cursor
             indexes = await index_cursor.to_list(length=100)
-        except Exception:
+        except PyMongoError:
             indexes = []
         existing = next(
             (idx for idx in indexes if isinstance(idx, dict) and idx.get("name") == target_name),
@@ -268,6 +271,15 @@ async def deprovision_tenant(tenant_id: str) -> bool:
     try:
         client = mongo_module.get_client()
     except Exception:
+        # The control-plane record is already gone; if we cannot reach the client
+        # the tenant database is left orphaned. Log loudly so an operator can drop
+        # it manually rather than discovering stray databases later.
+        logger.error(
+            "Could not obtain MongoDB client to drop tenant database '%s' during "
+            "deprovision; the database may be left orphaned.",
+            db_name,
+            exc_info=True,
+        )
         client = None
     if client is not None:
         drop_database = getattr(client, "drop_database", None)

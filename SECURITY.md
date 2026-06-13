@@ -119,20 +119,31 @@ All references point at the code that implements the control.
     is advertised (`AUTH_MODE=jwks` or `OAUTH_METADATA_ENABLED=true`),
     `GET /.well-known/oauth-protected-resource` (RFC 9728) describes the configured issuer
     and bearer 401s carry a `WWW-Authenticate: Bearer resource_metadata=...` discovery hint.
-  - Authorization is unchanged: `/rpc` still requires the principal to carry `admin` or
-    `tool:invoke` (`gateway/middleware/rbac.py`).
+  - Authorization is unchanged: both `/rpc` and the FastMCP `/mcp` meta-tool surface require
+    the principal to carry `admin` or `tool:invoke` (`gateway/middleware/rbac.py`).
 
 ### Authorization
 
 - **Role hierarchy**: `platform-admin` → `tenant-admin` (role `admin`) → `user`. Only a
   platform-admin may grant the `platform-admin` role, manage a platform-admin account, or
   manage users/servers across tenants; a tenant-admin is confined to its own tenant via
-  `gateway/routers/admin.py::_resolve_target_tenant`.
-- **Coarse RBAC** (`gateway/middleware/rbac.py`): `/rpc` requires the `admin` or
-  `tool:invoke` role; `/admin` and the admin `/ui` require an admin principal.
-- **Per-tool scope enforcement** (`services/authorization.py`): `tools/call` checks the
-  caller's `scopes`/`groups` against the tool's required scopes — not just at discovery
-  time. `admin` is an explicit override; tools with no required scope are open.
+  `gateway/routers/admin/_common.py::_resolve_target_tenant`.
+- **Coarse RBAC** (`gateway/middleware/rbac.py`): the two tool-invocation surfaces are held
+  at parity — **both `/rpc` and the mounted `/mcp` meta-tool app** require the `admin` or
+  `tool:invoke` role, honor the account kill-switch, and hydrate roles from
+  `session_context`; `/admin` and the admin `/ui` require an admin principal.
+- **Per-tool scope enforcement** (`services/authorization.py`): per-call
+  `authorize_tool_call` checks the caller's `scopes`/`groups` against the tool's required
+  scopes — not just at discovery time. This runs on **both** the `/rpc` `tools/call` path
+  and the `/mcp` `call_downstream_tool` meta-tool, so the tool must exist in the tenant
+  catalog and the caller must satisfy its scope before the gateway proxies the call. `admin`
+  is an explicit override; tools with no required scope are open.
+- **Quota, metering & audit parity** (`services/usage_metering.py`,
+  `services/data_plane.py`, `services/telemetry_logger.py`): after authorization, **both**
+  surfaces enforce the tenant usage quota (`/mcp` raises `ToolError` `quota_exceeded`),
+  meter the billable call through the shared `record_billable_call`, and write an
+  `audit_telemetry` row for the outcome under one `method="tools/call"` label. `/mcp` is
+  therefore not a path to bypass quotas, escape metering, or avoid the audit trail.
 - **CSRF protection** (`gateway/middleware/rbac.py`): cookie-authenticated state-changing
   admin requests (`POST/PUT/PATCH/DELETE` under `/admin`) require a matching
   double-submit CSRF token. Bearer-authenticated API calls are exempt (no ambient cookie).
@@ -144,6 +155,13 @@ All references point at the code that implements the control.
   mapping collision-safe (`tenant-a`, `tenant.a`, `tenant_a` cannot collide).
 - The semantic cache, tool catalog, and session context are all tenant-scoped; cache
   lookups are gated by `tenant_id` so one tenant can never read another's cached results.
+- **Tenant binding on both invocation surfaces**: `/rpc` always derives `tenant_id` from the
+  verified token claim (never overridable). The `/mcp` meta-tools (`gateway/mcp_server.py`)
+  do the same — they read the gateway-verified `request.state` via FastMCP's
+  `get_http_request()`. When auth is enabled, a `tenant_id` argument that does not match the
+  authenticated tenant is **rejected** (`ToolError` `cross_tenant_forbidden`) rather than
+  silently honored, so the meta-tool surface cannot be used to reach across tenants.
+  Cross-tenant work stays on the platform-admin `/admin` API.
 - `AUTO_PROVISION_TENANTS=false` makes tenant creation an explicit operator step where
   tenant ids come from untrusted callers.
 - Server registration now carries an `origin` marker (`platform` or `tenant`):
@@ -165,9 +183,9 @@ per tenant, exactly which hosts/networks the gateway may reach:
   set, an endpoint must satisfy **both** (the tenant list can only narrow within the
   global ceiling). `EGRESS_DEFAULT_DENY=true` flips to a fully locked "deny unless listed"
   posture.
-- **Gate 1 — registration** (`gateway/routers/admin.py::_apply_server_policy`): saving a
-  server whose endpoint is not permitted fails fast with `422`, so operators get a clear
-  error instead of a runtime failure.
+- **Gate 1 — registration** (`gateway/routers/admin/servers.py::_apply_server_policy`):
+  saving a server whose endpoint is not permitted fails fast with `422`, so operators get a
+  clear error instead of a runtime failure.
 - **Gate 2 — connect (authoritative, rebinding-proof)**
   (`services/egress_transport.py`): on **every** outbound connect the policy is
   re-resolved, the host is re-resolved via DNS, each resolved IP is screened against the

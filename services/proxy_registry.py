@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -37,6 +38,8 @@ from services.sandbox_tool_bridge import ToolCallDenied, ToolInvoker
 from services.server_guard import assert_mountable
 from services.tracing import set_span_attribute, start_span
 from services.usage_metering import emit_billing_event, record_usage
+
+logger = logging.getLogger(__name__)
 
 # Timeout types we recognize without resorting to message-substring sniffing.
 # asyncio.TimeoutError aliases builtins.TimeoutError on 3.11+, listed for clarity.
@@ -498,6 +501,15 @@ class InMemoryFastMCPRegistry:
                 tools = await client.list_tools()
             return [self._normalize_tool_schema(tool) for tool in tools]
         except Exception:
+            # An empty tool list is the safe degraded result, but logging the
+            # cause keeps a misconfigured/unreachable downstream distinguishable
+            # from a server that legitimately exposes no tools.
+            logger.warning(
+                "Tool discovery failed for downstream '%s' (tenant=%s); returning no tools.",
+                server.server,
+                server.tenant_id,
+                exc_info=True,
+            )
             return []
 
     async def _call_via_client(

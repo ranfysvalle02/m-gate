@@ -29,7 +29,7 @@ try:  # pragma: no cover - import guard exercised indirectly
     from opentelemetry.trace import Status, StatusCode
 
     _OTEL_AVAILABLE = True
-except Exception:  # pragma: no cover - optional dependency
+except ImportError:  # pragma: no cover - optional dependency
     trace = None  # type: ignore[assignment]
     Status = None  # type: ignore[assignment,misc]
     StatusCode = None  # type: ignore[assignment,misc]

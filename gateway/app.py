@@ -82,7 +82,7 @@ def configure_tracing(app: FastAPI) -> None:
         return
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-    except Exception:
+    except ImportError:
         logger.warning("Tracing is enabled but OpenTelemetry dependencies are missing.")
         return
     FastAPIInstrumentor.instrument_app(app)

@@ -627,7 +627,7 @@ async def test_admin_suspend_then_rpc_blocked_then_resume(rpc_module, patch_mong
         def log_background(self, **kwargs):
             return None
 
-    monkeypatch.setattr(admin, "get_telemetry_logger", lambda: _Telemetry())
+    monkeypatch.setattr(admin._common, "get_telemetry_logger", lambda: _Telemetry())
 
     control = patch_mongo._control_db
     await control["tenants"].insert_one(

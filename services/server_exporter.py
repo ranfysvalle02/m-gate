@@ -934,6 +934,7 @@ class _Database:
                     "(and optionally MONGODB_DB) in your environment."
                 )
             from pymongo import MongoClient
+            from pymongo.errors import ConfigurationError
 
             client = MongoClient(uri)
             db_name = os.environ.get("MONGODB_DB")
@@ -942,7 +943,7 @@ class _Database:
             else:
                 try:
                     self._db = client.get_default_database()
-                except Exception as exc:
+                except ConfigurationError as exc:
                     raise RuntimeError(
                         "Set MONGODB_DB, or include a default database in MONGODB_URI."
                     ) from exc

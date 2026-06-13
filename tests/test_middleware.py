@@ -371,6 +371,24 @@ async def test_rbac_denies_without_invoke_role(patch_mongo, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_rbac_enforces_mcp_surface_at_parity(patch_mongo, monkeypatch):
+    from config.settings import get_settings
+    from gateway.middleware.rbac import RbacMiddleware
+
+    mw = RbacMiddleware(_ok_app)
+    mw.settings = get_settings()
+    object.__setattr__(mw.settings, "auth_mode", "hs256")
+
+    # The mounted /mcp surface is held to the same coarse RBAC as /rpc: a caller
+    # with no invoke/admin role must be 403 there too, not just on /rpc.
+    scope = _scope(path="/mcp/")
+    scope["state"] = {"roles": [], "tenant_id": "t1", "user_id": "u1"}
+    sink = _Sink()
+    await mw(scope, sink.receive, sink.send)
+    assert sink.status == 403
+
+
+@pytest.mark.asyncio
 async def test_rbac_blocks_suspended_user(patch_mongo, monkeypatch):
     from config.settings import get_settings
     from database.mongo import get_control_database

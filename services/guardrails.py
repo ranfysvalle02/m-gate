@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -13,12 +14,14 @@ from database.mongo import get_control_database
 from database.seed import guardrail_signatures_seed
 from services.embeddings import EmbeddingService, embedding_version_for, get_embedding_service
 
+logger = logging.getLogger(__name__)
+
 try:
     from presidio_analyzer import AnalyzerEngine
     from presidio_anonymizer import AnonymizerEngine
 
     _PRESIDIO_AVAILABLE = True
-except Exception:  # pragma: no cover - optional dependency
+except ImportError:  # pragma: no cover - optional dependency
     AnalyzerEngine = None
     AnonymizerEngine = None
     _PRESIDIO_AVAILABLE = False
@@ -269,6 +272,9 @@ class PiiNerRedactor:
                 return text
             return self._anonymizer.anonymize(text=text, analyzer_results=findings).text
         except Exception:
+            # Fail open so a redactor hiccup never blocks a response, but log it:
+            # a silently-failing NER path means PII would pass through unredacted.
+            logger.warning("PII NER redaction failed; returning text unredacted.", exc_info=True)
             return text
 
 

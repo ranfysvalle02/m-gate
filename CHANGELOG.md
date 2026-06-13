@@ -1,6 +1,62 @@
-# Changelog
+```# Changelog
 
 ## Unreleased
+
+### Security: `/mcp` meta-tool authorization at parity with `/rpc`
+- The FastMCP `/mcp` meta-tool surface (`search_tools`, `list_catalog_tools`,
+  `call_downstream_tool`) now enforces the same controls as the `/rpc` data plane.
+  Previously `/mcp` was weaker: it skipped per-call authorization, was not covered
+  by coarse RBAC / the account kill-switch, and let a `tenant_id` argument override
+  the token claim. Harmless in `disabled`-mode local dev; meaningful the moment auth
+  is enabled and `/mcp` is relied on for tenant isolation.
+- `call_downstream_tool` now runs per-call `authorize_tool_call` (the tool must
+  exist in the tenant catalog and the caller must satisfy its scopes, or be
+  `admin`), raising `ToolError (forbidden)` otherwise — mirroring `/rpc`'s
+  `tools/call`.
+- `call_downstream_tool` now also enforces the tenant **usage quota** (raises
+  `ToolError (quota_exceeded)`), **meters** the billable call, **propagates the
+  caller identity** to the downstream hop, and writes an **`audit_telemetry`** row
+  for every outcome (`live_execution_success` / `forbidden` / `quota_exceeded` /
+  `tenant_suspended`) under the same `method="tools/call"` label as `/rpc`.
+  Previously `/mcp` calls bypassed quotas, were not metered, and left no audit
+  trail. The shared "record a billable call" step now lives in a single module
+  (`services/data_plane.py`) used by both surfaces so they cannot drift again.
+- `RbacMiddleware` (`gateway/middleware/rbac.py`) now gates `/mcp` in addition to
+  `/rpc`: it requires `admin`/`tool:invoke`, honors the per-user kill-switch, and
+  hydrates `session_context` roles on both surfaces.
+- **Tenant binding:** the `/mcp` meta-tools derive the tenant from the
+  gateway-verified `request.state` (via FastMCP `get_http_request()`). When
+  `AUTH_MODE != disabled`, a `tenant_id` argument that does not match the verified
+  claim is rejected with `ToolError (cross_tenant_forbidden)` — no cross-tenant
+  override on `/mcp`. `disabled` mode is unchanged.
+
+### Hardening: tightened broad exception handling
+- Added observability to previously silent failure sites so a degraded result is
+  no longer indistinguishable from a healthy one:
+  `services/proxy_registry.py` tool discovery (logs before returning no tools),
+  `services/tenant_provisioner.py` deprovision (logs an error when the tenant DB
+  drop is skipped so it is not silently orphaned), `services/guardrails.py` PII NER
+  redaction, `services/sandbox_pool.py` worker spawn/warmup, and
+  `services/cache_migration.py` search-index lookup.
+- Narrowed broad `except Exception` to the known failure type where the mode is
+  known: `json.JSONDecodeError` (`gateway/routers/auth.py`,
+  `gateway/middleware/span_extractor.py`), `ImportError` (optional-dependency
+  guards in `services/metrics.py`, `services/tracing.py`, `gateway/app.py`,
+  `gateway/mcp_server.py`, `services/guardrails.py`), `binascii.Error`
+  (`database/encryption.py`), `pymongo` errors (`services/tenant_provisioner.py`,
+  `services/server_exporter.py`), and `ValueError` / `OSError`
+  (`services/sandbox_worker.py`).
+
+### Refactor: decomposed the admin router into a package
+- Split the ~1,900-line / 47-handler `gateway/routers/admin.py` god-module into a
+  `gateway/routers/admin/` package grouped by resource (`tenants`, `servers`,
+  `users`, `embeddings`, `code_tools`, `explore`, `actions`, `catalog`), with a
+  shared `_common` module holding the authorization guards, the `settings` /
+  search / cache-migration singletons, and the test-injection seams.
+- No behavior or HTTP-surface change: every route keeps its exact `/admin` path and
+  the public import surface (`import gateway.routers.admin as admin`;
+  `admin.create_user(...)`, `admin.settings`) is preserved. Test seams are now
+  patched on the single `admin._common` module.
 
 ### Inbound MCP-client auth (username/password + OAuth seam)
 - Added `POST /auth/token` — an OAuth2 Resource Owner Password Credentials grant

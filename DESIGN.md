@@ -272,12 +272,22 @@ Highlights and the reasoning:
 - **Identity-bound discovery.** Scope filtering is pushed *into* the search query,
   so a caller who lacks `orders:write` never even sees `update_order_status` in
   results — you can't call what you can't discover.
+- **Both invocation surfaces enforce the same checks.** The `/mcp` meta-tools are
+  at parity with the `/rpc` data plane: `call_downstream_tool` runs per-call
+  `authorize_tool_call` (the tool must exist in the tenant catalog and the caller
+  must satisfy its scopes), enforces the tenant usage quota, meters the billable
+  call, and writes the same `audit_telemetry` row — all under a tenant bound to
+  the verified token claim, so a `tenant_id` argument that does not match the
+  authenticated tenant is rejected rather than silently honored. There is no
+  weaker path to a downstream tool. (The shared step — "record a billable call" —
+  lives in one place, `services/data_plane.py`, so the two surfaces can't drift.)
 - **Guardrails before execution.** A regex floor plus an optional semantic
   prompt-injection classifier (over a versioned signature corpus) runs inbound,
   so a poisoned argument is caught at the perimeter, not inside a tool.
-- **Audit is centralized and cheap.** Every call lands in a MongoDB time-series
-  collection (`audit_telemetry`). One query answers "what did this tenant run
-  last night," across *all* servers.
+- **Audit is centralized and cheap.** Every call — on `/rpc` *and* `/mcp` — lands
+  in a MongoDB time-series collection (`audit_telemetry`) under the same
+  `method="tools/call"` label. One query answers "what did this tenant run last
+  night," across *all* servers and *both* invocation surfaces.
 - **Secrets stay encrypted at rest.** Downstream credentials and authored code
   are encrypted (Queryable Encryption / Fernet); the gateway brokers only a
   short-lived workload identity to third parties, never long-lived secrets.

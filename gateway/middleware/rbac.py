@@ -40,7 +40,7 @@ class RbacMiddleware:
                 return await response(scope, request.receive, send)
 
         roles = set(getattr(request.state, "roles", []))
-        if self.settings.auth_mode != "disabled" and path.startswith("/rpc"):
+        if self.settings.auth_mode != "disabled" and self._is_data_plane(path):
             tenant_id = getattr(request.state, "tenant_id", self.settings.default_tenant_id)
             user_id = getattr(request.state, "user_id", "unknown-user")
             session = await get_control_database()["session_context"].find_one(
@@ -60,7 +60,7 @@ class RbacMiddleware:
                 roles.update(session["roles"])
             request.state.roles = sorted(roles)
 
-        if path.startswith("/rpc"):
+        if self._is_data_plane(path):
             if "admin" not in roles and "tool:invoke" not in roles:
                 response = JSONResponse(
                     status_code=403, content={"detail": "Insufficient permissions."}
@@ -68,6 +68,17 @@ class RbacMiddleware:
                 return await response(scope, request.receive, send)
 
         await self.app(scope, request.receive, send)
+
+    def _is_data_plane(self, path: str) -> bool:
+        """Both tool-invocation surfaces enforce the same coarse RBAC.
+
+        ``/rpc`` is the JSON-RPC data plane; ``/mcp`` is the mounted FastMCP
+        meta-tool app Cursor connects to. They are kept at parity so the account
+        kill-switch, ``session_context`` role hydration, and the
+        ``admin``/``tool:invoke`` requirement apply to whichever surface a caller
+        uses to reach downstream tools.
+        """
+        return path.startswith("/rpc") or path == "/mcp" or path.startswith("/mcp/")
 
     def _ui_path(self) -> str:
         return self.settings.admin_ui_path

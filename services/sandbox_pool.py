@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 from collections.abc import Awaitable, Callable
@@ -17,6 +18,8 @@ from services.sandbox_errors import (
     SandboxTimeoutError,
     frame_budget_bytes,
 )
+
+logger = logging.getLogger(__name__)
 
 # Extra time the parent waits past a job's wall timeout before declaring the
 # worker hung and killing it. Lets a worker self-report a clean timeout frame
@@ -197,6 +200,7 @@ class WorkerPool:
             )
         except Exception:
             observe_sandbox_pool_event("spawn_failed")
+            logger.warning("Sandbox worker subprocess spawn failed.", exc_info=True)
             return None
         worker = _PooledWorker(process)
         if not await self._ping(worker):
@@ -213,6 +217,7 @@ class WorkerPool:
             await worker.process.stdin.drain()
             line = await asyncio.wait_for(worker.process.stdout.readline(), timeout=warmup)
         except Exception:
+            logger.warning("Sandbox worker warmup ping failed.", exc_info=True)
             return False
         if not line:
             return False

@@ -13,7 +13,7 @@ try:
     )
 
     _PROMETHEUS_AVAILABLE = True
-except Exception:  # pragma: no cover - optional dependency hardening
+except ImportError:  # pragma: no cover - optional dependency hardening
     Counter = None  # type: ignore[assignment,misc]
     Gauge = None  # type: ignore[assignment,misc]
     Histogram = None  # type: ignore[assignment,misc]

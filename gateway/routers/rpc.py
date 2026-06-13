@@ -19,12 +19,12 @@ from models.jsonrpc import (
 from services.authorization import AuthorizationService, get_authorization_service
 from services.cache_manager import SemanticCacheManager
 from services.credential_broker import CallerIdentity
+from services.data_plane import record_billable_call
 from services.hybrid_search import HybridSearchService
 from services.metrics import (
     observe_cache_event,
     observe_downstream_error,
     observe_quota_block,
-    observe_usage,
 )
 from services.pending_actions import consume_approved_action, create_pending_action
 from services.proxy_registry import DownstreamTimeout, get_proxy_registry
@@ -33,7 +33,7 @@ from services.telemetry_logger import TelemetryLogger, get_telemetry_logger
 from services.tenant_provisioner import UnknownTenantError, ensure_tenant_ready
 from services.tenant_status import TenantSuspendedError, assert_tenant_active
 from services.tracing import set_span_attribute, start_span
-from services.usage_metering import check_quota, emit_billing_event, record_usage
+from services.usage_metering import check_quota
 
 router = APIRouter(tags=["rpc"])
 
@@ -549,19 +549,14 @@ async def _record_billable_call(
     *,
     source: str,
 ) -> None:
-    usage = await record_usage(context.tenant_id, calls=1)
-    await emit_billing_event(
+    # Delegates to the shared data-plane helper so /rpc and /mcp meter calls
+    # identically (single source of truth for "a billable tool call").
+    await record_billable_call(
         context.tenant_id,
-        kind="calls",
-        amount=1,
-        period=str(usage.get("period", "")) or None,
-        metadata={
-            "server": call_params.server,
-            "tool": call_params.name,
-            "source": source,
-        },
+        server=call_params.server,
+        tool=call_params.name,
+        source=source,
     )
-    observe_usage("calls", 1)
 
 
 async def _execute_downstream(context: RpcContext, call_params: ToolCallParams) -> dict[str, Any]:

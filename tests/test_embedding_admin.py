@@ -39,7 +39,7 @@ def _stub_provider_build(monkeypatch, admin, *, dims: int):
         model_id = config.model or config.azure_deployment or "fake-model"
         return FakeEmbeddingService(dimensions=dims, model_id=model_id)
 
-    monkeypatch.setattr(admin, "build_provider_service", _build)
+    monkeypatch.setattr(admin._common, "build_provider_service", _build)
 
 
 @pytest.mark.asyncio
@@ -96,7 +96,7 @@ async def test_put_embedding_triggers_reprovision(patch_mongo, monkeypatch):
         started["by"] = started_by
         return {"state": "running", "started_by": started_by}
 
-    monkeypatch.setattr(admin, "trigger_reprovision", fake_trigger)
+    monkeypatch.setattr(admin._common, "trigger_reprovision", fake_trigger)
 
     payload = EmbeddingConfigUpdateRequest(
         provider="ollama",
@@ -115,7 +115,7 @@ async def test_put_embedding_rejects_unreachable_provider(patch_mongo, monkeypat
     def _build(config, settings=None):
         return FakeEmbeddingService(dimensions=8, fail=True, model_id=config.model)
 
-    monkeypatch.setattr(admin, "build_provider_service", _build)
+    monkeypatch.setattr(admin._common, "build_provider_service", _build)
     payload = EmbeddingConfigUpdateRequest(
         provider="openai",
         model="text-embedding-3-small",
@@ -209,7 +209,7 @@ async def test_put_tenant_embedding_detects_and_triggers_tenant_reprovision(
         started["by"] = started_by
         return {"state": "running", "tenant_id": tenant_id, "started_by": started_by}
 
-    monkeypatch.setattr(admin, "trigger_tenant_reprovision", fake_trigger)
+    monkeypatch.setattr(admin._common, "trigger_tenant_reprovision", fake_trigger)
 
     payload = EmbeddingConfigUpdateRequest(
         provider="ollama",
@@ -267,7 +267,7 @@ async def test_delete_tenant_embedding_triggers_reprovision_when_requested(
         started["tenant"] = tenant_id
         return {"state": "running", "tenant_id": tenant_id}
 
-    monkeypatch.setattr(admin, "trigger_tenant_reprovision", fake_trigger)
+    monkeypatch.setattr(admin._common, "trigger_tenant_reprovision", fake_trigger)
 
     # Need an existing override so the delete reports deleted=True and reprovisions.
     create = EmbeddingConfigUpdateRequest(
@@ -289,7 +289,7 @@ async def test_delete_tenant_embedding_noop_skips_reprovision(patch_mongo, monke
     async def fail_trigger(*, tenant_id: str, started_by=None):  # pragma: no cover - must not run
         raise AssertionError("reprovision must not run when there was no override to delete")
 
-    monkeypatch.setattr(admin, "trigger_tenant_reprovision", fail_trigger)
+    monkeypatch.setattr(admin._common, "trigger_tenant_reprovision", fail_trigger)
 
     # No override exists, so reprovision is skipped even when requested.
     reset = await admin.reset_tenant_embedding_config(_Req(roles=[]), "local-dev", reprovision=True)
@@ -304,7 +304,7 @@ async def test_tenant_status_endpoint_returns_tenant_status(patch_mongo, monkeyp
     async def fake_status(tenant_id: str):
         return {"state": "completed", "tenant_id": tenant_id}
 
-    monkeypatch.setattr(admin, "get_tenant_reprovision_status", fake_status)
+    monkeypatch.setattr(admin._common, "get_tenant_reprovision_status", fake_status)
     status = await admin.get_tenant_embedding_status(_Req(roles=[]), "local-dev")
     assert status["state"] == "completed"
     assert status["tenant_id"] == "local-dev"

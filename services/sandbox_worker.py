@@ -130,7 +130,7 @@ try:
                 raw = value["$date"].replace("Z", "+00:00")
                 try:
                     return _dt.datetime.fromisoformat(raw)
-                except Exception:
+                except ValueError:
                     return value
             if set(value.keys()) == {"$oid"}:
                 return _ObjectId(value.get("$oid"))
@@ -162,11 +162,11 @@ try:
         finally:
             try:
                 req_path.unlink(missing_ok=True)
-            except Exception:
+            except OSError:
                 pass
             try:
                 resp_path.unlink(missing_ok=True)
-            except Exception:
+            except OSError:
                 pass
         if not isinstance(response, dict):
             raise RuntimeError("Malformed host RPC response.")
@@ -510,7 +510,12 @@ def _load_module(engine: Engine, wasm_file: Path, cache_path: str | None = None)
             cache_file = _module_cache_file(wasm_file, cache_path)
             if cache_file.exists():
                 return Module.deserialize_file(engine, str(cache_file))
-        except Exception:
+        except Exception as exc:
+            # A broken/incompatible cache entry must not be fatal: fall back to a
+            # fresh compile, but surface the cause so a persistently bad cache
+            # path (permissions, corruption) is diagnosable rather than silent.
+            sys.stderr.write(f"sandbox worker module-cache read failed: {exc}\n")
+            sys.stderr.flush()
             cache_file = cache_file if cache_path else None
     module = Module.from_file(engine, str(wasm_file))
     if cache_file is not None:
@@ -519,8 +524,11 @@ def _load_module(engine: Engine, wasm_file: Path, cache_path: str | None = None)
             tmp = cache_file.with_suffix(".cwasm.tmp")
             tmp.write_bytes(module.serialize())
             tmp.replace(cache_file)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Caching is a best-effort optimization; a write failure is non-fatal
+            # but is logged so a wedged cache directory does not stay invisible.
+            sys.stderr.write(f"sandbox worker module-cache write failed: {exc}\n")
+            sys.stderr.flush()
     return module
 
 
@@ -694,7 +702,7 @@ def _run_wasm(
                 _write_rpc_response(rpc_dir, rpc_id, response)
                 try:
                     request_path.unlink(missing_ok=True)
-                except Exception:
+                except OSError:
                     pass
             guest_thread.join(timeout=0.2)
             if "error" in guest_error:

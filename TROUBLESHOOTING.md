@@ -231,7 +231,7 @@ guesses. Each section includes:
 **Why it happens**
 
 - Admin embedding update is single-flight by design (prevents mixed vector spaces).
-- Implemented in `gateway/routers/admin.py` and `services/embedding_reprovision.py`.
+- Implemented in `gateway/routers/admin/embeddings.py` and `services/embedding_reprovision.py`.
 
 **How to fix**
 

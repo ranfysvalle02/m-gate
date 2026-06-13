@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -8,6 +9,8 @@ from database.mongo import get_tenant_database
 from services.cache_manager import SemanticCacheManager, semantic_cache_index_name
 from services.embeddings import EmbeddingService, embedding_version_for, get_embedding_service
 from services.metrics import observe_cache_event
+
+logger = logging.getLogger(__name__)
 
 MigrationMode = Literal["status", "purge", "reembed"]
 
@@ -131,6 +134,11 @@ class SemanticCacheMigrationService:
             cursor = await collection.list_search_indexes()
             rows = await cursor.to_list(length=200)
         except Exception:
+            # Treat an unreadable index list as "none found", but log it: a broken
+            # connection here can otherwise drive an incorrect migration decision.
+            logger.warning(
+                "Could not list semantic-cache search indexes; assuming none.", exc_info=True
+            )
             return set()
         return {str(row.get("name")) for row in rows if row.get("name")}
 

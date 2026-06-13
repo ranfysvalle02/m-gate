@@ -30,7 +30,7 @@ class JsonRpcSpanExtractor:
         spans: list[str] = []
         try:
             payload = json.loads(body_text)
-        except Exception:
+        except json.JSONDecodeError:
             return [body_text]
 
         params = payload.get("params") if isinstance(payload, dict) else None

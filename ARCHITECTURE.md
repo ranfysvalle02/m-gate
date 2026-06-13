@@ -190,7 +190,8 @@ Relevant modules:
 
 - `services/tenant_provisioner.py`
 - `services/tenant_status.py`
-- `gateway/routers/admin.py`
+- `gateway/routers/admin/` (resource-split router package; tenant lifecycle lives in
+  `gateway/routers/admin/tenants.py`)
 
 Responsibilities:
 
@@ -329,7 +330,7 @@ Primary code entry points for this document:
 
 - `gateway/app.py`
 - `gateway/routers/rpc.py`
-- `gateway/routers/admin.py`
+- `gateway/routers/admin/` (resource-split admin router package)
 - `services/proxy_registry.py`
 - `services/sandbox_executor.py`
 - `services/sandbox_pool.py`

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +57,7 @@ def _local_master_key_bytes(settings: Settings) -> bytes:
         raise ValueError("QE local KMS requires QE_LOCAL_MASTER_KEY or QE_LOCAL_MASTER_KEY_FILE.")
     try:
         key = base64.b64decode(settings.qe_local_master_key, validate=True)
-    except Exception as exc:
+    except binascii.Error as exc:
         raise ValueError("QE_LOCAL_MASTER_KEY must be valid base64.") from exc
     if len(key) != 96:
         raise ValueError("QE_LOCAL_MASTER_KEY must decode to exactly 96 bytes.")
