@@ -243,7 +243,13 @@ class WorkerPool:
         except Exception as exc:
             raise SandboxError("Sandbox worker stdin is closed.") from exc
 
-        read_timeout = max(0.05, timeout_ms / 1000 + _READ_GRACE_SECONDS)
+        # Each pooled job runs in a fresh wasm Store and re-boots the in-guest
+        # CPython interpreter, so the host read must also absorb that boot grace
+        # (kept strictly larger than the worker's own epoch budget of
+        # wall + boot_grace) so the worker self-reports a clean timeout frame and
+        # stays reusable, instead of the host killing it mid-boot under load.
+        boot_grace_ms = max(0, self.settings.sandbox_worker_startup_grace_ms)
+        read_timeout = max(0.05, (timeout_ms + boot_grace_ms) / 1000 + _READ_GRACE_SECONDS)
         deadline = asyncio.get_running_loop().time() + read_timeout
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
@@ -285,7 +291,14 @@ class WorkerPool:
         configured = self.settings.sandbox_pool_acquire_timeout_ms
         if configured > 0:
             return configured / 1000
-        return max(0.05, timeout_ms / 1000)
+        # No explicit acquire budget: wait at least long enough for a respawned
+        # worker to warm up. A worker can die mid-job and be replaced in the
+        # background (_reap_and_refill), and that warmup can exceed a short job's
+        # wall budget under host load. Failing fast at the job timeout would then
+        # spuriously starve the next call with "no warm worker" while a healthy
+        # replacement is seconds away, so floor the wait at the warmup ceiling.
+        floor_ms = max(timeout_ms, self.settings.sandbox_pool_warmup_timeout_ms)
+        return max(0.05, floor_ms / 1000)
 
     def _discard(self, worker: _PooledWorker) -> None:
         """Kill a poisoned worker now (non-blocking) and refill in the background."""

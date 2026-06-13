@@ -161,12 +161,43 @@ async def test_run_times_out_and_kills_worker(monkeypatch):
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
-    settings = Settings()
+    # Pin the startup grace to 0 so the host-side backstop fires at the wall
+    # budget (this test asserts a hung worker is killed at the deadline, not the
+    # separate cold-start grace behavior covered below).
+    settings = Settings(sandbox_worker_startup_grace_ms=0)
     executor = WasmExecutor(settings=settings, python_bin="python")
 
     with pytest.raises(SandboxTimeoutError):
         await executor.run(_request(limits=SandboxLimits(1000, 1024 * 1024, 10, 1024)))
     assert process.killed is True
+
+
+@pytest.mark.asyncio
+async def test_startup_grace_absorbs_slow_cold_start(monkeypatch):
+    # A worker whose first byte arrives well AFTER the guest wall budget but
+    # within the startup grace (simulating a slow runtime cold start under host
+    # load) must still return its result. The guest self-enforces the wall/CPU
+    # deadline internally, so the host backstop must allow for cold start — this
+    # is the fix for warm-pool/throwaway timeouts that were really cold-start
+    # stalls misread as guest timeouts.
+    process = _FakeProcess(
+        stdout=b'{"ok": true, "result": {"sum": 3}, "stdout": "", "stderr": ""}\n',
+        delay_seconds=0.3,
+        returncode=0,
+    )
+
+    async def _spawn(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
+    # 50ms guest wall budget — far under the 300ms cold-start delay — but a
+    # generous startup grace, so the result still comes back rather than being
+    # killed as a spurious timeout.
+    settings = Settings(sandbox_worker_startup_grace_ms=5_000)
+    executor = WasmExecutor(settings=settings, python_bin="python")
+    result = await executor.run(_request(limits=SandboxLimits(1000, 1024 * 1024, 50, 4096)))
+    assert result.payload == {"sum": 3}
+    assert process.killed is False
 
 
 @pytest.mark.asyncio

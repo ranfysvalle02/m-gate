@@ -156,6 +156,16 @@ class Settings(BaseSettings):
     sandbox_pool_acquire_timeout_ms: int = 0
     # Max wait for a freshly spawned worker to compile its module and report ready.
     sandbox_pool_warmup_timeout_ms: int = 20_000
+    # Extra host-side wait, ON TOP of a job's wall-clock budget, for a throwaway
+    # worker to spawn and instantiate the wasm runtime (the cold start) before a
+    # result is expected. The guest self-enforces its wall/CPU deadline internally
+    # (wasm epoch + fuel + a CPU rlimit), so the host deadline is only a backstop
+    # for a hung/dead worker; this grace stops a slow *cold start* under host load
+    # from being misread as a guest timeout. A dead worker is still detected
+    # immediately (its stdout closes), so the grace only ever helps a live, slowly
+    # warming worker. Also acts as a floor for the pool's acquire wait so a
+    # mid-job worker death + respawn under load doesn't starve the next call.
+    sandbox_worker_startup_grace_ms: int = 10_000
     # Directory for the serialized, compiled python.wasm module so respawned
     # workers warm up via deserialize instead of recompiling. Empty => disabled.
     sandbox_module_cache_path: str = "vendor/.wasm-cache"

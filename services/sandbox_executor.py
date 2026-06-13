@@ -171,6 +171,7 @@ class WasmExecutor:
                             reader=process.stdout,
                             writer=process.stdin,
                             timeout_ms=worker_timeout_ms,
+                            startup_grace_ms=self.settings.sandbox_worker_startup_grace_ms,
                             dispatch=dispatch,
                         )
                     except TimeoutError as exc:
@@ -300,9 +301,16 @@ class WasmExecutor:
         reader,
         writer,
         timeout_ms: int,
+        startup_grace_ms: int = 0,
         dispatch: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     ) -> dict[str, Any]:
-        deadline = asyncio.get_running_loop().time() + max(0.05, timeout_ms / 1000)
+        # The deadline is a host-side backstop for a hung/dead worker, NOT the
+        # guest compute limit (the worker self-enforces that via wasm epoch + fuel
+        # + a CPU rlimit). It therefore adds a startup grace so a slow runtime cold
+        # start under host load is not misread as a guest timeout. A worker that
+        # dies is detected immediately via an empty read regardless of the grace.
+        budget_ms = max(1, timeout_ms) + max(0, startup_grace_ms)
+        deadline = asyncio.get_running_loop().time() + max(0.05, budget_ms / 1000)
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
@@ -352,13 +360,18 @@ class WasmExecutor:
             max_output_bytes=max(1, self.settings.sandbox_max_output_bytes),
         )
 
-    @staticmethod
-    def _limits_payload(limits: SandboxLimits) -> dict[str, int]:
+    def _limits_payload(self, limits: SandboxLimits) -> dict[str, int]:
         return {
             "fuel": limits.fuel,
             "memory_bytes": limits.memory_bytes,
             "wall_timeout_ms": limits.wall_timeout_ms,
             "max_output_bytes": limits.max_output_bytes,
+            # In-guest CPython boot + imports (the wasm `_start`) run under the
+            # worker's epoch wall-timer; under host load that boot alone can exceed
+            # wall_timeout_ms and be misread as a guest timeout. This grace gives
+            # the boot headroom. Raw compute/memory stay bounded precisely by the
+            # fuel and memory limits, which this does not affect.
+            "boot_grace_ms": max(0, self.settings.sandbox_worker_startup_grace_ms),
         }
 
     def _job_payload(

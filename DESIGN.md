@@ -241,7 +241,11 @@ network, no host filesystem. The seeded `weather`, `orders`, `utilities`,
   not a code tool.
 - **CPU/cold-start cost.** Compiling and running Python-on-WASI is not free; the
   gateway keeps a prewarmed worker pool to amortize it. Heavy compute is not the
-  sweet spot.
+  sweet spot. Cold start (runtime spawn/compile + in-guest CPython boot) is kept
+  *separate* from a tool's `wall_timeout_ms`: that budget bounds the tool's own
+  compute, while a `sandbox_worker_startup_grace_ms` allowance covers boot, so a
+  fast tool is never killed mid-boot just because the host was busy. Raw
+  compute/memory stay bounded precisely by wasm fuel + the memory limit.
 - **Not a general FaaS.** This is for *tool-shaped* logic — small, pure-ish
   functions with declared inputs — not long-running jobs.
 

@@ -47,6 +47,29 @@
   `services/server_exporter.py`), and `ValueError` / `OSError`
   (`services/sandbox_worker.py`).
 
+### Robustness: sandbox cold start decoupled from a tool's wall budget
+- A code tool's `wall_timeout_ms` was conflated with sandbox **cold start** — the
+  worker subprocess spawn, wasm module compile, and in-guest CPython boot. Under
+  host CPU load that boot alone could exceed the budget, so a trivial, fast tool
+  spuriously **timed out** (the host read deadline fired, or the guest's own epoch
+  wall-timer interrupted it mid-boot) even though it did almost no work. Now a new
+  `sandbox_worker_startup_grace_ms` (default 10s) gives boot its own headroom:
+  the host read backstop and the worker's epoch wall-timer both add it on top of
+  `wall_timeout_ms`, so the budget bounds the tool's **compute**, not its boot.
+  Raw compute/memory remain bounded precisely by wasm fuel + the memory limit, so
+  a real CPU/output bomb is still killed; only legitimate slow-boot calls benefit.
+- The warm pool's acquire wait now floors at the warmup ceiling (not the job's
+  wall budget) so a worker that dies mid-job and is respawned in the background
+  doesn't spuriously starve the next call with "no warm worker" while a healthy
+  replacement is seconds away.
+- Fixed the live sandbox integration tests (`tests/integration/`) to spawn the
+  worker on the test runner's own interpreter (`sys.executable`) instead of a bare
+  `python` on `PATH` — the latter frequently resolved to a wasmtime-less
+  interpreter (e.g. a pyenv shim), so every worker died on `import wasmtime` and
+  surfaced as a confusing "worker exited", while the runtime-availability guard
+  (which probed the *runner*) never skipped. The guard now probes the actual
+  worker interpreter, so a wasmtime-less worker skips honestly.
+
 ### Refactor: decomposed the admin router into a package
 - Split the ~1,900-line / 47-handler `gateway/routers/admin.py` god-module into a
   `gateway/routers/admin/` package grouped by resource (`tenants`, `servers`,

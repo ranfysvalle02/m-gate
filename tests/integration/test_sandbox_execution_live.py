@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-import importlib.util
+import functools
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,37 @@ from services.sandbox_executor import (
 
 pytestmark = pytest.mark.integration
 
+# Spawn workers on the test runner's OWN interpreter. It is the one guaranteed to
+# have wasmtime installed and to be able to import the ``services`` package; a
+# bare ``python`` on PATH (e.g. a pyenv shim) frequently resolves to a DIFFERENT
+# interpreter without wasmtime, so the worker would die on ``import wasmtime`` and
+# surface as a confusing "worker exited before returning a result" instead of an
+# honest skip. This also matches production, where the executor defaults to
+# ``sys.executable``. Do not hardcode ``"python"`` here.
+WORKER_PYTHON = sys.executable
+
+
+@functools.cache
+def _worker_has_wasmtime(python_bin: str) -> bool:
+    """Probe the WORKER interpreter (not just the test runner) for wasmtime.
+
+    The two can differ, and only the worker actually imports wasmtime, so this is
+    the interpreter whose capability decides whether the tier can run.
+    """
+    try:
+        probe = subprocess.run(
+            [
+                python_bin,
+                "-c",
+                "import importlib.util as u, sys; sys.exit(0 if u.find_spec('wasmtime') else 1)",
+            ],
+            capture_output=True,
+            timeout=15,
+        )
+    except Exception:  # noqa: BLE001 - any spawn/probe failure means "unavailable"
+        return False
+    return probe.returncode == 0
+
 
 def _skip_if_wasm_runtime_unavailable(settings) -> None:
     """Skip when the wasm runtime is not usable on this host.
@@ -26,8 +59,11 @@ def _skip_if_wasm_runtime_unavailable(settings) -> None:
     """
     if not Path(settings.sandbox_python_wasm_path).exists():
         pytest.skip("python.wasm is missing; run `make fetch-wasm` first.")
-    if importlib.util.find_spec("wasmtime") is None:
-        pytest.skip("wasmtime is not installed; the sandbox runtime is unavailable.")
+    if not _worker_has_wasmtime(WORKER_PYTHON):
+        pytest.skip(
+            f"wasmtime is not installed for the worker interpreter ({WORKER_PYTHON}); "
+            "the sandbox runtime is unavailable."
+        )
 
 
 def _request(
@@ -53,7 +89,7 @@ def _request(
 @pytest.fixture
 def sandbox_executor(settings):
     _skip_if_wasm_runtime_unavailable(settings)
-    return WasmExecutor(settings=settings, python_bin="python")
+    return WasmExecutor(settings=settings, python_bin=WORKER_PYTHON)
 
 
 @pytest.mark.asyncio
@@ -177,7 +213,7 @@ async def test_pooled_worker_survives_output_bomb_then_serves(settings):
     from services.sandbox_executor import PooledWasmExecutor
 
     pooled_settings = settings.model_copy(update={"sandbox_pool_size": 1})
-    executor = PooledWasmExecutor(settings=pooled_settings, python_bin="python")
+    executor = PooledWasmExecutor(settings=pooled_settings, python_bin=WORKER_PYTHON)
     await executor.prewarm()
     try:
         bomb = _request(

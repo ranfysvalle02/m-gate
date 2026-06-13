@@ -571,8 +571,16 @@ def _run_wasm(
     store.set_epoch_deadline(1)
 
     wall_timeout = max(1, int(limits["wall_timeout_ms"]))
+    # The FIRST guest segment includes the in-guest CPython boot + imports (wasm
+    # `_start`), which can dominate wall time under host load. Give that first
+    # segment a boot grace so a fast tool is not interrupted mid-boot; segments
+    # resumed after a host bridge round-trip are pure guest compute and use the
+    # wall budget alone. Raw compute/memory remain bounded by fuel + memory.
+    boot_grace = max(0, int(limits.get("boot_grace_ms", 0)))
     timer_lock = threading.Lock()
-    timer_ref = {"timer": threading.Timer(wall_timeout / 1000, engine.increment_epoch)}
+    timer_ref = {
+        "timer": threading.Timer((wall_timeout + boot_grace) / 1000, engine.increment_epoch)
+    }
     timer_ref["timer"].daemon = True
     timer_ref["timer"].start()
 
