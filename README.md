@@ -187,6 +187,7 @@ This repository now includes a working end-to-end MCP Gateway with:
 - **Identity-bound scope on both discovery and invocation**: scope filtering in search/list and explicit authorization checks in `tools/call`, including required `server:<name>` scopes
 - Hybrid tool search (`$rankFusion`: vector + full-text) over `tool_catalog`
 - **GA-safe hybrid fallback**: application-side RRF keeps hybrid retrieval working when `$rankFusion` preview features are unavailable
+- **Always-included tools**: flag a tool `metadata.always_included` in Admin Studio to pin it to the top of every search result regardless of relevance — still scope-filtered, and counted against the caller's `limit` (toggle with `HYBRID_PIN_ALWAYS_INCLUDED`)
 - **Resiliency**: a hard downstream deadline (`DOWNSTREAM_TIMEOUT_MS`, default 2000ms) with protocol-safe JSON-RPC error frames
 - **Active-active-safe registry watching**: each gateway replica persists its own change-stream resume token (`routing_registry::<instance_id>`) so pods do not overwrite each other's stream position
 - **Downstream auth, kept minimal**: per-server `metadata.auth.scheme` is gateway-minted workload JWT (default) or `none` (the downstream/tenant owns its own auth); credentials rotate/reconnect through the existing warm-client cache path

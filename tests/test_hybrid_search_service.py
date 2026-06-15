@@ -111,3 +111,123 @@ async def test_list_tools_scope_filter(service):
     names = {r["name"] for r in results}
     assert "get_forecast" in names
     assert "find_order" not in names
+
+
+# A pinned tool on its own (demo) server, lexically unrelated to weather/orders.
+PINNED_TOOL = {
+    "server": "gateway_demo",
+    "name": "gateway_hello",
+    "description": "hello health smoke test",
+    "scopes": ["demo"],
+    "input_schema": {},
+    "embedding": [0.0],
+    "metadata": {"always_included": True},
+}
+
+
+@pytest.mark.asyncio
+async def test_always_included_surfaces_when_irrelevant(service, patch_mongo):
+    patch_mongo["tool_catalog"].docs.append(dict(PINNED_TOOL))
+
+    results = await service.search_tools(query="forecast", mode="hybrid", limit=5)
+
+    # Pinned to the top despite zero lexical/semantic overlap with the query...
+    assert results[0]["name"] == "gateway_hello"
+    assert results[0]["pinned"] is True
+    # ...while genuine relevance still flows in behind the pin.
+    assert any(r["name"] == "get_forecast" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_always_included_respects_scope(service, patch_mongo):
+    patch_mongo["tool_catalog"].docs.append(dict(PINNED_TOOL))
+
+    results = await service.search_tools(
+        query="forecast",
+        mode="hybrid",
+        limit=5,
+        allowed_scopes=["weather", "server:weather"],
+    )
+
+    names = {r["name"] for r in results}
+    # Pinning never bypasses identity-bound discovery: a tool on a server the
+    # caller cannot see stays hidden.
+    assert "gateway_hello" not in names
+    assert "get_forecast" in names
+
+
+@pytest.mark.asyncio
+async def test_always_included_deduplicates_with_relevance(service, patch_mongo):
+    pinned_and_relevant = {
+        "server": "orders",
+        "name": "cancel_order",
+        "description": "cancel an order by id",
+        "scopes": ["orders"],
+        "input_schema": {},
+        "embedding": [0.0],
+        "metadata": {"always_included": True},
+    }
+    patch_mongo["tool_catalog"].docs.append(pinned_and_relevant)
+
+    results = await service.search_tools(query="order by id", mode="hybrid", limit=5)
+
+    keys = [(r["server"], r["name"]) for r in results]
+    # Both pinned and relevant -> appears exactly once, at the top.
+    assert keys.count(("orders", "cancel_order")) == 1
+    assert results[0]["name"] == "cancel_order"
+    assert results[0]["pinned"] is True
+
+
+@pytest.mark.asyncio
+async def test_always_included_counts_against_limit(service, patch_mongo):
+    patch_mongo["tool_catalog"].docs.append(dict(PINNED_TOOL))
+
+    results = await service.search_tools(query="forecast", mode="hybrid", limit=1)
+
+    # The single seat is spent on the pin; relevance is squeezed out.
+    assert len(results) == 1
+    assert results[0]["name"] == "gateway_hello"
+
+
+@pytest.mark.asyncio
+async def test_always_included_over_limit_returns_all_pinned(service, patch_mongo):
+    catalog = patch_mongo["tool_catalog"]
+    catalog.docs.append(dict(PINNED_TOOL))
+    catalog.docs.append(
+        {
+            "server": "gateway_demo",
+            "name": "gateway_status",
+            "description": "status check",
+            "scopes": ["demo"],
+            "input_schema": {},
+            "embedding": [0.0],
+            "metadata": {"always_included": True},
+        }
+    )
+
+    results = await service.search_tools(query="forecast", mode="hybrid", limit=1)
+
+    # Two pins, limit of one: admin intent wins and both survive.
+    assert len(results) == 2
+    assert {r["name"] for r in results} == {"gateway_hello", "gateway_status"}
+    assert all(r["pinned"] for r in results)
+
+
+@pytest.mark.asyncio
+async def test_pinning_disabled_by_setting(patch_mongo, fake_embeddings):
+    from fakes import lexical_overlap_handler
+
+    catalog = patch_mongo["tool_catalog"]
+    catalog.docs.extend(CATALOG)
+    catalog.docs.append(dict(PINNED_TOOL))
+    catalog._aggregate_handler = lexical_overlap_handler(lambda: catalog.docs)
+    service = HybridSearchService(
+        settings=Settings(hybrid_pin_always_included=False),
+        embedding_service=fake_embeddings,
+    )
+
+    results = await service.search_tools(query="forecast", mode="hybrid", limit=5)
+
+    # With the escape hatch off, nothing is promoted or tagged.
+    assert all("pinned" not in r for r in results)
+    assert results[0]["name"] == "get_forecast"

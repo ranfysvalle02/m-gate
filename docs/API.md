@@ -134,6 +134,10 @@ require the `platform-admin` role.
     Python functions instead of a downstream endpoint. Each entry in `tools[]`
     carries `raw_code`, pinned `requirements[]` (`name==version`), and
     `metadata.action_type` (`read`/`write`/`destructive`) / `metadata.requires_confirmation`.
+    An entry may also set `metadata.always_included=true` to pin the tool to the
+    top of every routed result (`tools/search`, `tools/list?query=…`,
+    `/mcp search_tools`) regardless of relevance; pins are still scope-filtered
+    and count against the caller's result `limit`.
     On save, source is statically linted (size cap, blocked dangerous
     imports/`exec`/`open`/dunder-escapes, pinned-requirements only) and **encrypted at
     rest**; list responses redact source to a `has_raw_code` flag while
@@ -250,6 +254,11 @@ Request params:
 - `text_weight` (optional)
 - `scopes` (optional list)
 - `mode` (`hybrid` | `vector` | `text`, default `hybrid`)
+
+Tools flagged `metadata.always_included` are pinned to the top of the results
+(each tagged `pinned: true`) regardless of `mode` or score, after the same scope
+filter is applied, and count against `limit`. Disable globally with
+`HYBRID_PIN_ALWAYS_INCLUDED=false`.
 
 ### `tools/call`
 

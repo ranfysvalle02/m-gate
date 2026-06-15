@@ -890,6 +890,23 @@
           </div>
         </div>
 
+        <template x-if="alwaysIncludedCount() > recommendedAlwaysIncludedMax">
+          <div class="lint-hints lint-hints-advisory">
+            <div class="lint-title">
+              <span>Always-included tools</span>
+              <span class="lint-count" x-text="alwaysIncludedCount()"></span>
+            </div>
+            <ul>
+              <li class="lint-item-warn">
+                <span class="lint-dot lint-dot-warn" aria-hidden="true"></span>
+                <span
+                  x-text="`Each always-included tool is pinned into every search result and spends the agent's context budget on every call. Recommended max is ${recommendedAlwaysIncludedMax}.`"
+                ></span>
+              </li>
+            </ul>
+          </div>
+        </template>
+
         <div class="contract-card">
           <div class="contract-head">
             <span class="contract-title">Sandbox contract</span>
@@ -1120,6 +1137,22 @@
                       >Requires confirmation</label
                     >
                   </div>
+                  <div class="flex items-center gap-2 mt-1">
+                    <input
+                      type="checkbox"
+                      :id="`tool-always-included-${tool.local_id}`"
+                      x-model="tool.always_included"
+                    />
+                    <label
+                      class="field-label !mb-0"
+                      :for="`tool-always-included-${tool.local_id}`"
+                      >Always included</label
+                    >
+                  </div>
+                  <p class="field-hint -mt-2">
+                    Pin this tool to the top of every search result, regardless
+                    of relevance (still scope-filtered).
+                  </p>
                   <div>
                     <div class="flex items-center justify-between mb-1.5">
                       <label class="field-label !mb-0"

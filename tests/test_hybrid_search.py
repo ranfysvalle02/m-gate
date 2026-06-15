@@ -177,3 +177,48 @@ def test_app_side_rrf_fusion_orders_by_combined_rank():
     assert {item["name"] for item in fused} == {"find_order", "list_customer_orders"}
     assert all("score" in item for item in fused)
     assert all("scoreDetails" in item for item in fused)
+
+
+def test_merge_pinned_dedups_and_pins_first():
+    pinned = [{"server": "demo", "name": "hello", "metadata": {"always_included": True}}]
+    ranked = [
+        {"server": "demo", "name": "hello", "score": 0.1},
+        {"server": "weather", "name": "get_forecast", "score": 0.9},
+    ]
+
+    merged = HybridSearchService._merge_pinned(pinned=pinned, ranked=ranked, output_limit=5)
+
+    # Pinned tool leads, is tagged, and is de-duplicated against the ranked arm.
+    assert (merged[0]["server"], merged[0]["name"]) == ("demo", "hello")
+    assert merged[0]["pinned"] is True
+    keys = [(m["server"], m["name"]) for m in merged]
+    assert keys.count(("demo", "hello")) == 1
+    assert ("weather", "get_forecast") in keys
+
+
+def test_merge_pinned_counts_against_budget():
+    pinned = [{"server": "demo", "name": "hello"}]
+    ranked = [
+        {"server": "weather", "name": "get_forecast"},
+        {"server": "orders", "name": "find_order"},
+    ]
+
+    merged = HybridSearchService._merge_pinned(pinned=pinned, ranked=ranked, output_limit=2)
+
+    # One reserved seat for the pin leaves room for exactly one relevance hit.
+    assert [m["name"] for m in merged] == ["hello", "get_forecast"]
+
+
+def test_merge_pinned_over_limit_returns_all_pinned():
+    pinned = [
+        {"server": "a", "name": "one"},
+        {"server": "b", "name": "two"},
+        {"server": "c", "name": "three"},
+    ]
+    ranked = [{"server": "weather", "name": "get_forecast"}]
+
+    merged = HybridSearchService._merge_pinned(pinned=pinned, ranked=ranked, output_limit=2)
+
+    # Admin intent wins past the limit; the relevance tail is then empty.
+    assert [m["name"] for m in merged] == ["one", "two", "three"]
+    assert all(m.get("pinned") for m in merged)

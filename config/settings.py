@@ -209,6 +209,9 @@ class Settings(BaseSettings):
     hybrid_output_limit: int = 10
     include_score_details: bool = True
     fusion_strategy: Literal["rank_fusion", "score_fusion", "app_side"] = "rank_fusion"
+    # Pin tools flagged ``metadata.always_included`` to the top of every routed
+    # result regardless of relevance (still scope-filtered). Ops escape hatch.
+    hybrid_pin_always_included: bool = True
 
     # Semantic tools/list discovery: when an X-MCP-Query header (or params.query)
     # is present, tools/list returns a curated shortlist instead of the full catalog.

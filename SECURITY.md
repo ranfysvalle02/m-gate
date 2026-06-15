@@ -138,6 +138,10 @@ All references point at the code that implements the control.
   and the `/mcp` `call_downstream_tool` meta-tool, so the tool must exist in the tenant
   catalog and the caller must satisfy its scope before the gateway proxies the call. `admin`
   is an explicit override; tools with no required scope are open.
+- **Pinning does not bypass discovery scope** (`services/hybrid_search.py`): a tool flagged
+  `metadata.always_included` is pinned to the top of search results, but the pin fetch runs
+  the **same** identity-bound scope filter as the ranked arms. A caller never sees a pinned
+  tool they could not otherwise discover, and pinning grants no extra reach at `tools/call`.
 - **Quota, metering & audit parity** (`services/usage_metering.py`,
   `services/data_plane.py`, `services/telemetry_logger.py`): after authorization, **both**
   surfaces enforce the tenant usage quota (`/mcp` raises `ToolError` `quota_exceeded`),

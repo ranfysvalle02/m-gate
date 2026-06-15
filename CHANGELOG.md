@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Feature: always-included (pinned) tools
+- Tools flagged `metadata.always_included` are now pinned to the top of every
+  routed result — `tools/search`, `tools/list?query=…`, and the `/mcp`
+  `search_tools` meta-tool — regardless of semantic/hybrid relevance. Each pinned
+  result is tagged `pinned: true`.
+- Pinning is **scope-safe**: the pin fetch runs the same identity-bound scope
+  filter as the ranked arms (`services/hybrid_search.py`), so it never surfaces a
+  tool the caller could not otherwise discover.
+- Pins are **budget-bounded**: they take reserved seats inside the caller's
+  `limit` rather than inflating it, keeping prompt cost flat. If an admin pins
+  more tools than `limit`, the explicit intent wins and all pins are returned.
+- Authorable from Admin Studio via an "Always included" toggle on each tool, with
+  an advisory (non-blocking) warning past a recommended count of 5.
+- New setting `HYBRID_PIN_ALWAYS_INCLUDED` (default `true`) globally disables the
+  behavior. `search_tools` was refactored to separate ranking (`_search_ranked`)
+  from pinning (`_fetch_always_included` + `_merge_pinned`).
+
 ### Security: `/mcp` meta-tool authorization at parity with `/rpc`
 - The FastMCP `/mcp` meta-tool surface (`search_tools`, `list_catalog_tools`,
   `call_downstream_tool`) now enforces the same controls as the `/rpc` data plane.

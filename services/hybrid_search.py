@@ -220,11 +220,63 @@ class HybridSearchService:
         mode: str | None = None,
         server: str | None = None,
     ) -> list[dict[str, Any]]:
+        """Route a query to the most relevant tools, then pin always-included ones.
+
+        Ranking and pinning are deliberately separate responsibilities:
+        ``_search_ranked`` produces the relevance-ordered shortlist, and pinned
+        (``metadata.always_included``) tools are layered on top here so an admin
+        can guarantee a tool's presence without it ever bypassing identity-bound
+        scope filtering or silently inflating the caller's ``limit`` budget.
+        """
         effective_limit = limit or self.settings.hybrid_output_limit
         mode = (mode or SEARCH_MODE_HYBRID).lower()
         resolved_tenant_id = tenant_id or self.settings.default_tenant_id
         collection = get_tenant_database(resolved_tenant_id)["tool_catalog"]
 
+        ranked = await self._search_ranked(
+            collection=collection,
+            resolved_tenant_id=resolved_tenant_id,
+            query=query,
+            mode=mode,
+            effective_limit=effective_limit,
+            vector_weight=vector_weight,
+            text_weight=text_weight,
+            allowed_scopes=allowed_scopes,
+            server=server,
+        )
+
+        if not self.settings.hybrid_pin_always_included:
+            return ranked
+
+        pinned = await self._fetch_always_included(
+            collection=collection,
+            allowed_scopes=allowed_scopes,
+            server=server,
+        )
+        if not pinned:
+            return ranked
+        return self._merge_pinned(pinned=pinned, ranked=ranked, output_limit=effective_limit)
+
+    async def _search_ranked(
+        self,
+        *,
+        collection: Any,
+        resolved_tenant_id: str,
+        query: str,
+        mode: str,
+        effective_limit: int,
+        vector_weight: float | None,
+        text_weight: float | None,
+        allowed_scopes: list[str] | None,
+        server: str | None,
+    ) -> list[dict[str, Any]]:
+        """Relevance-ranked retrieval only -- the three-mode engine.
+
+        Lexical-only, vector-only, or hybrid $rankFusion, each with the same
+        graceful fallbacks (embedding-unavailable -> lexical; $rankFusion
+        unsupported -> app-side RRF). Knows nothing about always-included
+        pinning, which ``search_tools`` layers on top.
+        """
         if mode == SEARCH_MODE_TEXT:
             # Lexical-only needs no embedding -- skip the hot-path embed call.
             pipeline = build_text_pipeline(
@@ -302,6 +354,72 @@ class HybridSearchService:
                 allowed_scopes=allowed_scopes,
                 server=server,
             )
+
+    async def _fetch_always_included(
+        self,
+        *,
+        collection: Any,
+        allowed_scopes: list[str] | None,
+        server: str | None,
+    ) -> list[dict[str, Any]]:
+        """Fetch tools flagged ``metadata.always_included`` for this caller.
+
+        This is a plain metadata filter (not an Atlas search), so a ``find`` is
+        the cheapest, most honest choice. The same identity-bound scope filter
+        the ranked arms use is applied here too -- pinning never surfaces a tool
+        the caller could not otherwise discover.
+        """
+        scopes = _normalize_scopes(allowed_scopes)
+        match: dict[str, Any] = {"metadata.always_included": True}
+        if scopes is not None:
+            match.update(_scope_filter(scopes, server=server))
+        elif server:
+            match["server"] = server
+        cursor = collection.find(match, dict(_BASE_PROJECTION))
+        docs = await cursor.to_list(length=None)
+        # Deterministic order; pinned sets are tiny so an in-process sort is fine.
+        docs.sort(key=lambda doc: (doc.get("server") or "", doc.get("name") or ""))
+        return docs
+
+    @staticmethod
+    def _merge_pinned(
+        *,
+        pinned: list[dict[str, Any]],
+        ranked: list[dict[str, Any]],
+        output_limit: int,
+    ) -> list[dict[str, Any]]:
+        """Place pinned tools first, then fill remaining budget with relevance.
+
+        Pinned tools take "reserved seats" inside the caller's ``limit`` so the
+        prompt cost stays bounded in the common case. If an admin pins more tools
+        than ``limit``, all pinned tools are still returned -- the override is
+        explicit and the UI already warns about the recommended cap -- but the
+        relevance tail is then empty. Tools that are both pinned and relevant are
+        de-duplicated by ``(server, name)`` and appear once, at the top.
+        """
+        merged: list[dict[str, Any]] = []
+        seen: set[tuple[Any, Any]] = set()
+        for doc in pinned:
+            key = (doc.get("server"), doc.get("name"))
+            if key in seen:
+                continue
+            seen.add(key)
+            tagged = dict(doc)
+            tagged["pinned"] = True
+            merged.append(tagged)
+
+        remaining = max(0, output_limit - len(merged))
+        if remaining:
+            for doc in ranked:
+                key = (doc.get("server"), doc.get("name"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(doc)
+                remaining -= 1
+                if remaining == 0:
+                    break
+        return merged
 
     async def list_tools(
         self,

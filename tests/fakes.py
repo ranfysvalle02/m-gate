@@ -22,10 +22,27 @@ from datetime import UTC, datetime
 from typing import Any
 
 
+def _resolve_path(doc: dict[str, Any], key: str) -> Any:
+    """Resolve a (possibly dotted) field path against a nested document.
+
+    MongoDB treats ``"metadata.always_included"`` as a walk into the embedded
+    ``metadata`` sub-document; the fake mirrors that so queries on nested fields
+    behave like the real driver. A non-dotted key is a plain ``dict.get``.
+    """
+    if "." not in key:
+        return doc.get(key)
+    current: Any = doc
+    for part in key.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
 def _matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
     """Minimal query matcher: equality plus the few operators the gateway uses."""
     for key, expected in query.items():
-        actual = doc.get(key)
+        actual = _resolve_path(doc, key)
         if isinstance(expected, dict):
             for op, operand in expected.items():
                 if op == "$in":

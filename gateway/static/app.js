@@ -155,6 +155,9 @@ window.adminConsole = function adminConsole(config) {
     _toolSeq: 1,
     _codeEditors: {},
     _validateTimers: {},
+    // Soft, advisory-only cap: pinning many tools spends the agent's context
+    // budget on every call. Not enforced server-side -- the admin decides.
+    recommendedAlwaysIncludedMax: 5,
 
     async init() {
       this.initTheme();
@@ -1023,6 +1026,7 @@ window.adminConsole = function adminConsole(config) {
         description: "",
         action_type: "read",
         requires_confirmation: false,
+        always_included: false,
         requirements: "",
         raw_code: "",
         scopes: "",
@@ -1060,6 +1064,7 @@ window.adminConsole = function adminConsole(config) {
         description: tool.description || "",
         action_type: meta.action_type || "read",
         requires_confirmation: Boolean(meta.requires_confirmation),
+        always_included: Boolean(meta.always_included),
         requirements,
         raw_code: tool.raw_code || "",
         scopes,
@@ -1933,9 +1938,16 @@ window.adminConsole = function adminConsole(config) {
           metadata: {
             action_type: tool.action_type,
             requires_confirmation: Boolean(tool.requires_confirmation),
+            always_included: Boolean(tool.always_included),
           },
         };
       });
+    },
+
+    alwaysIncludedCount() {
+      return (this.forms.server.tools || []).filter(
+        (tool) => tool.always_included,
+      ).length;
     },
 
     // Instant, regex-based preview lint. Intentionally a subset of the server's

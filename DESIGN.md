@@ -204,6 +204,26 @@ So the gateway degrades gracefully — if the fusion stage is unavailable it fal
 back to application-side RRF, and ultimately to the semantic arm, so search
 never hard-fails.
 
+### Escaping relevance on purpose: always-included tools
+
+Sometimes the right answer is *not* "rank by relevance." An admin may want a
+house tool — a help/guide, a policy lookup, a tenant-specific workflow — present
+on *every* turn no matter what the agent asked. A tool flagged
+`metadata.always_included` is **pinned** to the top of every `search_tools`
+result regardless of its score. This is a deliberate override of the whole
+section above, so it is bounded by two rules that keep it honest:
+
+- **Pins still respect identity.** The always-included fetch runs the same
+  scope filter as the ranked arms, so a pin never surfaces a tool the caller
+  couldn't otherwise discover. You cannot pin your way around RBAC.
+- **Pins spend the budget.** Pinned tools take "reserved seats" inside the
+  caller's `limit` rather than inflating it, so prompt cost stays flat
+  (principle #1). The trade-off is real and local: every pin is a tool schema
+  the agent pays for on *every* call, which is why the Admin Studio warns past a
+  small recommended count rather than silently letting the catalog creep back
+  into the prompt. (If an admin pins more than `limit`, the explicit intent
+  wins and all pins are returned — the warning, not a hard cap, is the guard.)
+
 ---
 
 ## 5. Virtual servers: a tool is a function, not a deployment
