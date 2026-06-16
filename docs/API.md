@@ -31,7 +31,9 @@ username/password, in addition to presenting a pre-issued bearer:
   `OAUTH_METADATA_ENABLED=true`; otherwise `404`. The gateway is an OAuth2/OIDC *resource
   server* (bring your own IdP) and does not implement an authorization server.
 
-Authorization is unchanged: `/rpc` requires the principal to carry `admin` or `tool:invoke`.
+Authorization: reaching `/rpc` requires `admin`, `tool:invoke`, or `tool:read`;
+**calling** a tool (`tools/call`) additionally requires `admin` or `tool:invoke`
+(`tool:read` is discover-only). See AUTH.md for the full role matrix.
 
 Observability endpoints remain reachable without bearer auth:
 
@@ -76,8 +78,23 @@ require the `platform-admin` role.
     from the `/rpc` and `/mcp` data planes (optional body `{"reason":"..."}`);
     platform-admin only.
   - `POST /admin/tenants/{tenant_id}/resume` — lift a suspension; platform-admin only.
-  - `GET /admin/tenants` responses include `status` (`active`/`suspended`) and, when
-    suspended, `suspended_reason`. Suspension takes effect within
+  - `POST /admin/tenants/{tenant_id}/read-only` — freeze the tenant: it stays
+    `active` and discoverable, but `tools/call` and tenant-scoped config
+    mutations are refused (optional body `{"reason":"..."}`); platform-admin only.
+  - `POST /admin/tenants/{tenant_id}/read-write` — lift a read-only freeze;
+    platform-admin only.
+  - `GET /admin/tenants/{tenant_id}/tool-policy` — the tenant's curation policy:
+    `{allowlist, max_tools, disabled_tools, available_tools}`, where
+    `available_tools` is the tenant catalog annotated with `allowlisted`/`enabled`.
+    Platform-admin for any tenant; tenant-admin for their own.
+  - `PUT /admin/tenants/{tenant_id}/tool-policy` — replace the allowlist + cap
+    (`{"allowlist":["orders/*","weather/forecast"],"max_tools":10}`). An empty
+    allowlist means unrestricted; `max_tools=0` means unlimited. Entries are
+    normalized/de-duplicated. Refused for tenant-admins when the tenant is
+    read-only (platform-admin bypasses).
+  - `GET /admin/tenants` responses include `status` (`active`/`suspended`), when
+    suspended `suspended_reason`, plus `read_only` and (when frozen)
+    `read_only_reason`. Suspension/read-only take effect within
     `TENANT_STATUS_CACHE_TTL_SECONDS` across replicas (immediately on the acting node).
   - `GET /admin/tenants/{tenant_id}/egress-allowlist` — the tenant's downstream egress
     allowlist plus the deployment-wide `global_allowlist`, `enforced`, and `default_deny`
@@ -101,6 +118,12 @@ require the `platform-admin` role.
   - `GET /admin/servers/{server_name}`
   - `PATCH /admin/servers/{server_name}`
   - `DELETE /admin/servers/{server_name}`
+  - `POST /admin/servers/{server_name}/enable` — mount the virtual server for the
+    tenant. `POST /admin/servers/{server_name}/disable` — unmount it (it stays
+    registered but stops serving). Tenant-admins may toggle their own
+    `tenant`-origin servers; `platform`-origin servers require platform-admin.
+    Refused when the tenant is read-only (platform-admin bypasses). Optional
+    `tenant_id` query for platform-admin cross-tenant.
   - `GET /admin/servers/{server_name}/export` — download the code server as a
     self-contained, runnable FastMCP project (`application/zip`). Bundles every
     tool plus the transitive closure of sibling code tools they call via
@@ -152,7 +175,18 @@ require the `platform-admin` role.
     types + a generated `context.db[...]` snippet.
   - `POST /admin/explore/query` — execute read-only `find` / `aggregate` via the
     same host-side bridge policy and return results + copy/paste snippet.
-- **Users** (admin principal required; tenant-admins are scoped to their own tenant)
+- **Tools** (per-tool kill-switch; tenant-admin or platform-admin)
+  - `POST /admin/tools/{server}/{name}/disable` — add the tool to the tenant
+    `disabled_tools` overlay. A disabled tool is hidden from discovery and refused
+    on `tools/call` for **everyone, including admins** (`tool_disabled`).
+  - `POST /admin/tools/{server}/{name}/enable` — remove the tool from the overlay.
+    Both return `{tenant_id,server,name,enabled}`. Refused when the tenant is
+    read-only (platform-admin bypasses); optional `tenant_id` query for
+    platform-admin cross-tenant.
+- **Users** (admin principal required; tenant-admins are scoped to their own tenant).
+  User mutations (`create`, `demo`/`viewer` one-click, `update`, `delete`) are
+  refused for tenant-admins when the tenant is **read-only** (platform-admin
+  bypasses); token minting and self-service password change stay available.
   - `POST /admin/users` — create a user (`email`, `password`, optional `tenant_id`,
     `roles`, `scopes`, `status`). Only `platform-admin` may grant the `platform-admin`
     role or target another tenant.
@@ -165,6 +199,16 @@ require the `platform-admin` role.
     the created user. Same tenant-scoping RBAC as the other user routes; the creation
     is audit-logged (the password is never logged). This backs the **Create demo user**
     button in the Users tab.
+  - `POST /admin/users/viewer` — one-click: create the complete **read-only**
+    showcase identity. Same optional `{"email"?, "tenant_id"?}` body and
+    catalog-derived scopes (so discovery is complete) as `/users/demo`, but the
+    account carries `user` + `viewer` + `tool:read` (never `tool:invoke`). The one
+    credential is read-only on **both** planes: `viewer` makes it a read-only
+    **console** login (loads the UI + tool source, every mutation `403`s) and
+    `tool:read` makes a minted token a discover-only **MCP** principal
+    (`tools/list` / `tools/search` work; `tools/call` → `invoke_not_permitted`).
+    Returns the generated `password` once. Backs the **Create viewer user** button
+    in the Users tab.
   - `GET /admin/users/demo-scopes` — recommended demo `roles`/`scopes` for a tenant
     (optional `tenant_id` query), derived from its live catalog. Backs the console's
     **Demo** role preset so a manually-created demo user gets working scopes.
@@ -193,7 +237,11 @@ require the `platform-admin` role.
   - `GET /admin/telemetry`
   - `GET /admin/stats`
 - **Identity**
-  - `GET /admin/whoami`
+  - `GET /admin/whoami` — caller identity: `tenant_id`, `user_id`, `roles`,
+    `scopes`, `is_platform_admin`, `auth_mode`, plus `is_read_only` (the caller is
+    a read-only `viewer` principal) and `tenant_read_only` (the active tenant is
+    frozen — surfaced even to full admins). The console uses these to drive its
+    read-only banner and hide mutating affordances.
 - **Cache maintenance**
   - `POST /admin/cache/migrate`
 - **Embedding control plane** (`platform-admin` required)
@@ -227,8 +275,13 @@ Supported methods:
 
 Server-scope authorization model:
 
-- discovery (`tools/list`, `tools/search`) is filtered by `server:<name>` scopes
-- invocation (`tools/call`) requires `server:<server>` or `server:*` in caller scopes
+- discovery (`tools/list`, `tools/search`) is filtered by `server:<name>` scopes,
+  and further by the tenant tool policy (allowlist + `disabled_tools` are hidden)
+- invocation (`tools/call`) requires the `tool:invoke` role (or `admin`), the tool
+  to be within the tenant allowlist (when set) and not disabled, and
+  `server:<server>` or `server:*` in caller scopes
+- a read-only tenant keeps discovery open but refuses `tools/call`
+  (`tenant_read_only`)
 
 ### `initialize`
 
@@ -364,6 +417,11 @@ Common cases:
 - Tenant quota exceeded: JSON-RPC `RATE_LIMITED` with `reason=quota_exceeded`.
 - Suspended tenant: JSON-RPC `FORBIDDEN` (`-32003`) with `reason=tenant_suspended`
   (and `detail` carrying the operator-supplied reason when present).
+- Read-only tenant: JSON-RPC `FORBIDDEN` (`-32003`) with `reason=tenant_read_only`
+  on `tools/call` (discovery still succeeds).
+- Tool refused by policy: `FORBIDDEN` (`-32003`) with `reason` one of
+  `invoke_not_permitted` (caller lacks `tool:invoke`), `tool_not_allowlisted`
+  (outside the tenant allowlist), or `tool_disabled` (per-tool kill-switch).
 
 ## `/mcp` Sub-Application Note
 
@@ -376,16 +434,20 @@ that surface; use `/docs` or `/redoc` for REST/admin endpoints.
 The meta-tools (`search_tools`, `list_catalog_tools`, `call_downstream_tool`)
 enforce the same authorization as the `/rpc` data plane:
 
-- **Coarse RBAC:** the caller must carry `admin` or `tool:invoke`, and a suspended
-  account is cut off — same gate as `/rpc`.
+- **Coarse RBAC:** the caller must carry `admin`, `tool:invoke`, or `tool:read`,
+  and a suspended account is cut off — same gate as `/rpc`. `tool:read` can
+  discover (`search_tools`, `list_catalog_tools`) but `call_downstream_tool` is
+  refused (`invoke_not_permitted`).
 - **Tenant binding:** the tenant is taken from the verified token claim. Passing a
   `tenant_id` argument that does not match the authenticated tenant raises a FastMCP
   `ToolError` (`cross_tenant_forbidden`). Cross-tenant access is not available on
   `/mcp`; use the platform-admin `/admin` API.
 - **Per-call authorization:** `call_downstream_tool` runs `authorize_tool_call`, so
-  the named `(server, tool)` must exist in the tenant catalog and the caller must
-  satisfy its required scopes (or be `admin`); otherwise it raises a `ToolError`
-  (`forbidden: <reason>`). A suspended tenant raises before authorization.
+  the named `(server, tool)` must exist in the tenant catalog, not be disabled, be
+  within the tenant allowlist (when set), and the caller must carry `tool:invoke`
+  and satisfy its required scopes (or be `admin`); otherwise it raises a `ToolError`
+  (`forbidden: <reason>`). A suspended tenant raises before authorization; a
+  read-only tenant raises `tenant_read_only` before authorization.
 - **Quota enforcement:** after authorization, `call_downstream_tool` checks the
   tenant usage quota and raises a `ToolError` (`quota_exceeded: <reason>`) when the
   ceiling is reached — `/mcp` cannot be used to bypass the limits enforced on

@@ -132,6 +132,18 @@
         <template x-if="state.errorMessage">
           <div class="error-banner" @click="clearError()" title="Dismiss" x-text="state.errorMessage"></div>
         </template>
+        <template x-if="state.whoami?.is_read_only">
+          <div class="readonly-banner" role="status">
+            <span class="readonly-banner-icon" aria-hidden="true">🔒</span>
+            <span><strong>Read-only access.</strong> You can browse the console and view tool source, but every change is disabled. Ask a platform admin for write access.</span>
+          </div>
+        </template>
+        <template x-if="!state.whoami?.is_read_only && state.whoami?.tenant_read_only">
+          <div class="readonly-banner" role="status">
+            <span class="readonly-banner-icon" aria-hidden="true">🔒</span>
+            <span><strong>Tenant is read-only.</strong> Tool calls and tenant-scoped config changes are frozen. A platform admin can lift this from the Tenants tab.</span>
+          </div>
+        </template>
         <section class="content-shell">{% block content %}{% endblock %}</section>
       </main>
 
@@ -736,6 +748,149 @@ def latest(user_id: str) -> dict:
               </div>
               <p><code>ObjectId</code> becomes a string and <code>datetime</code> becomes an ISO-8601 UTC timestamp automatically, so you can hand documents straight back to the caller.</p>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============================ Tenant tool policy ====================== -->
+      <div
+        class="modal-overlay"
+        x-show="state.toolPolicyOpen"
+        x-cloak
+        @click.self="closeToolPolicy()"
+        @keydown.escape.window="closeToolPolicy()"
+        x-transition:enter="modal-overlay-enter-active"
+        x-transition:enter-start="modal-overlay-enter-from"
+        x-transition:enter-end="modal-overlay-enter-to"
+        x-transition:leave="modal-overlay-leave-active"
+        x-transition:leave-start="modal-overlay-leave-from"
+        x-transition:leave-end="modal-overlay-leave-to"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tool-policy-title"
+      >
+        <div
+          class="modal-card"
+          x-show="state.toolPolicyOpen"
+          x-transition:enter="modal-card-enter-active"
+          x-transition:enter-start="modal-card-enter-from"
+          x-transition:enter-end="modal-card-enter-to"
+        >
+          <div class="modal-header">
+            <div>
+              <div class="modal-eyebrow">Tenant curation</div>
+              <h2 class="modal-title" id="tool-policy-title">
+                Tool policy — <span x-text="state.toolPolicyTenant"></span>
+              </h2>
+              <p class="modal-subtitle">
+                Curate exactly which tools a tenant can discover and call. An empty
+                allowlist means unrestricted; a disabled tool is always hidden and
+                refused, even to admins.
+              </p>
+            </div>
+            <button type="button" class="modal-close" @click="closeToolPolicy()" title="Close (Esc)" aria-label="Close">✕</button>
+          </div>
+
+          <div class="modal-body">
+            <template x-if="state.toolPolicyLoading">
+              <p class="text-sm text-slate-500">Loading policy…</p>
+            </template>
+
+            <template x-if="!state.toolPolicyLoading && state.toolPolicy">
+              <div class="space-y-4">
+                <div class="flex items-end gap-3 flex-wrap">
+                  <div>
+                    <label class="field-label" for="max-tools-input">Max tools (0 = unlimited)</label>
+                    <input
+                      id="max-tools-input"
+                      type="number"
+                      min="0"
+                      class="field-input w-40"
+                      x-model.number="state.toolPolicyMaxTools"
+                    />
+                  </div>
+                  <div class="text-xs text-slate-500">
+                    <div>
+                      Allowlisted:
+                      <strong x-text="(state.toolPolicyAllowlist || []).length"></strong>
+                      of
+                      <strong x-text="(state.toolPolicy.available_tools || []).length"></strong>
+                      tool(s)
+                    </div>
+                    <div x-show="(state.toolPolicyAllowlist || []).length === 0">
+                      Allowlist empty → all tools discoverable (unrestricted).
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn-primary"
+                    @click="saveToolPolicy()"
+                    :disabled="state.toolPolicySaving"
+                    x-text="state.toolPolicySaving ? 'Saving…' : 'Save allowlist & cap'"
+                  ></button>
+                </div>
+
+                <template x-if="(state.toolPolicy.available_tools || []).length === 0">
+                  <p class="text-sm text-slate-500">
+                    This tenant has no catalogued tools yet. Register a server first.
+                  </p>
+                </template>
+
+                <div class="table-wrap" x-show="(state.toolPolicy.available_tools || []).length > 0">
+                  <table class="table">
+                    <thead>
+                      <tr>
+                        <th>Allow</th>
+                        <th>Tool</th>
+                        <th>Description</th>
+                        <th>State</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="tool in state.toolPolicy.available_tools" :key="`${tool.server}/${tool.name}`">
+                        <tr>
+                          <td>
+                            <input
+                              type="checkbox"
+                              :checked="isToolAllowlisted(tool)"
+                              @change="toggleAllowlistTool(tool)"
+                              :title="`Allowlist ${tool.server}/${tool.name}`"
+                            />
+                          </td>
+                          <td>
+                            <code x-text="`${tool.server}/${tool.name}`"></code>
+                          </td>
+                          <td class="truncate max-w-xs" x-text="tool.description || '-'"></td>
+                          <td>
+                            <span
+                              x-show="tool.disabled"
+                              class="badge badge-readonly"
+                              title="Disabled for this tenant: hidden from discovery and refused on call"
+                            >disabled</span>
+                            <span x-show="!tool.disabled" class="text-emerald-700 text-xs">enabled</span>
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              class="link-btn"
+                              @click="toggleToolEnabled(tool)"
+                              x-text="tool.disabled ? 'Enable' : 'Disable'"
+                            ></button>
+                          </td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+
+                <p class="text-xs text-slate-500">
+                  <strong>Allowlist</strong> (saved together with the cap) limits which tools are
+                  visible/invocable. <strong>Disable</strong> is an instant per-tool kill-switch
+                  applied immediately. Both survive catalog re-syncs.
+                </p>
+              </div>
+            </template>
           </div>
         </div>
       </div>

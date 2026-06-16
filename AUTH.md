@@ -46,7 +46,12 @@ downstream:
 
 - `tenant_id`, `user_id`
 - `roles`, `scopes`
-- `is_admin_principal` — only `true` for admin-tier roles
+- `is_admin_principal` — `true` for any principal allowed to load the admin
+  console: an admin-tier role (`admin`/`platform-admin`) **or** the read-only
+  `viewer` role.
+- `is_read_only_principal` — `true` for a `viewer` that has **no** full-admin
+  role. It reaches the console but every mutating `/admin` call is refused (a
+  full admin that also carries `viewer` is never downgraded).
 - `admin_auth_via_cookie` — drives CSRF enforcement
 - `authenticated_via_basic`
 
@@ -143,7 +148,8 @@ curl http://localhost:8000/rpc \
   protection.
 
 > Getting a token authenticates you; it does **not** bypass authorization. The
-> principal still needs `admin` or `tool:invoke` to use `/rpc` (see §3).
+> principal still needs `admin`, `tool:invoke`, or `tool:read` to reach `/rpc`,
+> and `admin`/`tool:invoke` specifically to **call** a tool (see §3).
 
 Not a curl person? The admin console mints the same scoped bearer with one click
 (**Users → Generate token**, or **Create demo user**) and shows the one-time
@@ -179,11 +185,29 @@ Runs right after `AuthMiddleware`, reading the hydrated `request.state`.
 
 **Role hierarchy:** `platform-admin` → `tenant-admin` (role `admin`) → `user`.
 
+**Principal / role matrix** (least privilege — hand out the narrowest one that
+does the job):
+
+| Role | Console (`/admin`, `/ui`) | Data plane (`/rpc`, `/mcp`) | Intended for |
+| --- | --- | --- | --- |
+| `platform-admin` | full read/write, **all tenants** | full | operators |
+| `admin` (tenant-admin) | full read/write, **own tenant** | full | tenant owners |
+| `viewer` | **read-only** (loads UI + views tool source; every mutation `403`) | — | safe showcase / auditors |
+| `tool:invoke` | — | `tools/list` + `tools/search` + **`tools/call`** | apps & agents that run tools |
+| `tool:read` | — | `tools/list` + `tools/search` only (**`tools/call` → `403`**) | discover-only MCP tokens |
+| `user` | authenticated, no console | — (needs an invoke/read role to reach tools) | base identity |
+
 - **`/admin`** requires an admin principal, else `401`. Unsafe methods
   (`POST/PUT/PATCH/DELETE`) authenticated **via cookie** also require a matching
   CSRF token (`x-csrf-token` header vs `csrf_token` cookie, compared with
   constant-time `hmac.compare_digest`). Bearer-authenticated admin API calls are
   not subject to CSRF.
+  - **Read-only console (`viewer`).** A single choke point here refuses every
+    unsafe method on `/admin` when `is_read_only_principal` is set →
+    `403 Read-only access: mutations are disabled.` `GET`/`HEAD` (UI load,
+    tool-source view, exports) stay allowed, so a viewer can explore everything
+    without being able to change it. Because it is enforced centrally, every
+    mutating admin endpoint is covered without a per-handler guard.
 - **Admin UI** (non-login paths) requires an admin principal, else a `303`
   redirect to the login page.
 - **`/rpc` and `/mcp`**: the JSON-RPC data plane and the mounted FastMCP
@@ -195,7 +219,11 @@ Runs right after `AuthMiddleware`, reading the hydrated `request.state`.
      the account. Principals with no `session_context` doc (e.g. workload
      tokens) are left untouched.
   2. Merges any `session_context.roles` into the request roles.
-  3. Requires `admin` **or** `tool:invoke`, else `403 Insufficient permissions`.
+  3. Requires `admin`, `tool:invoke`, **or** `tool:read`, else
+     `403 Insufficient permissions`. `tool:read` clears this coarse gate so a
+     discover-only token can list/search; the **per-call** invoke check in
+     `services/authorization.py` still refuses `tools/call` to anything without
+     `tool:invoke` (reason `invoke_not_permitted`).
 
 `session_context` is kept in lockstep with the `users` collection by
 `sync_session_context`, so a user managed in the console is authorized
@@ -215,10 +243,23 @@ gateway-verified `request.state` (tenant, roles, scopes) via FastMCP's
   (`cross_tenant_forbidden`) — there is no cross-tenant override on `/mcp`;
   cross-tenant work stays on the platform-admin `/admin` API.
 - **Per-call authorization.** `call_downstream_tool` runs the same
-  `authorize_tool_call` the `/rpc` `tools/call` path uses: the tool must exist in
-  the tenant catalog and the caller must satisfy its required scopes (or be
-  `admin`), else `ToolError` (`forbidden`). Discovery (`search_tools`,
-  `list_catalog_tools`) is likewise tenant-bound and scope-filtered.
+  `authorize_tool_call` the `/rpc` `tools/call` path uses. The checks run in this
+  order (any failure returns a `ToolError` with a machine `reason`):
+  1. tool exists in the tenant catalog, else `tool_not_found`;
+  2. the tool is not tenant-**disabled**, else `tool_disabled` (an absolute
+     kill-switch that blocks *everyone, including admins* — see §3.2);
+  3. `admin` short-circuits to allow (bypasses the remaining checks);
+  4. the caller carries `tool:invoke`, else `invoke_not_permitted` (this is what
+     keeps a `tool:read`/viewer token discover-only);
+  5. the tool is within the tenant **allowlist** (if one is set), else
+     `tool_not_allowlisted`;
+  6. the caller satisfies the tool's required scopes (server scope + tool
+     scopes), else `server_scope_required` / `scope_mismatch`.
+
+  Discovery (`search_tools`, `list_catalog_tools`) is likewise tenant-bound,
+  scope-filtered, **and** curation-filtered: tools outside the allowlist or that
+  are disabled are hidden from the catalog entirely, so a curated showcase only
+  ever surfaces the curated set.
 - **Quota, metering, and audit.** After authorization, `call_downstream_tool`
   enforces the tenant usage quota (`ToolError` `quota_exceeded` when the ceiling is
   hit), meters the billable call, and writes an `audit_telemetry` row for the
@@ -227,6 +268,48 @@ gateway-verified `request.state` (tenant, roles, scopes) via FastMCP's
   billable-call step is shared via `services/data_plane.py` so the two surfaces
   meter identically and cannot drift. Net result: `/mcp` is a full peer of `/rpc`,
   not a weaker bypass.
+
+### 3.2 Read-only tenants & per-tenant tool curation
+
+> See **[READONLY.md](READONLY.md)** for a screenshot-driven walkthrough (freeze a
+> tenant, curate tools, hand out a viewer login).
+
+Two orthogonal, admin-controlled overlays let you **safely showcase** a tenant
+without risking mutation or exposing the full tool surface
+(`services/tenant_status.py`, `services/tenant_tool_policy.py`):
+
+- **Read-only tenant** (`read_only` flag, separate from `status`). The tenant
+  stays `active` and fully **discoverable**, but every write/invoke is frozen:
+  - `tools/call` on `/rpc` and `/mcp` is refused at the dispatch gate with
+    `403` / `tenant_read_only` (`assert_tenant_writable`), *before* authz, quota,
+    or any downstream hop;
+  - tenant-scoped **config mutations** (server create/patch/delete + env,
+    tool-policy edits, server/tool enable-disable, egress, **and user management
+    — create / demo / viewer / update / delete**) are refused for tenant-admins
+    via `_require_tenant_writable`. Token minting and password self-service stay
+    available (they create no tenant state and the data plane is already frozen).
+  - **Platform-admin always bypasses** the writable guard — the operator who
+    froze the tenant can still configure it and lift the freeze
+    (`POST /admin/tenants/{id}/read-only` / `/read-write`).
+- **Per-tenant tool policy** (`GET`/`PUT /admin/tenants/{id}/tool-policy`):
+  - `allowlist` — fully-qualified `server/name` or a `server/*` wildcard. An
+    **empty** allowlist means *unrestricted* (curation is opt-in). When set, any
+    tool outside it is hidden from discovery and refused on call
+    (`tool_not_allowlisted`).
+  - `max_tools` — a cap enforced at server registration (`422` when a mount
+    would exceed it); `0` means unlimited.
+  - `disabled_tools` — a per-tool kill-switch overlay
+    (`POST /admin/tools/{server}/{name}/disable` / `/enable`). A disabled tool is
+    hidden from discovery and refused for **everyone, including admins**
+    (`tool_disabled`).
+- **Server enable/disable** (`POST /admin/servers/{name}/enable` / `/disable`)
+  mounts/unmounts a virtual server for the tenant. Tenant-admins may toggle their
+  own `tenant`-origin servers; platform-origin servers require platform-admin.
+  Blocked when the tenant is read-only (platform-admin bypasses).
+
+Server-side enforcement is the security boundary; the console additionally hides
+mutating affordances for read-only principals as UX (`canMutate()`), but the
+`403` is the real guard.
 
 ---
 
@@ -311,6 +394,7 @@ Key properties:
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` (`_FILE`) | — | bootstrap admin |
 | `ADMIN_UI_ENABLED` / `ADMIN_UI_PATH` | `true` / `/ui` | admin console |
 | `PLATFORM_ADMIN_ROLE` | `platform-admin` | top-tier role name |
+| `PLATFORM_VIEWER_ROLE` | `viewer` | read-only console role name |
 
 ### Downstream
 
@@ -369,3 +453,23 @@ Clients call `POST /auth/token` to get a bearer, or send HTTP Basic on `/rpc`.
 The fastest path of all: open the admin console **Users** tab and click
 **Generate token** to mint a ready-to-paste scoped bearer (plus copy-paste Cursor
 `mcp.json` / curl snippets) for any managed user.
+
+**Safely showcase a tenant to your team (no mutation, curated tools):**
+
+As a **platform-admin**, from the console (or the equivalent `/admin` calls):
+
+1. **Curate** the tenant's surface — Tenants → **Tool policy**: pick an allowlist
+   (e.g. 3 read-only tools) and/or a `max_tools` cap; disable anything risky.
+2. **Freeze** the tenant — Tenants → **Make read-only** (`tools/call` and tenant
+   config edits now `403`; discovery still works).
+3. Hand out a least-privilege login: click **Create viewer user**. The single
+   credential it returns carries `viewer` + `tool:read`, so it is read-only on
+   **both** planes at once:
+   - **Console** — logs into the admin UI read-only (browse the UI + tool source);
+     every mutation `403`s.
+   - **MCP** — `Generate token` mints a `tool:read` bearer that can
+     `tools/list` / `tools/search` the curated catalog, but `tools/call` is
+     rejected (`invoke_not_permitted`).
+
+Net effect: the audience can explore everything and run nothing, while you (the
+platform-admin) retain full control and can lift the freeze at any time.

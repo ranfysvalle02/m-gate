@@ -119,7 +119,10 @@ What you get for free by being a first-class provider:
   blip degrades gracefully instead of failing the request path.
 - **Dimensions are detected, not declared.** The default model is `voyage-3`, and
   the vector width is measured by embedding a probe string on first use — so the
-  Atlas vector index `numDimensions` can never drift out of sync with the data:
+  Atlas vector index `numDimensions` can never drift out of sync with the data. If
+  that probe ever fails for a cloud provider, the gateway **refuses to guess a
+  width** (it never reuses Ollama's 768) and fails loudly on index-building paths,
+  so a wrong-width index can never be created:
 
 ```22:29:services/embeddings.py
 # Per-provider default model used when the operator does not pick one explicitly.
@@ -217,7 +220,9 @@ def embedding_version_for(service: EmbeddingService) -> str:
 - **Keep `EMBEDDING_SECRET` stable.** It encrypts the stored Voyage key; rotating
   it makes the saved key undecryptable and you'd re-enter it in the panel.
 - **Resilience:** retries + circuit breaker + lexical fallback mean a Voyage outage
-  drops you to BM25-only routing rather than taking the gateway down.
+  drops you to BM25-only routing rather than taking the gateway down. The fallback
+  is always lexical — the gateway never silently swaps in a *different* embedding
+  model (e.g. Ollama), which would mix vector spaces and corrupt results.
 
 ---
 
@@ -245,9 +250,9 @@ Two of these are grounded in the current code and are easy, high-leverage wins:
 ## 8. Quickstart (this repo)
 
 The fastest path is the **Voyage drop-in**: set a single env var and the gateway
-selects *and* authenticates Voyage for you (promotes the default provider, model
-`voyage-3`, vector width auto-detected). `docker compose` reads it straight from
-your local `.env`.
+auto-selects *and* authenticates Voyage for you (no `EMBEDDING_PROVIDER` needed,
+model `voyage-3`, vector width auto-detected). `docker compose` reads it straight
+from your local `.env`, and Ollama is never contacted while the key is set.
 
 ```bash
 VOYAGE_API_KEY=pa-...             # that's it — provider auto-resolves to voyage
@@ -268,8 +273,17 @@ EMBEDDING_API_KEY=pa-...          # explicit key wins over VOYAGE_API_KEY
 EMBEDDING_SECRET=<stable-random>  # encrypts the stored key; set once, keep stable
 ```
 
-Precedence: an explicit `EMBEDDING_PROVIDER` / `EMBEDDING_API_KEY` always wins;
-otherwise a lone `VOYAGE_API_KEY` activates Voyage. Prefer `VOYAGE_API_KEY_FILE`
+Precedence is intentionally crisp so the active model is never ambiguous:
+
+1. An **explicit** `EMBEDDING_PROVIDER` always wins — including `ollama`. Pinning a
+   provider can never be silently flipped by a stray key.
+2. With the provider **unset**, a lone `VOYAGE_API_KEY` auto-selects Voyage;
+   otherwise the offline `ollama` default applies.
+3. `EMBEDDING_API_KEY` wins over `VOYAGE_API_KEY`, and the Voyage key never leaks
+   into another provider's config.
+
+While Voyage is the resolved provider, **Ollama is never consulted or contacted** —
+its `OLLAMA_*` settings (including width) are inert. Prefer `VOYAGE_API_KEY_FILE`
 (or `EMBEDDING_API_KEY_FILE`) for secret mounts in production.
 
 Then bootstrap so the catalog is embedded with Voyage and the indexes are built:

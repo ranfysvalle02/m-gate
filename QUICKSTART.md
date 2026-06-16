@@ -146,6 +146,30 @@ the full catalog — the "route by meaning" front door.
 >
 > ![Built-in MCP and JSON-RPC protocol guide in the admin console](docs/images/learn-mcp.png)
 
+## 7. Safely showcase to your team (read-only, curated)
+
+Want to let teammates explore the platform without risking any change or letting
+them run arbitrary tools? As a **platform-admin**, from the console:
+
+1. **Curate the tools** — Tenants → **Tool policy**: pick an allowlist (e.g. a few
+   read-only tools) and/or a `max_tools` cap, and disable anything risky. Only the
+   curated set will show up in discovery and be callable.
+2. **Freeze the tenant** — Tenants → **Make read-only**. The tenant stays active
+   and browsable, but `tools/call` and tenant config edits now return `403`. A
+   sticky banner appears in the console.
+3. **Hand out a least-privilege login** — Users → **Create viewer user**. It gives
+   you both a read-only **console** login (browse the UI + tool source; every
+   mutation is `403`) and an MCP token whose role is `tool:read`: it can
+   `tools/list` / `tools/search` the curated catalog, but `tools/call` is rejected
+   (`invoke_not_permitted`).
+
+Your audience can now explore everything and run nothing. You keep full control
+and can lift the freeze (**Make read-write**) or re-curate at any time.
+
+> Full walkthrough with screenshots, the enforcement diagram, and an error/troubleshooting
+> table: **[`READONLY.md`](READONLY.md)** (role matrix and internals in
+> [`AUTH.md`](AUTH.md) §3).
+
 ---
 
 ## Troubleshooting
@@ -154,7 +178,11 @@ the full catalog — the "route by meaning" front door.
 | --- | --- |
 | `401 {"detail":"Missing bearer token."}` | The data plane always requires auth. Attach `Authorization: Bearer <token>` (step 4). |
 | `401 {"detail":"Invalid bearer token."}` | Token expired or signed with a different secret. Generate a fresh one from the console. |
-| `403 {"detail":"Insufficient permissions."}` | The principal lacks `tool:invoke` (or `admin`). Use `agent@demo.com`, or grant the role in the Users tab. |
+| `403 {"detail":"Insufficient permissions."}` | The principal lacks `tool:invoke`, `tool:read`, or `admin`. Use `agent@demo.com`, or grant the role in the Users tab. |
+| `tools/call` → `403` `reason=invoke_not_permitted` | The token is discover-only (`tool:read`, e.g. a viewer). Use an account with `tool:invoke` to run tools. |
+| `tools/call` → `403` `reason=tenant_read_only` | The tenant is frozen read-only. **Make read-write** (platform-admin) to re-enable invocation; discovery still works. |
+| `tools/call` → `403` `reason=tool_not_allowlisted` / `tool_disabled` | The tool is outside the tenant allowlist or disabled. Adjust **Tool policy** / re-enable the tool (platform/tenant-admin). |
+| `403 {"detail":"Read-only access: mutations are disabled."}` | You're signed in as a `viewer` (read-only console). Sign in as an admin to make changes. |
 | Bootstrap exits during embedding preflight | The selected embedding provider is unreachable. For **Voyage**, check `VOYAGE_API_KEY` in your `.env`; for **Ollama**, run `ollama pull nomic-embed-text`. Then retry. |
 | `503 {"detail":"Authentication temporarily unavailable."}` | Only in `AUTH_MODE=jwks`: the JWKS endpoint is unreachable. Check `JWKS_URI` / `JWKS_LOCAL_PATH`. |
 

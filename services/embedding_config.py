@@ -157,10 +157,12 @@ async def decrypt_tenant_api_key(
 # --------------------------------------------------------------------------- #
 # Defaults + validation
 # --------------------------------------------------------------------------- #
-def default_model_for(provider: str, settings: Settings | None = None) -> str:
+def default_model_for(provider: str | None, settings: Settings | None = None) -> str:
     settings = settings or get_settings()
     if settings.embedding_model:
         return settings.embedding_model
+    if not provider:
+        provider = _resolve_provider_and_key(settings)[0]
     if provider == "ollama":
         return settings.ollama_model
     if provider == "azure_openai":
@@ -191,24 +193,33 @@ def default_config_from_settings(settings: Settings | None = None) -> EmbeddingC
 
 
 def _resolve_provider_and_key(settings: Settings) -> tuple[str, str]:
-    """Resolve the env-default ``(provider, api_key)`` with Voyage drop-in support.
+    """Resolve the env-default ``(provider, api_key)``.
 
-    Voyage AI is MongoDB's first-party retrieval stack, so a lone ``VOYAGE_API_KEY``
-    is treated as "use Voyage": it promotes the *default* provider (``ollama``) to
-    ``voyage`` and supplies the key when no generic ``EMBEDDING_API_KEY`` is set.
-    An explicit non-default ``EMBEDDING_PROVIDER`` and an explicit
-    ``EMBEDDING_API_KEY`` always take precedence.
+    The rules are intentionally crisp so the active provider is never ambiguous —
+    this matters for enterprise deployments where "which model embedded this?" must
+    have a single, obvious answer:
+
+    1. An **explicit** ``EMBEDDING_PROVIDER`` always wins — including ``ollama``.
+    2. When ``EMBEDDING_PROVIDER`` is unset, a lone ``VOYAGE_API_KEY`` auto-selects
+       Voyage (MongoDB's first-party retrieval stack); otherwise the offline
+       ``ollama`` default applies.
+    3. ``EMBEDDING_API_KEY`` always wins over ``VOYAGE_API_KEY``; a lone
+       ``VOYAGE_API_KEY`` only ever supplies the key when the resolved provider is
+       Voyage (it never leaks into another provider's config).
+
+    When the resolved provider is not Voyage, the Voyage key is ignored; when it is
+    not Ollama, Ollama settings are never consulted downstream.
     """
-    provider = settings.embedding_provider
-    if provider not in SUPPORTED_PROVIDERS:
-        provider = "ollama"
-    api_key = settings.embedding_api_key or ""
     voyage_key = (settings.voyage_api_key or "").strip()
-    if voyage_key:
-        if provider == "ollama":
-            provider = "voyage"
-        if provider == "voyage" and not api_key:
-            api_key = voyage_key
+    raw_provider = settings.embedding_provider
+    if raw_provider in SUPPORTED_PROVIDERS:
+        provider = raw_provider  # explicit selection wins, even "ollama"
+    else:
+        # Unset (or unrecognized) -> auto-select: Voyage when a key is present.
+        provider = "voyage" if voyage_key else "ollama"
+    api_key = settings.embedding_api_key or ""
+    if provider == "voyage" and not api_key and voyage_key:
+        api_key = voyage_key
     return provider, api_key
 
 
@@ -244,7 +255,7 @@ def _config_from_doc(
     source: str = "db",
 ) -> EmbeddingConfig:
     return EmbeddingConfig(
-        provider=str(doc.get("provider") or settings.embedding_provider),
+        provider=str(doc.get("provider") or _resolve_provider_and_key(settings)[0]),
         model=str(doc.get("model") or ""),
         base_url=doc.get("base_url"),
         dimensions=int(doc.get("dimensions") or 0),
@@ -417,7 +428,19 @@ async def resolve_dimensions(
     config: EmbeddingConfig,
     settings: Settings | None = None,
 ) -> EmbeddingConfig:
-    """Return ``config`` with a concrete ``dimensions``, detecting if unknown."""
+    """Return ``config`` with a concrete ``dimensions``, detecting if unknown.
+
+    Dimension width is **provider-specific**, so the failure path is too:
+
+    - **Ollama** has a declared width (``OLLAMA_DIMENSIONS``) that is a legitimate
+      last-resort fallback when a probe can't run.
+    - **Every other provider** (Voyage, OpenAI, Azure, Gemini) has no safe declared
+      width here. Guessing one — e.g. silently reusing Ollama's 768 — would build
+      the Atlas vector index at the wrong size and quietly corrupt retrieval. So we
+      refuse to guess and fail loudly; callers that must stay up (gateway startup)
+      already catch this and degrade, while index-building paths (bootstrap,
+      reprovision) abort before any wrong-width index is created.
+    """
     if config.dimensions and config.dimensions > 0:
         return config
     settings = settings or get_settings()
@@ -425,14 +448,22 @@ async def resolve_dimensions(
     try:
         dims = await service.detect_dimensions()
     except Exception as exc:
-        logger.warning(
-            "Embedding dimension detection failed for provider '%s' (%s); "
-            "falling back to ollama_dimensions=%d.",
+        if config.provider == "ollama":
+            logger.warning(
+                "Ollama embedding dimension detection failed (%s); falling back to "
+                "ollama_dimensions=%d.",
+                exc,
+                settings.ollama_dimensions,
+            )
+            return replace(config, dimensions=settings.ollama_dimensions)
+        logger.error(
+            "Embedding dimension detection failed for provider '%s' (%s). Refusing to "
+            "guess a vector width (a wrong width silently corrupts the vector index); "
+            "fix provider connectivity/credentials and retry.",
             config.provider,
             exc,
-            settings.ollama_dimensions,
         )
-        dims = settings.ollama_dimensions
+        raise
     return replace(config, dimensions=dims)
 
 

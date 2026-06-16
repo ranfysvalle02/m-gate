@@ -32,7 +32,12 @@ from services.proxy_registry import DownstreamTimeout, get_proxy_registry
 from services.registry_watcher import get_catalog_version
 from services.telemetry_logger import TelemetryLogger, get_telemetry_logger
 from services.tenant_provisioner import UnknownTenantError, ensure_tenant_ready
-from services.tenant_status import TenantInactiveError, assert_tenant_active
+from services.tenant_status import (
+    TenantInactiveError,
+    assert_tenant_active,
+    assert_tenant_writable,
+)
+from services.tenant_tool_policy import filter_available_tools
 from services.tracing import set_span_attribute, start_span
 from services.usage_metering import check_quota, check_sandbox_preflight
 
@@ -177,6 +182,10 @@ async def _dispatch(context: RpcContext) -> JsonRpcResponse:
             # Abuse kill-switch: a suspended tenant cannot run tools or consume
             # resources until an operator resumes it.
             await assert_tenant_active(context.tenant_id, settings=context.settings)
+            # Read-only tenants stay fully discoverable but cannot invoke: block
+            # tools/call here so a curated showcase can never mutate anything.
+            if request.method == "tools/call":
+                await assert_tenant_writable(context.tenant_id, settings=context.settings)
         return await handler(context)
     except ValidationError as exc:
         return make_error_response(
@@ -653,6 +662,10 @@ async def _handle_tools_list(context: RpcContext) -> JsonRpcResponse:
             items = items[:limit]
         next_cursor = str(offset + limit) if has_more else None
 
+    # Curation overlay: a tenant's allowlist / disabled-tools policy hides tools
+    # from discovery so a read-only showcase only ever surfaces the curated set.
+    items = await filter_available_tools(context.tenant_id, items, settings=context.settings)
+
     _telemetry(
         context,
         status=status,
@@ -693,6 +706,7 @@ async def _handle_tools_search(context: RpcContext) -> JsonRpcResponse:
         allowed_scopes=scopes,
         mode=search_params.mode,
     )
+    items = await filter_available_tools(context.tenant_id, items, settings=context.settings)
     _telemetry(
         context,
         status="hybrid_search_success",

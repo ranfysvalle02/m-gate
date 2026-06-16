@@ -138,3 +138,81 @@ async def test_get_demo_scopes_endpoint(reset_settings, patch_mongo):
     assert res.tenant_id == "local-dev"
     assert "server:*" in res.scopes and "weather" in res.scopes
     assert set(res.roles) == {"user", "tool:invoke"}
+
+
+# --------------------------------------------------------------------------- #
+# POST /admin/users/viewer: a discover-only (tool:read) account in one call
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_create_viewer_user_is_discover_only(reset_settings, patch_mongo):
+    await _seed_catalog(patch_mongo)
+    req = _Req(roles=["platform-admin"], tenant_id="local-dev")
+
+    res = await users_router.create_viewer_user(req, None)
+
+    assert res.created is True
+    assert res.password
+    assert res.user.email.startswith("viewer-") and res.user.email.endswith("@demo.local")
+    # The one-click viewer is the complete read-only identity: `viewer` (read-only
+    # console login) + `tool:read` (discover-only MCP), but never `tool:invoke`.
+    assert set(res.user.roles) == {"user", "viewer", "tool:read"}
+    assert "server:*" in res.user.scopes
+
+    principal = await users_service.authenticate(res.user.email, res.password)
+    assert principal is not None
+
+    # A token minted for it does NOT clear the data-plane invoke gate, and the
+    # caveat explains it can discover but not call.
+    token_res = await users_router.mint_user_token(
+        _Req(roles=["platform-admin"], tenant_id="local-dev"), res.user.id, None
+    )
+    assert token_res.data_plane_ok is False
+    assert "tool:read" in token_res.caveat
+    assert "tools/call is rejected" in token_res.caveat
+
+
+@pytest.mark.asyncio
+async def test_create_viewer_user_honors_supplied_email(reset_settings, patch_mongo):
+    req = _Req(roles=["platform-admin"], tenant_id="local-dev")
+    res = await users_router.create_viewer_user(req, DemoUserCreateRequest(email="look@demo.local"))
+    assert res.user.email == "look@demo.local"
+    assert set(res.user.roles) == {"user", "viewer", "tool:read"}
+
+
+@pytest.mark.asyncio
+async def test_create_viewer_user_cross_tenant_forbidden(reset_settings, patch_mongo):
+    req = _Req(roles=["admin"], tenant_id="tenant-a")
+    with pytest.raises(HTTPException) as exc:
+        await users_router.create_viewer_user(req, DemoUserCreateRequest(tenant_id="tenant-b"))
+    assert exc.value.status_code == 403
+
+
+# --------------------------------------------------------------------------- #
+# GET /admin/whoami: surface read-only principal + tenant read-only state
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_whoami_surfaces_read_only_principal(reset_settings, patch_mongo):
+    req = _Req(roles=["viewer"], tenant_id="local-dev")
+    req.state.is_read_only_principal = True
+    res = await users_router.who_am_i(req)
+    assert res.is_read_only is True
+    assert res.tenant_read_only is False
+    assert res.is_platform_admin is False
+
+
+@pytest.mark.asyncio
+async def test_whoami_surfaces_tenant_read_only(reset_settings, patch_mongo):
+    from services.tenant_status import set_tenant_read_only
+
+    await patch_mongo._control_db["tenants"].insert_one(
+        {"tenant_id": "local-dev", "db_name": "tenant_local-dev", "status": "active"}
+    )
+    await set_tenant_read_only("local-dev", True, updated_by="ops", reason="frozen")
+
+    # Even a full platform-admin sees tenant_read_only=True (writes are frozen),
+    # but is not itself a read-only principal.
+    req = _Req(roles=["platform-admin"], tenant_id="local-dev")
+    req.state.is_read_only_principal = False
+    res = await users_router.who_am_i(req)
+    assert res.tenant_read_only is True
+    assert res.is_read_only is False

@@ -150,7 +150,9 @@ fusion was computed:
 > **[SECURITY.md](SECURITY.md)** (security model & vulnerability reporting), and
 > **[NETWORK-SECURITY.md](NETWORK-SECURITY.md)** (trust boundaries & what's handled
 > at the perimeter), **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** (failure-mode
-> runbook), **[docs/API.md](docs/API.md)** (REST + JSON-RPC reference), and
+> runbook), **[docs/API.md](docs/API.md)** (REST + JSON-RPC reference),
+> **[READONLY.md](READONLY.md)** (safely showcase: read-only tenants, viewers & tool
+> curation), and
 > **[docs/QUERYABLE-ENCRYPTION.md](docs/QUERYABLE-ENCRYPTION.md)** (QE setup and operations).
 > For function-author ergonomics and runtime capabilities, see
 > **[CONTEXT.md](CONTEXT.md)**.
@@ -709,11 +711,40 @@ a username/password in addition to the bearer/JWT flows (`AUTH_MODE=hs256|jwks`)
   `GET /.well-known/oauth-protected-resource` (RFC 9728), advertised when `AUTH_MODE=jwks`
   or `OAUTH_METADATA_ENABLED=true`.
 
-Authorization is unchanged: `/rpc` still requires the principal to carry `admin` or
-`tool:invoke`.
+Authorization: reaching `/rpc` requires `admin`, `tool:invoke`, or `tool:read`;
+**calling** a tool additionally requires `admin` or `tool:invoke` (`tool:read` is
+discover-only).
 
 See [`AUTH.md`](AUTH.md) for the complete authentication & authorization reference
 (inbound pipeline, RBAC, downstream credential brokering, settings, and recipes).
+
+### Safely showcase: read-only tenants, viewers, and curated tools
+
+For demos, audits, or sharing the platform without risk, the gateway adds
+admin-controlled, least-privilege guardrails. **[`READONLY.md`](READONLY.md) is the
+full walkthrough with screenshots**; the auth model lives in
+[`AUTH.md`](AUTH.md) §3.2:
+
+- **Read-only tenant** — freeze a tenant (`POST /admin/tenants/{id}/read-only`):
+  it stays `active` and discoverable, but `tools/call` and tenant config edits
+  return `403` (`tenant_read_only`). Platform-admin always bypasses.
+- **`viewer` role** — a read-only **console** login: browse the UI + tool source,
+  every mutation `403`. One click via **Users → Create viewer user**.
+- **`tool:read` role** — a discover-only **MCP** token: `tools/list` /
+  `tools/search` work, `tools/call` is refused (`invoke_not_permitted`). Minted by
+  the same Create-viewer-user button.
+- **Per-tenant tool curation** — an `allowlist` (`server/name` / `server/*`) and a
+  `max_tools` cap (`GET`/`PUT /admin/tenants/{id}/tool-policy`), plus per-server
+  enable/disable and a per-tool kill-switch (`disabled_tools`) that blocks a tool
+  for everyone, including admins (`tool_disabled`). Curation filters both
+  discovery and invocation, so a showcase only ever surfaces the curated set.
+
+Net effect: hand teammates a viewer login on a frozen, curated tenant and they can
+explore everything and run nothing, while platform-admins retain full control.
+
+![Read-only admin console with the sticky amber "Read-only access" banner](docs/images/readonly-console.png)
+
+> Step-by-step with screenshots: **[`READONLY.md`](READONLY.md)**.
 
 ### From the blog post to this repo
 

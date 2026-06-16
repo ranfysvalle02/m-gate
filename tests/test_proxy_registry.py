@@ -17,6 +17,18 @@ from services.sandbox_tool_bridge import ToolCallDenied
 from services.server_guard import StdioNotAllowed
 
 
+@pytest.fixture(autouse=True)
+def _restore_settings_singleton():
+    """Several tests here flip feature flags (sandbox bridge, code execution) by
+    mutating the cached ``Settings`` singleton in place via ``object.__setattr__``.
+    Drop the cache afterwards so those mutations never leak into later test files
+    (e.g. code_tool_execution_enabled bleeding into the rpc-router suite)."""
+    from config.settings import get_settings
+
+    yield
+    get_settings.cache_clear()
+
+
 class _ScriptedClient:
     """Async client stub whose call_tool raises a scripted exception or returns
     a scripted result object."""
@@ -677,7 +689,14 @@ def _enable_tool_bridge(registry, **overrides):
 
 
 def _caller(scopes, roles=None):
-    return CallerIdentity(user_id="u1", scopes=list(scopes), roles=list(roles or []))
+    # Data-plane callers that reach the tool invoker always carry tool:invoke
+    # (the coarse RBAC gate enforces it upstream); default to it so these tests
+    # exercise the confirmation/callable/scope paths rather than the invoke gate.
+    return CallerIdentity(
+        user_id="u1",
+        scopes=list(scopes),
+        roles=list(roles if roles is not None else ["tool:invoke"]),
+    )
 
 
 @pytest.mark.asyncio

@@ -25,6 +25,19 @@ SESSION_CONTEXT_COLLECTION = "session_context"
 # carries `tool:invoke` and catalog-derived scopes (see derive_demo_scopes).
 DEMO_USER_ROLES = ["user", "tool:invoke"]
 
+# A viewer is the complete read-only showcase identity — a single credential that
+# works on BOTH planes, read-only on each:
+#   * `viewer`    -> a read-only admin-console principal (loads the UI + views tool
+#                    source; every mutating /admin call 403s via RbacMiddleware).
+#   * `tool:read` -> a discover-only data-plane principal (clears the coarse RBAC
+#                    gate so `tools/list` / `tools/search` work, but per-call
+#                    authorization refuses `tools/call` for lack of `tool:invoke`).
+# Scopes are derived the same way as a demo so discovery returns the full curated
+# surface (roles, not scopes, gate invocation). Hand this out to safely showcase
+# the platform: the holder can browse the console and explore tools over MCP, but
+# can mutate nothing and invoke nothing.
+VIEWER_USER_ROLES = ["user", "viewer", "tool:read"]
+
 
 async def derive_demo_scopes(tenant_id: str) -> list[str]:
     """Compute scopes that let a demo user see and call *everything* in a tenant.

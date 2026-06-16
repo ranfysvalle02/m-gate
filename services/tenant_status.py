@@ -52,16 +52,36 @@ class TenantDeletedError(TenantInactiveError):
     message = "Tenant has been deleted."
 
 
+class TenantReadOnlyError(TenantInactiveError):
+    """A write/invoke targeted a tenant that is administratively read-only.
+
+    ``read_only`` is orthogonal to ``status``: the tenant remains ``active`` (its
+    catalog is fully discoverable) but every mutation is refused — ``tools/call``
+    on the data plane and tenant-scoped config changes on the control plane. This
+    subclasses :class:`TenantInactiveError` so the existing rpc/mcp error handlers
+    render it as a protocol-safe frame without new branching.
+    """
+
+    status_code = "tenant_read_only"
+    message = "Tenant is read-only."
+
+
 # Per-process status cache: {tenant_id: (status, monotonic_expiry)}. Suspension is
 # an abuse kill-switch, so a short TTL keeps the hot path cheap while bounding
 # cross-replica propagation delay to a few seconds. The acting replica updates its
 # own cache on write so a suspend it issues takes effect immediately locally.
 _status_cache: dict[str, tuple[str, float]] = {}
 
+# Per-process read-only cache: {tenant_id: (read_only, monotonic_expiry)}. Mirrors
+# the status cache (same TTL, same write-through) so the writability check stays on
+# the hot path without an extra round trip per request.
+_read_only_cache: dict[str, tuple[bool, float]] = {}
+
 
 def reset_tenant_status_cache() -> None:
-    """Clear the in-process status cache (used by tests and after a wipe)."""
+    """Clear the in-process status caches (used by tests and after a wipe)."""
     _status_cache.clear()
+    _read_only_cache.clear()
 
 
 def _cache_ttl(settings: Settings) -> float:
@@ -156,4 +176,76 @@ async def set_tenant_status(
         _status_cache[tenant_id] = (normalized, time.monotonic() + ttl)
     else:
         _status_cache.pop(tenant_id, None)
+    return doc
+
+
+async def get_tenant_read_only(tenant_id: str, *, settings: Settings | None = None) -> bool:
+    """Return whether a tenant is administratively read-only.
+
+    Defaults to ``False`` for unknown/unset tenants. Cache-first, mirroring
+    :func:`get_tenant_status`, so the writability gate adds no extra round trip
+    on the hot path once warm.
+    """
+    settings = settings or get_settings()
+    ttl = _cache_ttl(settings)
+    now = time.monotonic()
+    cached = _read_only_cache.get(tenant_id)
+    if cached is not None and cached[1] > now:
+        return cached[0]
+
+    doc = await get_control_database()[TENANTS_COLLECTION].find_one({"tenant_id": tenant_id})
+    read_only = bool((doc or {}).get("read_only", False))
+    if ttl > 0:
+        _read_only_cache[tenant_id] = (read_only, now + ttl)
+    return read_only
+
+
+async def assert_tenant_writable(tenant_id: str, *, settings: Settings | None = None) -> None:
+    """Raise :class:`TenantReadOnlyError` when the tenant is read-only.
+
+    Callers should run this *after* :func:`assert_tenant_active` so an inactive
+    tenant surfaces its (more specific) suspended/deleted error first.
+    """
+    settings = settings or get_settings()
+    if not await get_tenant_read_only(tenant_id, settings=settings):
+        return
+    doc = await get_control_database()[TENANTS_COLLECTION].find_one({"tenant_id": tenant_id})
+    reason = str((doc or {}).get("read_only_reason", "")) or None
+    raise TenantReadOnlyError(tenant_id, reason)
+
+
+async def set_tenant_read_only(
+    tenant_id: str,
+    enabled: bool,
+    *,
+    updated_by: str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any] | None:
+    """Toggle a tenant's read-only flag. Returns the updated doc, or None if missing.
+
+    Writes the flag, an optional human reason, and audit fields atomically, then
+    refreshes the local read-only cache so the change is effective immediately on
+    this replica (same write-through approach as :func:`set_tenant_status`).
+    """
+    enabled = bool(enabled)
+    now = datetime.now(UTC)
+    updates: dict[str, Any] = {
+        "read_only": enabled,
+        "read_only_reason": (reason or "").strip() if enabled else "",
+        "read_only_updated_at": now,
+        "read_only_updated_by": str(updated_by or "admin"),
+        "updated_at": now,
+    }
+    doc = await get_control_database()[TENANTS_COLLECTION].find_one_and_update(
+        {"tenant_id": tenant_id},
+        {"$set": updates},
+        return_document=True,
+    )
+    if doc is None:
+        return None
+    ttl = _cache_ttl(get_settings())
+    if ttl > 0:
+        _read_only_cache[tenant_id] = (enabled, time.monotonic() + ttl)
+    else:
+        _read_only_cache.pop(tenant_id, None)
     return doc

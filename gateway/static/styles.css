@@ -631,6 +631,52 @@ body {
   animation: rise var(--dur-med) var(--ease-out) both;
 }
 
+/* Read-only / viewer notice: amber, sticky at the top of the workspace so the
+   constraint is always visible while a viewer browses the console. */
+.readonly-banner {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--warning, #d9930a) 40%, transparent);
+  background: color-mix(in srgb, var(--warning, #d9930a) 14%, var(--surface));
+  color: color-mix(in srgb, var(--warning, #d9930a) 82%, var(--text-primary));
+  border-radius: var(--radius-md);
+  padding: 0.7rem 0.95rem;
+  margin-bottom: 0.9rem;
+  font-size: 0.86rem;
+  box-shadow: var(--shadow-sm);
+  animation: rise var(--dur-med) var(--ease-out) both;
+}
+
+.readonly-banner-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* Small inline status pill (e.g. a read-only / disabled tenant or tool). */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  border: 1px solid transparent;
+  vertical-align: middle;
+}
+
+.badge-readonly {
+  border-color: color-mix(in srgb, var(--warning, #d9930a) 40%, transparent);
+  background: color-mix(in srgb, var(--warning, #d9930a) 16%, var(--surface));
+  color: color-mix(in srgb, var(--warning, #d9930a) 85%, var(--text-primary));
+}
+
 /* --------------------------------------------------------------------------- */
 /*  Cards                                                                      */
 /* --------------------------------------------------------------------------- */

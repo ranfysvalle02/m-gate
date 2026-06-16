@@ -79,19 +79,18 @@ services:
     environment:
       MONGODB_URI: mongodb://mongodb:27017/?directConnection=true
       MONGODB_DB_NAME: mcp_gateway
-      # Platform default embeddings for bootstrap + tenant fallbacks.
-      # BYO embeddings is tenant-scoped at runtime via:
-      #   PUT /admin/tenants/{tenant_id}/embedding
-      # so no extra compose wiring is required for the default path.
-      EMBEDDING_PROVIDER: ollama
+      # Embeddings (platform default + tenant fallback). Voyage AI — MongoDB's
+      # first-party embedding stack — is AUTO-SELECTED when VOYAGE_API_KEY is set in
+      # your local .env (model voyage-3, width auto-detected). While Voyage is active
+      # Ollama is never contacted. Per-tenant BYO embeddings stay runtime-scoped via
+      # PUT /admin/tenants/{tenant_id}/embedding, so no extra compose wiring is needed.
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      # Offline fallback ONLY — consulted when VOYAGE_API_KEY is empty:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: nomic-embed-text
       OLLAMA_DIMENSIONS: 768
-      # Voyage AI drop-in (MongoDB's first-party embeddings): put VOYAGE_API_KEY in
-      # your local .env and the stack auto-selects + authenticates Voyage (model
-      # voyage-3, width auto-detected). Leave it empty to stay on offline Ollama.
-      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
-      # For other cloud providers, prefer HTTPS base URLs and mount EMBEDDING_API_KEY_FILE.
+      # To pin a provider explicitly (wins over auto-selection), set EMBEDDING_PROVIDER
+      # — e.g. "voyage", or "openai"/"azure_openai"/"gemini" with EMBEDDING_API_KEY_FILE:
       # EMBEDDING_PROVIDER: openai
       # EMBEDDING_API_KEY_FILE: /gateway-secrets/embedding_api_key
       INCLUDE_SCORE_DETAILS: "true"
@@ -146,18 +145,18 @@ services:
     environment:
       MONGODB_URI: mongodb://mongodb:27017/?directConnection=true
       MONGODB_DB_NAME: mcp_gateway
-      # Platform default embeddings for all tenants that have not configured
-      # per-tenant BYO embedding settings through the admin API.
-      EMBEDDING_PROVIDER: ollama
+      # Platform default embeddings for tenants without a per-tenant BYO override.
+      # Voyage AI (MongoDB's first-party embeddings) is AUTO-SELECTED when
+      # VOYAGE_API_KEY is set in your local .env (model voyage-3, width auto-detected);
+      # while Voyage is active the gateway never contacts Ollama. The admin panel
+      # (/ui -> Embeddings) can override provider/model/key at runtime.
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      # Offline fallback ONLY — consulted when VOYAGE_API_KEY is empty:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: nomic-embed-text
       OLLAMA_DIMENSIONS: 768
-      # Voyage AI drop-in (MongoDB's first-party embeddings): put VOYAGE_API_KEY in
-      # your local .env and the gateway auto-selects + authenticates Voyage (model
-      # voyage-3, width auto-detected). Leave it empty to stay on offline Ollama.
-      # The admin panel (/ui -> Embeddings) can override provider/model/key at runtime.
-      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
-      # For other cloud providers, prefer HTTPS base URLs and mount EMBEDDING_API_KEY_FILE.
+      # To pin a provider explicitly (wins over auto-selection), set EMBEDDING_PROVIDER
+      # — e.g. "voyage", or "openai"/"azure_openai"/"gemini" with EMBEDDING_API_KEY_FILE:
       # EMBEDDING_PROVIDER: openai
       # EMBEDDING_API_KEY_FILE: /gateway-secrets/embedding_api_key
       INCLUDE_SCORE_DETAILS: "true"

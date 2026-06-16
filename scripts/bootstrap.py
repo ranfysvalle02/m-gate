@@ -53,19 +53,13 @@ async def _embedding_preflight() -> None:
     """Fail fast with actionable guidance when embeddings are unreachable."""
     settings = get_settings()
     service = get_embedding_service(settings)
-    provider = getattr(service, "provider_name", settings.embedding_provider)
-    model = getattr(service, "model_id", settings.embedding_model)
+    provider = getattr(service, "provider_name", None) or settings.embedding_provider or "ollama"
+    model = getattr(service, "model_id", None) or settings.embedding_model or ""
     probe = settings.embedding_probe_text or "bootstrap preflight"
     try:
         vector = await service.embed_text(probe)
     except EmbeddingUnavailableError as exc:
-        message = (
-            "Embedding preflight failed. The demo requires a reachable embedding provider "
-            "before catalog sync can run. If using the default Ollama setup, start Ollama "
-            "on your host and pull the model:\n\n"
-            "  ollama pull nomic-embed-text\n\n"
-            "Then re-run: docker compose up --build"
-        )
+        message = _preflight_guidance(provider, model, exc)
         logger.error(message)
         raise RuntimeError(message) from exc
     except Exception as exc:
@@ -80,6 +74,30 @@ async def _embedding_preflight() -> None:
         provider,
         model,
         len(vector),
+    )
+
+
+def _preflight_guidance(provider: str, model: str, exc: Exception) -> str:
+    """Return provider-specific, actionable guidance for an unreachable provider."""
+    if provider == "voyage":
+        return (
+            f"Embedding preflight failed for Voyage AI (model '{model}'): {exc}. "
+            "The gateway needs a reachable embedding provider before catalog sync can run. "
+            "Confirm VOYAGE_API_KEY (or VOYAGE_API_KEY_FILE) is set and valid, and that the "
+            "host can reach https://api.voyageai.com, then re-run: docker compose up --build"
+        )
+    if provider == "ollama":
+        return (
+            f"Embedding preflight failed for the local Ollama default (model '{model}'): {exc}. "
+            "Start Ollama on your host and pull the model:\n\n"
+            "  ollama pull nomic-embed-text\n\n"
+            "Or set VOYAGE_API_KEY in .env to use Voyage AI instead, then re-run: "
+            "docker compose up --build"
+        )
+    return (
+        f"Embedding preflight failed for provider '{provider}' (model '{model}'): {exc}. "
+        "Verify the provider's API key/endpoint and connectivity, then re-run: "
+        "docker compose up --build"
     )
 
 

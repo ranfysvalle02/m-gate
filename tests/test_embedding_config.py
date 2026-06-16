@@ -101,6 +101,22 @@ def test_explicit_provider_overrides_voyage_drop_in():
     assert cfg.api_key == ""
 
 
+def test_explicit_ollama_is_respected_even_with_voyage_key():
+    # Pinning EMBEDDING_PROVIDER=ollama is an explicit choice and must win over the
+    # Voyage drop-in: a stray VOYAGE_API_KEY can never silently flip a pinned
+    # provider. (Auto-selection only applies when the provider is left unset.)
+    cfg = default_config_from_settings(
+        _settings(embedding_provider="ollama", voyage_api_key="pa-secret")
+    )
+    assert cfg.provider == "ollama"
+    assert cfg.api_key == ""
+
+
+def test_unset_provider_without_voyage_key_defaults_to_ollama():
+    cfg = default_config_from_settings(_settings(embedding_provider=None))
+    assert cfg.provider == "ollama"
+
+
 def test_generic_embedding_api_key_wins_over_voyage_key():
     cfg = default_config_from_settings(
         _settings(
@@ -163,8 +179,9 @@ async def test_resolve_dimensions_keeps_known_width():
 
 
 @pytest.mark.asyncio
-async def test_resolve_dimensions_falls_back_when_detection_fails(monkeypatch):
-    # An unreachable provider must not crash startup; we fall back to ollama_dimensions.
+async def test_resolve_dimensions_ollama_falls_back_when_detection_fails(monkeypatch):
+    # Ollama has a *declared* width, so an unreachable probe falls back to it
+    # rather than crashing the offline default path.
     from fakes import FakeEmbeddingService
 
     import services.embedding_config as ec
@@ -172,10 +189,29 @@ async def test_resolve_dimensions_falls_back_when_detection_fails(monkeypatch):
     monkeypatch.setattr(
         ec, "build_provider_service", lambda config, settings=None: FakeEmbeddingService(fail=True)
     )
-    cfg = EmbeddingConfig(provider="openai", model="text-embedding-3-small", api_key="k")
+    cfg = EmbeddingConfig(provider="ollama", model="nomic-embed-text")
     settings = _settings(ollama_dimensions=99)
     resolved = await resolve_dimensions(cfg, settings)
     assert resolved.dimensions == 99
+
+
+@pytest.mark.parametrize("provider", ["voyage", "openai", "azure_openai", "gemini"])
+@pytest.mark.asyncio
+async def test_resolve_dimensions_cloud_provider_fails_loudly(monkeypatch, provider):
+    # Cloud providers have no safe declared width: guessing one (e.g. reusing
+    # Ollama's 768) would build a wrong-width vector index and corrupt retrieval.
+    # The resolver must raise instead of silently falling back to ollama_dimensions.
+    from fakes import FakeEmbeddingService
+
+    import services.embedding_config as ec
+    from services.embeddings import EmbeddingUnavailableError
+
+    monkeypatch.setattr(
+        ec, "build_provider_service", lambda config, settings=None: FakeEmbeddingService(fail=True)
+    )
+    cfg = EmbeddingConfig(provider=provider, model="some-model", api_key="k")
+    with pytest.raises(EmbeddingUnavailableError):
+        await resolve_dimensions(cfg, _settings(ollama_dimensions=99))
 
 
 @pytest.mark.asyncio

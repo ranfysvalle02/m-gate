@@ -44,6 +44,7 @@ async def test_tool_with_no_scopes_is_open(service, patch_mongo):
         server="orders",
         name="t",
         caller_scopes=["server:orders"],
+        caller_roles=["tool:invoke"],
     )
     assert result.allowed is True
     assert result.reason == "no_scope_required"
@@ -56,6 +57,7 @@ async def test_missing_caller_scope_is_denied(service, patch_mongo):
         server="orders",
         name="t",
         caller_scopes=["server:orders"],
+        caller_roles=["tool:invoke"],
     )
     assert result.allowed is False
     assert result.reason == "scope_mismatch"
@@ -65,7 +67,10 @@ async def test_missing_caller_scope_is_denied(service, patch_mongo):
 async def test_scope_intersection_allows(service, patch_mongo):
     _seed(patch_mongo, name="t", scopes=["orders:write", "orders:admin"])
     result = await service.authorize_tool_call(
-        server="orders", name="t", caller_scopes=["orders:write", "server:orders"]
+        server="orders",
+        name="t",
+        caller_scopes=["orders:write", "server:orders"],
+        caller_roles=["tool:invoke"],
     )
     assert result.allowed is True
     assert result.reason == "scope_match"
@@ -75,10 +80,28 @@ async def test_scope_intersection_allows(service, patch_mongo):
 async def test_scope_disjoint_denies(service, patch_mongo):
     _seed(patch_mongo, name="t", scopes=["orders:write"])
     result = await service.authorize_tool_call(
-        server="orders", name="t", caller_scopes=["orders:read", "server:orders"]
+        server="orders",
+        name="t",
+        caller_scopes=["orders:read", "server:orders"],
+        caller_roles=["tool:invoke"],
     )
     assert result.allowed is False
     assert result.reason == "scope_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_invoke_role_required_for_call(service, patch_mongo):
+    # A discover-only principal (no tool:invoke) is refused before any scope check,
+    # even with otherwise-sufficient scopes.
+    _seed(patch_mongo, name="t", scopes=[])
+    result = await service.authorize_tool_call(
+        server="orders",
+        name="t",
+        caller_scopes=["server:orders"],
+        caller_roles=["tool:read"],
+    )
+    assert result.allowed is False
+    assert result.reason == "invoke_not_permitted"
 
 
 @pytest.mark.asyncio
@@ -88,6 +111,7 @@ async def test_server_scope_is_required(service, patch_mongo):
         server="orders",
         name="t",
         caller_scopes=["orders"],
+        caller_roles=["tool:invoke"],
     )
     assert result.allowed is False
     assert result.reason == "server_scope_required"

@@ -136,6 +136,15 @@ window.adminConsole = function adminConsole(config) {
       // created (it is never retrievable again). Cleared when the modal closes.
       userTokenNewPassword: "",
       demoCreating: false,
+      viewerCreating: false,
+      // Per-tenant tool policy editor (allowlist + max-tools + disabled overlay).
+      toolPolicyOpen: false,
+      toolPolicyTenant: "",
+      toolPolicy: null,
+      toolPolicyAllowlist: [],
+      toolPolicyMaxTools: 0,
+      toolPolicyLoading: false,
+      toolPolicySaving: false,
       serverComposerOpen: false,
       serverComposerMode: "create",
       serverWorkspace: {
@@ -757,9 +766,182 @@ window.adminConsole = function adminConsole(config) {
       }
     },
 
+    // ---- Read-only / viewer principal UX ---------------------------------- //
+    // Server-side RbacMiddleware is the real guard (every mutating /admin call
+    // 403s for a viewer); this only hides affordances so the console feels honest.
+    canMutate() {
+      return !this.state.whoami?.is_read_only;
+    },
+
+    isPlatformAdmin() {
+      return Boolean(this.state.whoami?.is_platform_admin);
+    },
+
+    async createViewerUser() {
+      this.clearError();
+      this.state.userNotice = "";
+      this.state.viewerCreating = true;
+      try {
+        const result = await this.apiRequest("/admin/users/viewer", {
+          method: "POST",
+          body: { tenant_id: this.state.tenantId },
+        });
+        await this.loadUsers();
+        this.notify(`Viewer user '${result.user.email}' created.`);
+        // Hand over a working discover-only credential immediately (same flow as
+        // the demo button): the token modal carries the bearer + one-time password.
+        await this.generateUserToken(result.user, { password: result.password });
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.viewerCreating = false;
+      }
+    },
+
+    async toggleTenantReadOnly(tenant) {
+      this.clearError();
+      const enable = !tenant.read_only;
+      let reason = null;
+      if (enable) {
+        reason = window.prompt(
+          `Make tenant '${tenant.tenant_id}' read-only? It stays fully discoverable but all tool calls and config changes are blocked. Optional reason:`,
+          "",
+        );
+        if (reason === null) return;
+      }
+      try {
+        const action = enable ? "read-only" : "read-write";
+        await this.apiRequest(
+          `/admin/tenants/${encodeURIComponent(tenant.tenant_id)}/${action}`,
+          {
+            method: "POST",
+            includeTenant: false,
+            body: enable ? { reason } : {},
+          },
+        );
+        await this.loadTenants();
+        // The caller's own tenant flag can change the console's read-only banner.
+        await this.loadWhoAmI();
+        this.notify(
+          `Tenant '${tenant.tenant_id}' is now ${enable ? "read-only" : "read-write"}.`,
+        );
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    // ---- Per-tenant tool policy (allowlist, max-tools, disabled overlay) --- //
+    async openToolPolicy(tenantId) {
+      this.state.toolPolicyTenant = String(tenantId || this.state.tenantId || "").trim();
+      this.state.toolPolicyOpen = true;
+      await this.loadToolPolicy(this.state.toolPolicyTenant);
+    },
+
+    closeToolPolicy() {
+      this.state.toolPolicyOpen = false;
+      this.state.toolPolicy = null;
+      this.state.toolPolicyAllowlist = [];
+      this.state.toolPolicySaving = false;
+    },
+
+    async loadToolPolicy(tenantId) {
+      this.state.toolPolicyLoading = true;
+      try {
+        const payload = await this.apiRequest(
+          `/admin/tenants/${encodeURIComponent(tenantId)}/tool-policy`,
+          { includeTenant: false },
+        );
+        this.state.toolPolicy = payload;
+        this.state.toolPolicyAllowlist = [...(payload.allowlist || [])];
+        this.state.toolPolicyMaxTools = Number(payload.max_tools || 0);
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.toolPolicyLoading = false;
+      }
+    },
+
+    toolPolicyKey(tool) {
+      return `${tool.server}/${tool.name}`;
+    },
+
+    isToolAllowlisted(tool) {
+      const list = this.state.toolPolicyAllowlist || [];
+      return list.includes(this.toolPolicyKey(tool)) || list.includes(`${tool.server}/*`);
+    },
+
+    toggleAllowlistTool(tool) {
+      const key = this.toolPolicyKey(tool);
+      const list = this.state.toolPolicyAllowlist || [];
+      if (list.includes(key)) {
+        this.state.toolPolicyAllowlist = list.filter((entry) => entry !== key);
+      } else {
+        this.state.toolPolicyAllowlist = [...list, key];
+      }
+    },
+
+    async saveToolPolicy() {
+      const tenantId = this.state.toolPolicyTenant;
+      this.state.toolPolicySaving = true;
+      this.clearError();
+      try {
+        const payload = await this.apiRequest(
+          `/admin/tenants/${encodeURIComponent(tenantId)}/tool-policy`,
+          {
+            method: "PUT",
+            includeTenant: false,
+            body: {
+              allowlist: this.state.toolPolicyAllowlist || [],
+              max_tools: Number(this.state.toolPolicyMaxTools || 0),
+            },
+          },
+        );
+        this.state.toolPolicy = payload;
+        this.state.toolPolicyAllowlist = [...(payload.allowlist || [])];
+        this.notify(`Tool policy saved for '${tenantId}'.`);
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.toolPolicySaving = false;
+      }
+    },
+
+    async toggleToolEnabled(tool) {
+      const tenantId = this.state.toolPolicyTenant;
+      const action = tool.disabled ? "enable" : "disable";
+      this.clearError();
+      try {
+        await this.apiRequest(
+          `/admin/tools/${encodeURIComponent(tool.server)}/${encodeURIComponent(tool.name)}/${action}`,
+          { method: "POST", includeTenant: false },
+        );
+        await this.loadToolPolicy(tenantId);
+        this.notify(`Tool '${tool.server}/${tool.name}' ${action}d.`);
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    async toggleServerEnabled(server) {
+      this.clearError();
+      const enable = !server.enabled;
+      const action = enable ? "enable" : "disable";
+      try {
+        await this.apiRequest(
+          `/admin/servers/${encodeURIComponent(server.server)}/${action}`,
+          { method: "POST" },
+        );
+        await this.loadServers();
+        this.notify(`Server '${server.server}' ${action}d.`);
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
     roleOptions: [
       { value: "user", label: "User" },
       { value: "demo", label: "Demo (can invoke tools)" },
+      { value: "viewer", label: "Viewer (read-only)" },
       { value: "tenant-admin", label: "Tenant admin" },
       { value: "platform-admin", label: "Platform admin" },
     ],
@@ -770,6 +952,10 @@ window.adminConsole = function adminConsole(config) {
       // A demo account can authenticate AND reach the /rpc + /mcp data plane
       // (rbac requires 'admin' or 'tool:invoke'), without any admin console access.
       if (selection === "demo") return ["user", "tool:invoke"];
+      // A viewer is the complete read-only identity (matches the one-click "Create
+      // viewer user" button): `viewer` reaches the admin console read-only (every
+      // mutation 403s) and `tool:read` discovers tools over MCP without invoking.
+      if (selection === "viewer") return ["user", "viewer", "tool:read"];
       return ["user"];
     },
 
@@ -792,7 +978,9 @@ window.adminConsole = function adminConsole(config) {
       const set = new Set(roles || []);
       if (set.has("platform-admin")) return "Platform admin";
       if (set.has("admin")) return "Tenant admin";
+      if (set.has("viewer")) return "Viewer (read-only)";
       if (set.has("tool:invoke")) return "Demo (can invoke tools)";
+      if (set.has("tool:read")) return "Viewer (discover-only)";
       return (roles || []).join(", ") || "user";
     },
 

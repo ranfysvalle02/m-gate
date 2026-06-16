@@ -131,9 +131,14 @@ def test_prod_admin_ui_requires_credentials():
         )
 
 
-def test_embedding_provider_defaults_to_ollama():
+def test_embedding_provider_unset_auto_selects_ollama_offline():
+    # The provider is intentionally unset by default so resolution can auto-select:
+    # with no VOYAGE_API_KEY the offline Ollama default applies.
+    from services.embedding_config import default_config_from_settings
+
     s = Settings()
-    assert s.embedding_provider == "ollama"
+    assert s.embedding_provider is None
+    assert default_config_from_settings(s).provider == "ollama"
     assert s.embedding_model is None
     assert s.azure_openai_api_version == "2023-05-15"
 

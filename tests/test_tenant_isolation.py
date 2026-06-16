@@ -53,12 +53,14 @@ async def test_authorization_isolated_per_tenant(patch_mongo):
         server="orders",
         name="update_order_status",
         caller_scopes=["orders:write", "server:orders"],
+        caller_roles=["tool:invoke"],
     )
     tenant_b = await authz.authorize_tool_call(
         tenant_id="tenant-b",
         server="orders",
         name="update_order_status",
         caller_scopes=["orders:write", "server:orders"],
+        caller_roles=["tool:invoke"],
     )
 
     assert tenant_a.allowed is True

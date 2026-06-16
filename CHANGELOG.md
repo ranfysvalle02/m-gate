@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### Feature: read-only tenants, viewer principals, and per-tenant tool curation
+- **Read-only tenants.** A tenant can be frozen with a new `read_only` flag
+  (orthogonal to `status`): it stays `active` and fully discoverable, but
+  `tools/call` on `/rpc` and `/mcp` is refused at the dispatch gate
+  (`403`/`tenant_read_only`, via `assert_tenant_writable`) and tenant-scoped
+  config mutations — servers/env, tool policy, server/tool enable-disable, egress,
+  **and user management (create/demo/viewer/update/delete)** — are blocked for
+  tenant-admins (`_require_tenant_writable`). Platform-admin always bypasses.
+  Toggle via `POST /admin/tenants/{id}/read-only` / `/read-write` (platform-admin
+  only).
+- **Two new least-privilege principals.**
+  - `viewer` — a read-only **web-console** role: loads the admin UI and views
+    tool source, but every mutating `/admin` call is refused at a single RBAC
+    choke point (`403 Read-only access`). A full admin that also carries `viewer`
+    is never downgraded.
+  - `tool:read` — an MCP **data-plane** role that clears the coarse gate for
+    discovery (`tools/list` / `tools/search`) but is refused on `tools/call`
+    (`invoke_not_permitted`) by the new invoke-capability check in
+    `authorize_tool_call`.
+- **One-click viewer user.** A new **Create viewer user** button (and
+  `POST /admin/users/viewer`) provisions the complete read-only showcase identity
+  in one credential — `viewer` + `tool:read` with catalog-derived scopes — so the
+  holder gets a read-only console login *and* a discover-only MCP token (bearer +
+  Cursor `mcp.json`). The safe twin of the demo-user button.
+- **Per-tenant tool curation.** `GET`/`PUT /admin/tenants/{id}/tool-policy` manage
+  an `allowlist` (`server/name` or `server/*`; empty = unrestricted) and a
+  `max_tools` cap (enforced at server registration with a `422`). Curation filters
+  discovery *and* invocation, so a showcase only ever surfaces the curated set.
+- **Enable/disable controls.** `POST /admin/servers/{name}/enable` / `/disable`
+  mount/unmount a virtual server (origin-aware: tenant-admins toggle their own
+  `tenant`-origin servers; `platform`-origin requires platform-admin), and
+  `POST /admin/tools/{server}/{name}/enable` / `/disable` toggle a per-tool
+  kill-switch (`disabled_tools` overlay) that refuses the tool for **everyone,
+  including admins** (`tool_disabled`). Both are blocked when the tenant is
+  read-only (platform-admin bypasses).
+- **Console UX.** A sticky read-only banner, `canMutate()`/`is_read_only` gating
+  of mutating affordances, a tenant read-only toggle + tool-policy editor, and
+  per-server/per-tool enable switches. `GET /admin/whoami` now returns
+  `is_read_only` and `tenant_read_only`. Server-side `403` remains the real guard;
+  UI hiding is UX only.
+- **Settings:** new `PLATFORM_VIEWER_ROLE` (default `viewer`).
+- **Docs:** new [`READONLY.md`](READONLY.md) — a screenshot-driven walkthrough
+  (freeze → curate → viewer login) with an enforcement diagram, API table, and
+  troubleshooting; cross-linked from the README, QUICKSTART, AUTH, and API docs.
+
 ### Breaking: security is always enforced — `AUTH_MODE=disabled` removed
 - **`AUTH_MODE=disabled` is gone.** The `AUTH_MODE` setting now accepts only
   `hs256` (default) or `jwks`; loading with `disabled` fails validation. Every

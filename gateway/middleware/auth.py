@@ -159,6 +159,10 @@ class AuthMiddleware:
         request.state.roles = []
         request.state.scopes = []
         request.state.is_admin_principal = False
+        # A read-only principal (the `viewer` role) reaches the admin console but
+        # every mutating /admin call is refused by RbacMiddleware. Default False;
+        # set on whichever auth path resolves the identity below.
+        request.state.is_read_only_principal = False
         request.state.admin_auth_via_cookie = False
         request.state.authenticated_via_basic = False
 
@@ -171,10 +175,12 @@ class AuthMiddleware:
             )
             request.state.roles = session_roles
             request.state.scopes = []
-            # Only sessions that actually carry an admin-tier role count as admin
-            # principals. A plain "user" session authenticates but cannot reach the
-            # admin control plane (RbacMiddleware still gates /admin and /ui).
-            request.state.is_admin_principal = self._has_admin_role(session_roles)
+            # Only sessions that carry an admin-tier OR viewer role count as admin
+            # principals (the viewer reaches the console read-only). A plain "user"
+            # session authenticates but cannot reach the admin control plane
+            # (RbacMiddleware still gates /admin and /ui).
+            request.state.is_admin_principal = self._is_console_principal(session_roles)
+            request.state.is_read_only_principal = self._is_read_only_principal(session_roles)
             request.state.admin_auth_via_cookie = via_cookie
 
         # Optional HTTP Basic on the MCP surface: let an MCP client present
@@ -201,7 +207,8 @@ class AuthMiddleware:
                 )
                 request.state.roles = roles
                 request.state.scopes = []
-                request.state.is_admin_principal = self._has_admin_role(roles)
+                request.state.is_admin_principal = self._is_console_principal(roles)
+                request.state.is_read_only_principal = self._is_read_only_principal(roles)
                 request.state.authenticated_via_basic = True
 
         if not request.state.is_admin_principal and not request.state.authenticated_via_basic:
@@ -231,9 +238,11 @@ class AuthMiddleware:
                 request.state.roles = self._normalize_roles(claims.get("roles"))
                 claim_scopes = claims.get("groups") or claims.get("scopes") or []
                 request.state.scopes = self._normalize_scopes(claim_scopes)
-                role_set = set(request.state.roles)
-                if "admin" in role_set or self.settings.platform_admin_role in role_set:
+                if self._is_console_principal(request.state.roles):
                     request.state.is_admin_principal = True
+                    request.state.is_read_only_principal = self._is_read_only_principal(
+                        request.state.roles
+                    )
             except Exception as exc:
                 response = self._auth_failure_response(exc, request)
                 return await response(scope, receive, send)
@@ -304,6 +313,25 @@ class AuthMiddleware:
     def _has_admin_role(self, roles: list[str]) -> bool:
         role_set = set(roles)
         return self.settings.platform_admin_role in role_set or "admin" in role_set
+
+    def _has_viewer_role(self, roles: list[str]) -> bool:
+        return self.settings.platform_viewer_role in set(roles)
+
+    def _is_console_principal(self, roles: list[str]) -> bool:
+        """True for any role allowed to load the admin console (admin or viewer).
+
+        The RBAC layer still distinguishes the two: a viewer is read-only, so its
+        mutating /admin requests are refused even though it reaches the console.
+        """
+        return self._has_admin_role(roles) or self._has_viewer_role(roles)
+
+    def _is_read_only_principal(self, roles: list[str]) -> bool:
+        """A viewer with no full-admin role: console access, but every mutation 403s.
+
+        Full admins keep write access even if they *also* carry the viewer role, so
+        an accidental viewer grant can never silently lock an admin out of writes.
+        """
+        return self._has_viewer_role(roles) and not self._has_admin_role(roles)
 
     def _resolve_admin_session(self, request: Request) -> tuple[dict[str, Any] | None, bool]:
         cookie_token = request.cookies.get(ADMIN_SESSION_COOKIE)

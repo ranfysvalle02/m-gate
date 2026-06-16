@@ -9,10 +9,14 @@ from services.tenant_status import (
     STATUS_SUSPENDED,
     TenantDeletedError,
     TenantInactiveError,
+    TenantReadOnlyError,
     TenantSuspendedError,
     assert_tenant_active,
+    assert_tenant_writable,
+    get_tenant_read_only,
     get_tenant_status,
     reset_tenant_status_cache,
+    set_tenant_read_only,
     set_tenant_status,
 )
 
@@ -119,6 +123,69 @@ async def test_ttl_zero_disables_cache(patch_mongo):
     await control["tenants"].update_one({"tenant_id": "t1"}, {"$set": {"status": "suspended"}})
     # With caching disabled the change is observed immediately.
     assert await get_tenant_status("t1", settings=no_cache) == STATUS_SUSPENDED
+
+
+@pytest.mark.asyncio
+async def test_read_only_defaults_false_and_writable(patch_mongo):
+    # An unknown/unflagged tenant is writable: read-only must fail open so the
+    # data plane is not accidentally frozen for every tenant.
+    assert await get_tenant_read_only("never-seen") is False
+    await assert_tenant_writable("never-seen")  # does not raise
+
+
+@pytest.mark.asyncio
+async def test_set_read_only_blocks_writes_and_records_reason(patch_mongo):
+    control = patch_mongo._control_db
+    await control["tenants"].insert_one({"tenant_id": "t1", "db_name": "db_t1", "status": "active"})
+
+    doc = await set_tenant_read_only("t1", True, updated_by="ops@x", reason="showcase")
+    assert doc is not None
+    assert doc["read_only"] is True
+    assert doc["read_only_reason"] == "showcase"
+    assert doc["read_only_updated_by"] == "ops@x"
+
+    assert await get_tenant_read_only("t1") is True
+    with pytest.raises(TenantReadOnlyError) as exc:
+        await assert_tenant_writable("t1")
+    assert exc.value.tenant_id == "t1"
+    assert exc.value.status_code == "tenant_read_only"
+    assert "showcase" in exc.value.reason
+    # Read-only is orthogonal to status: the tenant is still "active".
+    assert isinstance(exc.value, TenantInactiveError)
+    assert await get_tenant_status("t1") == STATUS_ACTIVE
+    await assert_tenant_active("t1")  # read-only does not block discovery
+
+
+@pytest.mark.asyncio
+async def test_clear_read_only_unblocks_writes(patch_mongo):
+    control = patch_mongo._control_db
+    await control["tenants"].insert_one({"tenant_id": "t1", "db_name": "db_t1"})
+
+    await set_tenant_read_only("t1", True, reason="freeze")
+    cleared = await set_tenant_read_only("t1", False)
+    assert cleared is not None
+    assert cleared["read_only"] is False
+    assert cleared["read_only_reason"] == ""
+
+    assert await get_tenant_read_only("t1") is False
+    await assert_tenant_writable("t1")  # does not raise
+
+
+@pytest.mark.asyncio
+async def test_set_read_only_on_missing_tenant_returns_none(patch_mongo):
+    assert await set_tenant_read_only("ghost", True) is None
+
+
+@pytest.mark.asyncio
+async def test_read_only_is_cached_within_ttl(patch_mongo):
+    control = patch_mongo._control_db
+    await control["tenants"].insert_one({"tenant_id": "t1", "db_name": "db_t1", "read_only": False})
+    assert await get_tenant_read_only("t1") is False
+    # Mutate the doc directly so the in-process cache is intentionally stale.
+    await control["tenants"].update_one({"tenant_id": "t1"}, {"$set": {"read_only": True}})
+    assert await get_tenant_read_only("t1") is False
+    reset_tenant_status_cache()
+    assert await get_tenant_read_only("t1") is True
 
 
 @pytest.mark.asyncio

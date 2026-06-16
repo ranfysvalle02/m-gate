@@ -26,6 +26,7 @@
       <button
         type="button"
         class="btn-primary connect-now-cta"
+        x-show="canMutate()"
         @click="createDemoUser()"
         :disabled="state.demoCreating"
         title="Create a tool-invoking demo account and get a token + mcp.json"
@@ -226,6 +227,11 @@
                 class="text-xs text-slate-500"
                 x-text="` — ${tenant.suspended_reason}`"
               ></span>
+              <span
+                x-show="tenant.read_only"
+                class="badge badge-readonly"
+                title="Read-only: discoverable, but tool calls and config changes are blocked"
+              >🔒 read-only</span>
             </td>
             <td x-text="formatDate(tenant.created_at)"></td>
             <td class="space-x-2">
@@ -236,6 +242,21 @@
               >
                 Connect
               </button>
+              <button
+                type="button"
+                class="link-btn"
+                x-show="state.whoami?.is_platform_admin"
+                @click="openToolPolicy(tenant.tenant_id)"
+              >
+                Tool policy
+              </button>
+              <button
+                type="button"
+                class="link-btn"
+                x-show="state.whoami?.is_platform_admin"
+                @click="toggleTenantReadOnly(tenant)"
+                x-text="tenant.read_only ? 'Make read-write' : 'Make read-only'"
+              ></button>
               <button
                 type="button"
                 class="link-btn"
@@ -661,15 +682,26 @@
       </select>
     </div>
     <div class="flex items-end gap-2 md:col-span-3 flex-wrap">
-      <button type="submit" class="btn-primary">Create User</button>
+      <button type="submit" class="btn-primary" x-show="canMutate()">Create User</button>
       <button
         type="button"
         class="btn-primary"
+        x-show="canMutate()"
         @click="createDemoUser()"
         :disabled="state.demoCreating"
         title="Create a ready-to-use, tool-invoking demo account and get a token + mcp.json"
       >
         <span x-text="state.demoCreating ? 'Creating…' : '✨ Create demo user'"></span>
+      </button>
+      <button
+        type="button"
+        class="btn-secondary"
+        x-show="canMutate()"
+        @click="createViewerUser()"
+        :disabled="state.viewerCreating"
+        title="Create a read-only viewer account (viewer + tool:read): a read-only console login AND a discover-only MCP token — it can browse and list/search tools but cannot mutate or call them"
+      >
+        <span x-text="state.viewerCreating ? 'Creating…' : '👁 Create viewer user'"></span>
       </button>
       <button type="button" class="btn-secondary" @click="resetUserForm()">
         Reset
@@ -681,7 +713,10 @@
     <p class="text-xs text-slate-500 md:col-span-3">
       <strong>Create demo user</strong> mints a scoped, tool-invoking account with a
       generated password and catalog-derived scopes — then hands you a bearer token
-      and a ready-to-paste Cursor <code>mcp.json</code>. No terminal required.
+      and a ready-to-paste Cursor <code>mcp.json</code>. <strong>Create viewer user</strong>
+      mints the complete read-only identity (<code>viewer</code> + <code>tool:read</code>):
+      a read-only console login <em>and</em> a discover-only MCP token that can search and
+      list the curated catalog but never <code>tools/call</code> — ideal for a safe showcase.
     </p>
   </form>
   <div class="table-wrap">
@@ -1852,7 +1887,7 @@
               <button
                 type="button"
                 class="link-btn"
-                @click="toggleServer(server)"
+                @click="toggleServerEnabled(server)"
                 x-text="server.enabled ? 'Disable' : 'Enable'"
               ></button>
               <button

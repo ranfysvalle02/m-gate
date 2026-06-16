@@ -40,6 +40,7 @@ from services.proxy_registry import get_proxy_registry
 from services.sandbox_executor import get_executor
 from services.telemetry_logger import get_telemetry_logger
 from services.tenant_provisioner import provision_tenant
+from services.tenant_status import get_tenant_read_only
 
 # These names are re-exported as patch seams; list them so linters treat the
 # otherwise-unused imports as the intentional public surface they are.
@@ -61,6 +62,7 @@ __all__ = [
     "_is_platform_admin",
     "_require_platform_admin",
     "_require_tenant_admin",
+    "_require_tenant_writable",
     "_resolve_target_tenant",
     "_build_time_range",
     "_assert_can_assign_roles",
@@ -99,6 +101,23 @@ def _require_tenant_admin(request: Request) -> None:
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Approvals require tenant-admin or platform-admin role.",
     )
+
+
+async def _require_tenant_writable(request: Request, target_tenant: str) -> None:
+    """Refuse a tenant-scoped mutation when the target tenant is read-only.
+
+    Platform-admins bypass the read-only flag (they own the toggle and must be
+    able to reconfigure a frozen tenant); everyone else — including a tenant-admin
+    acting inside their own tenant — is blocked. This is the control-plane twin of
+    the data-plane ``assert_tenant_writable`` gate on ``tools/call``.
+    """
+    if _is_platform_admin(request):
+        return
+    if await get_tenant_read_only(target_tenant):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant is read-only; mutations are disabled.",
+        )
 
 
 def _resolve_target_tenant(request: Request, requested_tenant: str | None = None) -> str:

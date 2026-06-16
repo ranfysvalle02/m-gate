@@ -24,14 +24,14 @@ class _FakeRequest:
         self,
         *,
         scopes=None,
-        roles=None,
+        roles=None,  # default below grants tool:invoke (data-plane caller)
         tenant_id="local-dev",
         user_id="u1",
         headers=None,
     ):
         self.state = _FakeState(
             scopes=scopes,
-            roles=roles or [],
+            roles=roles if roles is not None else ["tool:invoke"],
             tenant_id=tenant_id,
             user_id=user_id,
             request_id="req-123",
@@ -98,7 +98,7 @@ async def test_tools_call_denied_when_scope_missing(rpc_module, patch_mongo):
     patch_mongo["tool_catalog"].docs.append(
         {"server": "orders", "name": "update_order_status", "scopes": ["orders:write"]}
     )
-    request = _FakeRequest(scopes=["orders:read", "server:orders"], roles=[])
+    request = _FakeRequest(scopes=["orders:read", "server:orders"], roles=["tool:invoke"])
     resp = await _handle(
         rpc_module,
         "tools/call",
@@ -122,7 +122,7 @@ async def test_tools_call_code_tool_execution_disabled(rpc_module, patch_mongo):
             "metadata": {"transport": "code"},
         }
     )
-    request = _FakeRequest(scopes=["math:run", "server:my-funcs"], roles=[])
+    request = _FakeRequest(scopes=["math:run", "server:my-funcs"], roles=["tool:invoke"])
     resp = await _handle(
         rpc_module,
         "tools/call",
@@ -150,7 +150,7 @@ async def test_tools_call_code_tool_execution_enabled_calls_registry(rpc_module,
     original = settings.code_tool_execution_enabled
     object.__setattr__(settings, "code_tool_execution_enabled", True)
     try:
-        request = _FakeRequest(scopes=["math:run", "server:my-funcs"], roles=[])
+        request = _FakeRequest(scopes=["math:run", "server:my-funcs"], roles=["tool:invoke"])
         resp = await _handle(
             rpc_module,
             "tools/call",
@@ -184,7 +184,7 @@ async def test_tools_call_code_tool_rejected_by_sandbox_preflight(rpc_module, pa
     # 1s sandbox quota = 1000ms remaining; the tool's 5000ms budget cannot fit.
     object.__setattr__(settings, "default_quota_sandbox_seconds_per_period", 1)
     try:
-        request = _FakeRequest(scopes=["math:run", "server:my-funcs"], roles=[])
+        request = _FakeRequest(scopes=["math:run", "server:my-funcs"], roles=["tool:invoke"])
         resp = await _handle(
             rpc_module,
             "tools/call",
@@ -221,7 +221,7 @@ async def test_tools_call_code_tool_admitted_when_projection_fits(rpc_module, pa
     # 1s = 1000ms remaining; the tool's 500ms budget fits, so it proceeds.
     object.__setattr__(settings, "default_quota_sandbox_seconds_per_period", 1)
     try:
-        request = _FakeRequest(scopes=["math:run", "server:my-funcs"], roles=[])
+        request = _FakeRequest(scopes=["math:run", "server:my-funcs"], roles=["tool:invoke"])
         resp = await _handle(
             rpc_module,
             "tools/call",
@@ -249,7 +249,7 @@ async def test_tools_call_quota_exceeded_returns_rate_limited(rpc_module, patch_
     original_calls = settings.default_quota_calls_per_period
     object.__setattr__(settings, "default_quota_calls_per_period", 1)
     try:
-        request = _FakeRequest(scopes=["orders:read", "server:orders"], roles=[])
+        request = _FakeRequest(scopes=["orders:read", "server:orders"], roles=["tool:invoke"])
         resp = await _handle(
             rpc_module,
             "tools/call",
@@ -273,7 +273,7 @@ async def test_tools_call_allowed_executes_downstream(rpc_module, patch_mongo):
     patch_mongo["tool_catalog"].docs.append(
         {"server": "orders", "name": "find_order", "scopes": ["orders:read"]}
     )
-    request = _FakeRequest(scopes=["orders:read", "server:orders"], roles=[])
+    request = _FakeRequest(scopes=["orders:read", "server:orders"], roles=["tool:invoke"])
     resp = await _handle(
         rpc_module,
         "tools/call",
@@ -301,7 +301,7 @@ async def test_tools_call_requires_confirmation_creates_pending_action(rpc_modul
     )
     request = _FakeRequest(
         scopes=["orders:write", "server:orders"],
-        roles=[],
+        roles=["tool:invoke"],
         user_id="requester",
     )
     resp = await _handle(
@@ -333,7 +333,7 @@ async def test_tools_call_with_approved_confirmation_executes_downstream(rpc_mod
     )
     request = _FakeRequest(
         scopes=["orders:write", "server:orders"],
-        roles=[],
+        roles=["tool:invoke"],
         user_id="requester",
     )
     first = await _handle(
@@ -375,7 +375,7 @@ async def test_tools_call_confirmation_mismatch_returns_forbidden(rpc_module, pa
     )
     request = _FakeRequest(
         scopes=["orders:write", "server:orders"],
-        roles=[],
+        roles=["tool:invoke"],
         user_id="requester",
     )
     first = await _handle(
@@ -419,7 +419,7 @@ async def test_tools_call_confirmation_not_approved_returns_confirmation_require
     )
     request = _FakeRequest(
         scopes=["orders:write", "server:orders"],
-        roles=[],
+        roles=["tool:invoke"],
         user_id="requester",
     )
     first = await _handle(
@@ -746,6 +746,81 @@ async def test_tools_call_blocked_when_tenant_deleted(rpc_module, patch_mongo):
     assert resp.error is not None
     assert resp.error.code == int(JsonRpcErrorCode.FORBIDDEN)
     assert resp.error.data["reason"] == "tenant_deleted"
+
+
+@pytest.mark.asyncio
+async def test_tools_call_blocked_when_tenant_read_only(rpc_module, patch_mongo):
+    # A read-only tenant stays active and discoverable, but tools/call is refused
+    # at the dispatch gate (before authz/quota/downstream) so a curated showcase
+    # can never mutate anything.
+    control = patch_mongo._control_db
+    await control["tenants"].insert_one(
+        {"tenant_id": "local-dev", "db_name": "db", "status": "active", "read_only": True}
+    )
+    resp = await _handle(
+        rpc_module,
+        "tools/call",
+        {"server": "orders", "name": "do", "arguments": {}},
+        _FakeRequest(tenant_id="local-dev", scopes=["server:*"]),
+    )
+    assert resp.error is not None
+    assert resp.error.code == int(JsonRpcErrorCode.FORBIDDEN)
+    assert resp.error.data["reason"] == "tenant_read_only"
+
+
+@pytest.mark.asyncio
+async def test_tools_list_allowed_when_tenant_read_only(rpc_module, patch_mongo):
+    # Read-only freezes invocation but keeps discovery fully open so the curated
+    # showcase remains browsable.
+    control = patch_mongo._control_db
+    await control["tenants"].insert_one(
+        {"tenant_id": "local-dev", "db_name": "db", "status": "active", "read_only": True}
+    )
+    resp = await _handle(rpc_module, "tools/list", {}, _FakeRequest(tenant_id="local-dev"))
+    assert resp.error is None
+
+
+@pytest.mark.asyncio
+async def test_admin_read_only_then_rpc_call_blocked_then_read_write(
+    rpc_module, patch_mongo, monkeypatch
+):
+    # End-to-end: the admin read-only toggle and the /rpc enforcement share the
+    # same control plane + cache, so the freeze takes effect on the next call and
+    # lifting it clears the writable gate (the call then fails only for an
+    # unrelated reason, proving read-only is no longer the blocker).
+    import gateway.routers.admin as admin
+
+    class _Telemetry:
+        def log_background(self, **kwargs):
+            return None
+
+    monkeypatch.setattr(admin._common, "get_telemetry_logger", lambda: _Telemetry())
+
+    control = patch_mongo._control_db
+    await control["tenants"].insert_one(
+        {"tenant_id": "local-dev", "db_name": "db", "status": "active"}
+    )
+    platform_admin = _FakeRequest(tenant_id="local-dev", roles=[admin.settings.platform_admin_role])
+
+    await admin.make_tenant_read_only(platform_admin, "local-dev", None)
+    blocked = await _handle(
+        rpc_module,
+        "tools/call",
+        {"server": "orders", "name": "do", "arguments": {}},
+        _FakeRequest(tenant_id="local-dev", scopes=["server:*"]),
+    )
+    assert blocked.error is not None
+    assert blocked.error.data["reason"] == "tenant_read_only"
+
+    await admin.make_tenant_read_write(platform_admin, "local-dev")
+    after = await _handle(
+        rpc_module,
+        "tools/call",
+        {"server": "orders", "name": "do", "arguments": {}},
+        _FakeRequest(tenant_id="local-dev", scopes=["server:*"]),
+    )
+    assert after.error is not None
+    assert after.error.data["reason"] == "tool_not_found"
 
 
 @pytest.mark.asyncio

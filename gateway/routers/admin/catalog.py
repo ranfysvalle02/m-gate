@@ -23,6 +23,7 @@ from models.admin import (
     TenantStats,
 )
 from services.registry_watcher import get_catalog_version
+from services.tenant_tool_policy import filter_available_tools
 
 from . import _common as c
 from ._common import (
@@ -80,6 +81,10 @@ async def list_catalog(
     docs = (
         await c.get_tenant_database(target_tenant)["tool_catalog"].find({}).to_list(length=10_000)
     )
+    # Read-only (viewer) principals see only the curated set so a showcase console
+    # mirrors what the data plane exposes; admins keep the full catalog for editing.
+    if getattr(request.state, "is_read_only_principal", False):
+        docs = list(await filter_available_tools(target_tenant, docs))
     docs.sort(key=lambda item: (str(item.get("server", "")), str(item.get("name", ""))))
     window = docs[offset : offset + params.limit]
     items = [

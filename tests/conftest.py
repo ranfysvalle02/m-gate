@@ -88,10 +88,17 @@ def patch_mongo(monkeypatch, fake_db):
     tenant_provisioner.reset_ready_tenant_cache()
 
     # The tenant suspended/active status cache is process-global; clear it so a
-    # suspension set in one test never leaks into the next.
+    # suspension set in one test never leaks into the next. (This also clears the
+    # read-only cache, which mirrors the status cache.)
     import services.tenant_status as tenant_status
 
     tenant_status.reset_tenant_status_cache()
+
+    # The per-tenant tool-policy cache (allowlist/max-tools/disabled overlay) is
+    # process-global; clear it too so curation never leaks across tests.
+    import services.tenant_tool_policy as tenant_tool_policy
+
+    tenant_tool_policy.reset_tenant_tool_policy_cache()
 
     # The per-tenant egress allowlist cache is process-global; clear it too.
     import services.tenant_egress as tenant_egress
@@ -123,6 +130,7 @@ def patch_mongo(monkeypatch, fake_db):
         "services.pending_actions",
         "services.usage_metering",
         "services.tenant_status",
+        "services.tenant_tool_policy",
         "services.tenant_egress",
         "gateway.middleware.rbac",
         "gateway.middleware.ratelimit",

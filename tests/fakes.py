@@ -340,6 +340,18 @@ class FakeCollection:
         if "$inc" in update:
             for key, amount in update["$inc"].items():
                 doc[key] = doc.get(key, 0) + amount
+        if "$addToSet" in update:
+            for key, value in update["$addToSet"].items():
+                existing = doc.get(key)
+                existing = list(existing) if isinstance(existing, list) else []
+                if value not in existing:
+                    existing.append(value)
+                doc[key] = existing
+        if "$pull" in update:
+            for key, value in update["$pull"].items():
+                existing = doc.get(key)
+                if isinstance(existing, list):
+                    doc[key] = [item for item in existing if item != value]
 
     @staticmethod
     def _extract_search_index_model(model: Any) -> tuple[str, dict[str, Any]]:

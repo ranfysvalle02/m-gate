@@ -19,12 +19,52 @@ class TenantResponse(BaseModel):
     suspended_reason: str | None = None
     deleted_at: datetime | None = None
     purge_at: datetime | None = None
+    # Read-only is orthogonal to ``status``: the tenant stays ``active`` (fully
+    # discoverable) but every mutation (tools/call + tenant-side config) is refused.
+    read_only: bool = False
+    read_only_reason: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
 
 class TenantStatusUpdateRequest(BaseModel):
     reason: str | None = None
+
+
+class ToolPolicyUpdateRequest(BaseModel):
+    # Fully-qualified ``server/name`` entries (or ``server/*`` wildcards). Empty
+    # means unrestricted — discovery and invocation see the whole catalog.
+    allowlist: list[str] = Field(default_factory=list)
+    # Cap on how many tools the tenant may register (enforced at server mount).
+    # 0 means unlimited.
+    max_tools: int = Field(default=0, ge=0)
+
+
+class ToolPolicyToolEntry(BaseModel):
+    server: str
+    name: str
+    description: str = ""
+    # Effective availability under the current allowlist + disabled overlay, so the
+    # editor can render the curated state without recomputing it client-side.
+    allowlisted: bool = True
+    disabled: bool = False
+
+
+class ToolPolicyResponse(BaseModel):
+    tenant_id: str
+    allowlist: list[str] = Field(default_factory=list)
+    max_tools: int = 0
+    disabled_tools: list[str] = Field(default_factory=list)
+    # Every tool in the tenant catalog (not just the curated subset) so an admin can
+    # build/edit the allowlist against the full surface.
+    available_tools: list[ToolPolicyToolEntry] = Field(default_factory=list)
+
+
+class ToolEnableResponse(BaseModel):
+    tenant_id: str
+    server: str
+    name: str
+    enabled: bool
 
 
 class TenantDeleteResponse(BaseModel):
@@ -343,6 +383,12 @@ class WhoAmIResponse(BaseModel):
     roles: list[str] = Field(default_factory=list)
     scopes: list[str] = Field(default_factory=list)
     is_platform_admin: bool
+    # True for a read-only (viewer) console principal: the UI uses this to hide
+    # mutating affordances. The server-side 403 in RbacMiddleware is the real guard.
+    is_read_only: bool = False
+    # True when the caller's tenant itself is read-only (so even a full admin sees
+    # tenant-scoped mutations refused, while platform-admin can still toggle it off).
+    tenant_read_only: bool = False
     auth_mode: Literal["hs256", "jwks"]
 
 

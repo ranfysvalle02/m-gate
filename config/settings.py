@@ -50,10 +50,14 @@ class Settings(BaseSettings):
     # so this is only used as the Ollama default and as a last-resort fallback.
     ollama_dimensions: int = 768
 
-    # Embedding provider selection. These env values are the boot-time default;
-    # the admin panel can persist an override in the control DB that takes
-    # precedence over them.
-    embedding_provider: Literal["ollama", "openai", "azure_openai", "voyage", "gemini"] = "ollama"
+    # Embedding provider selection (boot-time default; the admin panel can persist
+    # a control-DB override that takes precedence). Left **unset** by design so the
+    # resolver can auto-select: a lone VOYAGE_API_KEY -> Voyage, otherwise Ollama.
+    # Setting this pins a provider explicitly and always wins over auto-selection
+    # (including pinning "ollama"). See services.embedding_config._resolve_provider_and_key.
+    embedding_provider: Literal["ollama", "openai", "azure_openai", "voyage", "gemini"] | None = (
+        None
+    )
     # When unset, each provider falls back to a sensible default model.
     embedding_model: str | None = None
     embedding_base_url: str | None = None
@@ -61,10 +65,11 @@ class Settings(BaseSettings):
     embedding_api_key_file: str | None = None
     # Voyage AI is MongoDB's first-party embedding/rerank stack, so it gets a
     # dedicated, drop-in env var: setting VOYAGE_API_KEY alone is enough to both
-    # select AND authenticate Voyage. It promotes the *default* provider (ollama)
-    # to voyage and supplies the key when no generic EMBEDDING_API_KEY is set. An
-    # explicit EMBEDDING_PROVIDER / EMBEDDING_API_KEY always wins, and the admin
-    # panel can still override everything at runtime.
+    # select AND authenticate Voyage. With no explicit EMBEDDING_PROVIDER it
+    # auto-selects voyage and supplies the key when no generic EMBEDDING_API_KEY is
+    # set. An explicit EMBEDDING_PROVIDER / EMBEDDING_API_KEY always wins, and the
+    # admin panel can still override everything at runtime. When Voyage is the
+    # resolved provider, Ollama settings are never consulted or contacted.
     voyage_api_key: str = ""
     voyage_api_key_file: str | None = None
     azure_openai_endpoint: str | None = None
@@ -112,6 +117,11 @@ class Settings(BaseSettings):
     gateway_instance_id: str | None = None
     watcher_resume_ttl_seconds: int = 86400
     platform_admin_role: str = "platform-admin"
+    # Read-only web-console principal. Carries enough to load the admin UI and view
+    # tool source, but every mutating /admin call is refused at the RBAC layer, so it
+    # is safe to hand out for a showcase. Orthogonal to the data-plane `tool:read`
+    # role (an MCP discover-only token); a viewer touches the console, not /rpc.
+    platform_viewer_role: str = "viewer"
     # Feature flag for transport="code" execution. When false, code tools remain
     # authorable/searchable but tools/call returns a clear "disabled" error.
     # Keep enabled only when a sandbox runtime (code_executor != "disabled") is available.

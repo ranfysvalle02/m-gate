@@ -25,15 +25,43 @@ from services.server_exporter import (
 )
 from services.server_guard import EndpointNotAllowed, StdioNotAllowed, enforce_server_policy
 from services.tenant_egress import get_tenant_egress_allowlist
+from services.tenant_tool_policy import get_tool_policy
 
 from . import _common as c
 from ._common import (
     _is_platform_admin,
     _require_tenant_admin,
+    _require_tenant_writable,
     _resolve_target_tenant,
     router,
     settings,
 )
+
+
+async def _enforce_max_tools(tenant_id: str, server_name: str, incoming_tool_count: int) -> None:
+    """Reject a registration that would push the tenant over its max-tools cap.
+
+    The cap counts the tenant's catalogued tools across *other* servers plus the
+    tools this registration contributes, so re-saving an existing server never
+    counts its own tools twice. ``0`` means unlimited. Best-effort for
+    discovery-based (HTTP) servers whose tools land in the catalog asynchronously;
+    authored/code servers (tools known at save time) are enforced exactly.
+    """
+    cap = (await get_tool_policy(tenant_id))["max_tools"]
+    if cap <= 0:
+        return
+    catalog = c.get_tenant_database(tenant_id)["tool_catalog"]
+    existing_other = await catalog.count_documents({"server": {"$ne": server_name}})
+    projected = existing_other + max(0, incoming_tool_count)
+    if projected > cap:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Registering this server would exceed the tenant's max-tools cap "
+                f"({cap}); projected total is {projected}. Raise the cap in the tenant "
+                "tool policy or remove tools before saving."
+            ),
+        )
 
 
 def _requires_secure_credential_transport(server_doc: dict[str, Any], scheme: str) -> bool:
@@ -247,9 +275,11 @@ async def _public_server_doc_with_code(doc: dict[str, Any]) -> dict[str, Any]:
 @router.post("/servers")
 async def create_or_update_server(request: Request, payload: ServerUpsertRequest) -> dict[str, Any]:
     tenant_id = _resolve_target_tenant(request, payload.tenant_id)
+    await _require_tenant_writable(request, tenant_id)
     await c.provision_tenant(tenant_id, wait_for_queryable_indexes=False)
     doc = _to_server_doc(payload.model_dump(), tenant_id)
     _validate_server_doc(doc)
+    await _enforce_max_tools(tenant_id, doc["server"], len(doc.get("tools") or []))
     doc = await _apply_server_policy(doc, is_platform_admin=_is_platform_admin(request))
     await _validate_server_auth(doc)
     doc = await _prepare_code_server(doc, tenant_id)
@@ -336,6 +366,7 @@ async def patch_server(
 ) -> dict[str, Any]:
     requested_tenant = payload.tenant_id or tenant_id
     target_tenant = _resolve_target_tenant(request, requested_tenant)
+    await _require_tenant_writable(request, target_tenant)
     collection = c.get_tenant_database(target_tenant)["routing_registry"]
     existing = await collection.find_one({"_id": server_name})
     if not existing:
@@ -359,6 +390,7 @@ async def patch_server(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only platform-admin may modify platform-origin servers.",
         )
+    await _enforce_max_tools(target_tenant, server_name, len(merged.get("tools") or []))
     merged = await _apply_server_policy(merged, is_platform_admin=is_platform_admin)
     await _validate_server_auth(merged)
     merged = await _prepare_code_server(merged, target_tenant)
@@ -377,9 +409,79 @@ async def delete_server(
     tenant_id: str | None = Query(default=None),
 ) -> dict[str, Any]:
     target_tenant = _resolve_target_tenant(request, tenant_id)
+    await _require_tenant_writable(request, target_tenant)
     collection = c.get_tenant_database(target_tenant)["routing_registry"]
+    existing = await collection.find_one({"_id": server_name})
+    if (
+        existing
+        and str(existing.get("origin", "platform")) == "platform"
+        and not _is_platform_admin(request)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only platform-admin may delete platform-origin servers.",
+        )
     result = await collection.delete_many({"_id": server_name})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Server not found.")
     await c.get_proxy_registry().unmount(server_name, tenant_id=target_tenant)
     return {"deleted": True, "tenant_id": target_tenant, "server": server_name}
+
+
+@router.post("/servers/{server_name}/enable")
+async def enable_server(
+    request: Request,
+    server_name: str,
+    tenant_id: str | None = Query(default=None),
+) -> dict[str, Any]:
+    return await _set_server_enabled(request, server_name, True, tenant_id)
+
+
+@router.post("/servers/{server_name}/disable")
+async def disable_server(
+    request: Request,
+    server_name: str,
+    tenant_id: str | None = Query(default=None),
+) -> dict[str, Any]:
+    return await _set_server_enabled(request, server_name, False, tenant_id)
+
+
+async def _set_server_enabled(
+    request: Request,
+    server_name: str,
+    enabled: bool,
+    tenant_id: str | None,
+) -> dict[str, Any]:
+    """Flip a server's ``enabled`` flag and (un)mount it, origin-aware.
+
+    Tenant-admins may toggle their own (tenant-origin) servers; platform-origin
+    servers stay platform-admin only, mirroring ``patch_server``. The toggle is a
+    mutation, so it is refused while the tenant is read-only (platform-admin
+    bypasses).
+    """
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    await _require_tenant_writable(request, target_tenant)
+    collection = c.get_tenant_database(target_tenant)["routing_registry"]
+    existing = await collection.find_one({"_id": server_name})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Server not found.")
+    if str(existing.get("origin", "platform")) == "platform" and not _is_platform_admin(request):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only platform-admin may modify platform-origin servers.",
+        )
+    await collection.update_one({"_id": server_name}, {"$set": {"enabled": enabled}})
+    existing["enabled"] = enabled
+    if enabled:
+        await c.get_proxy_registry().mount_or_update(existing)
+    else:
+        await c.get_proxy_registry().unmount(server_name, tenant_id=target_tenant)
+    c.get_telemetry_logger().log_background(
+        tenant_id=target_tenant,
+        user_id=str(getattr(request.state, "user_id", "admin")),
+        method="admin/servers/enable" if enabled else "admin/servers/disable",
+        status="server_enabled" if enabled else "server_disabled",
+        metadata={"tenant_id": target_tenant, "server": server_name},
+    )
+    return _public_server_doc(existing)

@@ -457,3 +457,83 @@ async def test_rbac_legacy_session_without_status_treated_active(patch_mongo, mo
     sink = _Sink()
     await mw(scope, sink.receive, sink.send)
     assert sink.status == 200
+
+
+@pytest.mark.asyncio
+async def test_rbac_tool_read_clears_coarse_data_plane_gate(patch_mongo):
+    from config.settings import get_settings
+    from gateway.middleware.rbac import RbacMiddleware
+
+    mw = RbacMiddleware(_ok_app)
+    mw.settings = get_settings()
+    object.__setattr__(mw.settings, "auth_mode", "hs256")
+
+    # A discover-only token (tool:read, no tool:invoke) clears the coarse gate so
+    # tools/list and tools/search work. Per-call authorization still blocks
+    # tools/call (covered in tests/test_authorization.py).
+    scope = _scope()
+    scope["state"] = {"roles": ["tool:read"], "tenant_id": "t1", "user_id": "viewer"}
+    sink = _Sink()
+    await mw(scope, sink.receive, sink.send)
+    assert sink.status == 200
+
+
+@pytest.mark.asyncio
+async def test_rbac_read_only_principal_blocked_on_admin_mutation(patch_mongo):
+    from config.settings import get_settings
+    from gateway.middleware.rbac import RbacMiddleware
+
+    mw = RbacMiddleware(_ok_app)
+    mw.settings = get_settings()
+
+    # A viewer reaches the admin console (is_admin_principal) but every mutating
+    # /admin call is refused at this single choke point.
+    scope = _scope(path="/admin/tenants/t1/suspend", method="POST")
+    scope["state"] = {"is_admin_principal": True, "is_read_only_principal": True}
+    sink = _Sink()
+    await mw(scope, sink.receive, sink.send)
+    assert sink.status == 403
+    import json as _json
+
+    assert "Read-only access" in _json.loads(sink.body)["detail"]
+
+
+@pytest.mark.asyncio
+async def test_rbac_read_only_principal_allowed_to_read_admin(patch_mongo):
+    from config.settings import get_settings
+    from gateway.middleware.rbac import RbacMiddleware
+
+    mw = RbacMiddleware(_ok_app)
+    mw.settings = get_settings()
+
+    # GET requests (UI load, tool-source view, exports) stay allowed for a viewer.
+    scope = _scope(path="/admin/tenants", method="GET")
+    scope["state"] = {"is_admin_principal": True, "is_read_only_principal": True}
+    sink = _Sink()
+    await mw(scope, sink.receive, sink.send)
+    assert sink.status == 200
+
+
+@pytest.mark.asyncio
+async def test_rbac_read_only_block_precedes_csrf(patch_mongo):
+    from config.settings import get_settings
+    from gateway.middleware.rbac import RbacMiddleware
+
+    mw = RbacMiddleware(_ok_app)
+    mw.settings = get_settings()
+
+    # A viewer mutating via the cookie session with NO CSRF token would otherwise
+    # trip the CSRF guard; the read-only block is checked first so the holder gets
+    # the accurate reason. Both deny the write either way.
+    scope = _scope(path="/admin/tenants/t1/suspend", method="POST")
+    scope["state"] = {
+        "is_admin_principal": True,
+        "is_read_only_principal": True,
+        "admin_auth_via_cookie": True,
+    }
+    sink = _Sink()
+    await mw(scope, sink.receive, sink.send)
+    assert sink.status == 403
+    import json as _json
+
+    assert "Read-only access" in _json.loads(sink.body)["detail"]

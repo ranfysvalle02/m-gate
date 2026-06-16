@@ -24,12 +24,14 @@ from models.admin import (
 from services import users as users_service
 from services.admin_session import mint_bearer_jwt, mint_session
 from services.passwords import verify_password
-from services.users import DEMO_USER_ROLES, derive_demo_scopes
+from services.tenant_status import get_tenant_read_only
+from services.users import DEMO_USER_ROLES, VIEWER_USER_ROLES, derive_demo_scopes
 
 from ._common import (
     _assert_can_assign_roles,
     _is_platform_admin,
     _load_managed_user,
+    _require_tenant_writable,
     _resolve_target_tenant,
     router,
     settings,
@@ -55,6 +57,10 @@ async def who_am_i(request: Request) -> WhoAmIResponse:
         roles=roles,
         scopes=scopes,
         is_platform_admin=settings.platform_admin_role in set(roles),
+        # The viewer principal drives the console's read-only UX; tenant_read_only
+        # tells even a full admin that tenant-scoped writes are frozen.
+        is_read_only=bool(getattr(request.state, "is_read_only_principal", False)),
+        tenant_read_only=await get_tenant_read_only(tenant_id),
         auth_mode=settings.auth_mode,
     )
 
@@ -62,6 +68,7 @@ async def who_am_i(request: Request) -> WhoAmIResponse:
 @router.post("/users", response_model=UserResponse)
 async def create_user(request: Request, payload: UserCreateRequest) -> UserResponse:
     target_tenant = _resolve_target_tenant(request, payload.tenant_id)
+    await _require_tenant_writable(request, target_tenant)
     _assert_can_assign_roles(request, payload.roles)
     try:
         user = await users_service.create_user(
@@ -129,16 +136,19 @@ async def create_demo_user(
     """
     payload = payload or DemoUserCreateRequest()
     target_tenant = _resolve_target_tenant(request, payload.tenant_id)
+    await _require_tenant_writable(request, target_tenant)
     scopes = await derive_demo_scopes(target_tenant)
     password = secrets.token_urlsafe(12)
     created_by = str(getattr(request.state, "user_id", "")) or None
 
-    user = await _create_demo_user_record(
+    user = await _create_preset_user_record(
         email=payload.email,
         tenant_id=target_tenant,
         scopes=scopes,
         password=password,
         created_by=created_by,
+        roles=list(DEMO_USER_ROLES),
+        email_prefix="demo",
     )
     await users_service.sync_session_context(user)
 
@@ -152,31 +162,79 @@ async def create_demo_user(
     return DemoUserCreateResponse(user=UserResponse(**user), password=password, created=True)
 
 
-async def _create_demo_user_record(
+@router.post(
+    "/users/viewer", response_model=DemoUserCreateResponse, status_code=status.HTTP_201_CREATED
+)
+async def create_viewer_user(
+    request: Request,
+    payload: DemoUserCreateRequest | None = None,
+) -> DemoUserCreateResponse:
+    """One-click: create a discover-only (``tool:read``) viewer account.
+
+    The data-plane twin of the demo button: a viewer can ``tools/list`` /
+    ``tools/search`` the curated catalog (catalog-derived scopes so discovery is
+    complete) but per-call authorization refuses ``tools/call`` because it lacks
+    ``tool:invoke``. Hand the returned credential + ``mcp.json`` to someone who
+    should explore, not run, the platform. Same tenant-scoping RBAC as the rest of
+    the user surface.
+    """
+    payload = payload or DemoUserCreateRequest()
+    target_tenant = _resolve_target_tenant(request, payload.tenant_id)
+    await _require_tenant_writable(request, target_tenant)
+    scopes = await derive_demo_scopes(target_tenant)
+    password = secrets.token_urlsafe(12)
+    created_by = str(getattr(request.state, "user_id", "")) or None
+
+    user = await _create_preset_user_record(
+        email=payload.email,
+        tenant_id=target_tenant,
+        scopes=scopes,
+        password=password,
+        created_by=created_by,
+        roles=list(VIEWER_USER_ROLES),
+        email_prefix="viewer",
+    )
+    await users_service.sync_session_context(user)
+
+    logger.info(
+        "Viewer user created: actor=%s target=%s tenant=%s scopes=%s",
+        created_by or "unknown",
+        user["email"],
+        target_tenant,
+        scopes,
+    )
+    return DemoUserCreateResponse(user=UserResponse(**user), password=password, created=True)
+
+
+async def _create_preset_user_record(
     *,
     email: str | None,
     tenant_id: str,
     scopes: list[str],
     password: str,
     created_by: str | None,
+    roles: list[str],
+    email_prefix: str,
 ) -> dict[str, Any]:
-    """Create the demo user, retrying generated emails on the rare collision.
+    """Create a preset (demo/viewer) user, retrying generated emails on collision.
 
     An operator-supplied email that already exists is a hard 409 (the caller chose
-    it); an auto-generated address simply gets re-rolled so one-click never fails
-    on an astronomically unlikely clash.
+    it); an auto-generated ``<prefix>-<rand>@demo.local`` address is simply
+    re-rolled so one-click never fails on an astronomically unlikely clash.
     """
     operator_supplied = bool(email and email.strip())
     attempts = 1 if operator_supplied else 5
     last_exc: users_service.UserAlreadyExists | None = None
     for _ in range(attempts):
-        candidate = email if operator_supplied else f"demo-{secrets.token_hex(3)}@demo.local"
+        candidate = (
+            email if operator_supplied else f"{email_prefix}-{secrets.token_hex(3)}@demo.local"
+        )
         try:
             return await users_service.create_user(
                 email=candidate or "",
                 password=password,
                 tenant_id=tenant_id,
-                roles=list(DEMO_USER_ROLES),
+                roles=roles,
                 scopes=scopes,
                 status="active",
                 created_by=created_by,
@@ -266,10 +324,16 @@ async def mint_user_token(
         )
 
     if not data_plane_ok:
-        gate_note = (
-            "This account lacks the 'admin' or 'tool:invoke' role, so the token "
-            "authenticates but is rejected at the /rpc and /mcp gate."
-        )
+        if "tool:read" in role_set:
+            gate_note = (
+                "This account carries 'tool:read' only, so the token can discover "
+                "tools (tools/list, tools/search) but tools/call is rejected."
+            )
+        else:
+            gate_note = (
+                "This account lacks the 'admin' or 'tool:invoke' role, so the token "
+                "authenticates but is rejected at the /rpc and /mcp gate."
+            )
         caveat = f"{caveat} {gate_note}".strip() if caveat else gate_note
 
     # A minted token is a credential; record who issued one for whom so the act
@@ -309,7 +373,8 @@ async def update_user(
     user_id: str,
     payload: UserUpdateRequest,
 ) -> UserResponse:
-    await _load_managed_user(request, user_id)
+    doc = await _load_managed_user(request, user_id)
+    await _require_tenant_writable(request, str(doc.get("tenant_id")))
     if payload.roles is not None:
         _assert_can_assign_roles(request, payload.roles)
     try:
@@ -329,6 +394,7 @@ async def update_user(
 @router.delete("/users/{user_id}")
 async def delete_user(request: Request, user_id: str) -> dict[str, Any]:
     doc = await _load_managed_user(request, user_id)
+    await _require_tenant_writable(request, str(doc.get("tenant_id")))
     caller_email = str(getattr(request.state, "user_id", ""))
     if str(doc.get("email", "")) == caller_email:
         raise HTTPException(

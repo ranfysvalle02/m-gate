@@ -33,6 +33,22 @@ class RbacMiddleware:
                 else:
                     response = RedirectResponse(url=self._ui_login_path(), status_code=303)
                 return await response(scope, request.receive, send)
+            # Read-only console principals (the `viewer` role) reach the admin UI
+            # but may not change anything. One choke point here covers every
+            # mutating /admin endpoint, so individual handlers don't each need a
+            # guard. GET/HEAD (UI load, tool-source view, exports) stay allowed.
+            # Checked before CSRF so a viewer always sees the accurate read-only
+            # reason rather than a misleading CSRF failure; both deny the write.
+            if (
+                path.startswith("/admin")
+                and self._unsafe_method(request)
+                and getattr(request.state, "is_read_only_principal", False)
+            ):
+                response = JSONResponse(
+                    status_code=403,
+                    content={"detail": "Read-only access: mutations are disabled."},
+                )
+                return await response(scope, request.receive, send)
             if self._requires_csrf(request):
                 response = JSONResponse(
                     status_code=403, content={"detail": "CSRF validation failed."}
@@ -60,9 +76,12 @@ class RbacMiddleware:
                 roles.update(session["roles"])
             request.state.roles = sorted(roles)
 
-            # Coarse gate: a caller must carry admin or tool:invoke to reach any
-            # tool-invocation surface (/rpc and /mcp at parity).
-            if "admin" not in roles and "tool:invoke" not in roles:
+            # Coarse gate: a caller must carry admin, tool:invoke, or tool:read to
+            # reach any tool surface (/rpc and /mcp at parity). tool:read clears the
+            # gate so a discover-only token can list/search, but per-call
+            # authorization (services/authorization.py) still refuses tools/call to
+            # anything without tool:invoke.
+            if not roles.intersection({"admin", "tool:invoke", "tool:read"}):
                 response = JSONResponse(
                     status_code=403, content={"detail": "Insufficient permissions."}
                 )

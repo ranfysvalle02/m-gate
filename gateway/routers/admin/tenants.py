@@ -23,6 +23,9 @@ from models.admin import (
     TenantResponse,
     TenantRestoreResponse,
     TenantStatusUpdateRequest,
+    ToolPolicyResponse,
+    ToolPolicyToolEntry,
+    ToolPolicyUpdateRequest,
     UsageEventsResponse,
     UsageRemaining,
     UsageResponse,
@@ -37,7 +40,17 @@ from services.tenant_provisioner import (
     tenant_db_name,
 )
 from services.tenant_provisioner import restore_tenant as restore_tenant_record
-from services.tenant_status import STATUS_ACTIVE, STATUS_SUSPENDED, set_tenant_status
+from services.tenant_status import (
+    STATUS_ACTIVE,
+    STATUS_SUSPENDED,
+    set_tenant_read_only,
+    set_tenant_status,
+)
+from services.tenant_tool_policy import (
+    get_tool_policy,
+    matches_allowlist,
+    set_tool_policy,
+)
 from services.usage_metering import (
     USAGE_EVENTS_COLLECTION,
     get_effective_quota,
@@ -52,6 +65,7 @@ from ._common import (
     _is_platform_admin,
     _require_platform_admin,
     _require_tenant_admin,
+    _require_tenant_writable,
     _resolve_target_tenant,
     router,
     settings,
@@ -125,6 +139,8 @@ async def _server_env_response(tenant_id: str, server_name: str) -> ServerEnvRes
 def _tenant_response(doc: dict[str, Any], *, db_name: str | None = None) -> TenantResponse:
     status_value = str(doc.get("status", STATUS_ACTIVE)) or STATUS_ACTIVE
     reason = str(doc.get("suspended_reason", "")) or None
+    read_only = bool(doc.get("read_only", False))
+    read_only_reason = str(doc.get("read_only_reason", "")) or None
     return TenantResponse(
         tenant_id=str(doc.get("tenant_id")),
         db_name=str(doc.get("db_name") or db_name or ""),
@@ -132,6 +148,8 @@ def _tenant_response(doc: dict[str, Any], *, db_name: str | None = None) -> Tena
         suspended_reason=reason if status_value == STATUS_SUSPENDED else None,
         deleted_at=doc.get("deleted_at"),
         purge_at=doc.get("purge_at"),
+        read_only=read_only,
+        read_only_reason=read_only_reason if read_only else None,
         created_at=doc.get("created_at"),
         updated_at=doc.get("updated_at"),
     )
@@ -286,6 +304,128 @@ async def _set_tenant_status_endpoint(
     return _tenant_response(doc)
 
 
+@router.post("/tenants/{tenant_id}/read-only", response_model=TenantResponse)
+async def make_tenant_read_only(
+    request: Request,
+    tenant_id: str,
+    payload: TenantStatusUpdateRequest | None = None,
+) -> TenantResponse:
+    return await _set_tenant_read_only_endpoint(
+        request=request,
+        tenant_id=tenant_id,
+        enabled=True,
+        reason=payload.reason if payload else None,
+    )
+
+
+@router.post("/tenants/{tenant_id}/read-write", response_model=TenantResponse)
+async def make_tenant_read_write(request: Request, tenant_id: str) -> TenantResponse:
+    return await _set_tenant_read_only_endpoint(
+        request=request,
+        tenant_id=tenant_id,
+        enabled=False,
+        reason=None,
+    )
+
+
+async def _set_tenant_read_only_endpoint(
+    *,
+    request: Request,
+    tenant_id: str,
+    enabled: bool,
+    reason: str | None,
+) -> TenantResponse:
+    # Read-only is a platform control (it freezes a whole tenant for a showcase),
+    # so only a platform-admin may toggle it. A tenant-admin cannot lift their own
+    # tenant's freeze.
+    _require_platform_admin(request)
+    actor = str(getattr(request.state, "user_id", "admin"))
+    doc = await set_tenant_read_only(
+        tenant_id,
+        enabled,
+        updated_by=actor,
+        reason=reason,
+    )
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+    c.get_telemetry_logger().log_background(
+        tenant_id=tenant_id,
+        user_id=actor,
+        method="admin/tenants/read-only" if enabled else "admin/tenants/read-write",
+        status="tenant_read_only" if enabled else "tenant_read_write",
+        metadata={"tenant_id": tenant_id, "actor": actor, "reason": reason},
+    )
+    return _tenant_response(doc)
+
+
+@router.get("/tenants/{tenant_id}/tool-policy", response_model=ToolPolicyResponse)
+async def get_tenant_tool_policy(request: Request, tenant_id: str) -> ToolPolicyResponse:
+    # Read-only-safe (GET): tenant-admins may view their own curation; cross-tenant
+    # still needs platform-admin via _resolve_target_tenant.
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    policy = await get_tool_policy(target_tenant)
+    catalog = (
+        await c.get_tenant_database(target_tenant)["tool_catalog"].find({}).to_list(length=10_000)
+    )
+    catalog.sort(key=lambda item: (str(item.get("server", "")), str(item.get("name", ""))))
+    available = [
+        ToolPolicyToolEntry(
+            server=str(doc.get("server", "")),
+            name=str(doc.get("name", "")),
+            description=str(doc.get("description", "")),
+            allowlisted=matches_allowlist(
+                str(doc.get("server", "")), str(doc.get("name", "")), policy["allowlist"]
+            ),
+            disabled=f"{doc.get('server', '')}/{doc.get('name', '')}" in policy["disabled_tools"],
+        )
+        for doc in catalog
+    ]
+    return ToolPolicyResponse(
+        tenant_id=target_tenant,
+        allowlist=policy["allowlist"],
+        max_tools=policy["max_tools"],
+        disabled_tools=policy["disabled_tools"],
+        available_tools=available,
+    )
+
+
+@router.put("/tenants/{tenant_id}/tool-policy", response_model=ToolPolicyResponse)
+async def put_tenant_tool_policy(
+    request: Request,
+    tenant_id: str,
+    payload: ToolPolicyUpdateRequest,
+) -> ToolPolicyResponse:
+    # Curating the allowlist / cap is a tenant-admin operation, but it is refused
+    # while the tenant is read-only (platform-admin bypasses, since they own the
+    # freeze and may need to re-curate it).
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    await _require_tenant_writable(request, target_tenant)
+    actor = str(getattr(request.state, "user_id", "admin"))
+    doc = await set_tool_policy(
+        target_tenant,
+        allowlist=payload.allowlist,
+        max_tools=payload.max_tools,
+        updated_by=actor,
+    )
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+    c.get_telemetry_logger().log_background(
+        tenant_id=target_tenant,
+        user_id=actor,
+        method="admin/tenants/tool-policy",
+        status="tool_policy_updated",
+        metadata={
+            "tenant_id": target_tenant,
+            "actor": actor,
+            "allowlist_size": len(payload.allowlist),
+            "max_tools": payload.max_tools,
+        },
+    )
+    return await get_tenant_tool_policy(request, target_tenant)
+
+
 def _egress_allowlist_response(
     tenant_id: str, doc: dict[str, Any] | None
 ) -> EgressAllowlistResponse:
@@ -326,6 +466,7 @@ async def put_egress_allowlist(
     payload: EgressAllowlistUpdateRequest,
 ) -> EgressAllowlistResponse:
     target_tenant = _resolve_target_tenant(request, tenant_id)
+    await _require_tenant_writable(request, target_tenant)
     actor = str(getattr(request.state, "user_id", "admin"))
     try:
         doc = await set_tenant_egress_allowlist(
@@ -385,6 +526,7 @@ async def put_server_env(
     target_tenant = _resolve_target_tenant(
         request, tenant_id if isinstance(tenant_id, str) else None
     )
+    await _require_tenant_writable(request, target_tenant)
     await _require_server_exists(target_tenant, server_name)
     collection = c.get_tenant_database(target_tenant)["server_secrets"]
     existing = await collection.find_one({"_id": server_name})

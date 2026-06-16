@@ -15,7 +15,12 @@ from services.metrics import observe_quota_block, observe_quota_preflight_block
 from services.proxy_registry import get_proxy_registry
 from services.registry_watcher import get_catalog_version
 from services.telemetry_logger import get_telemetry_logger
-from services.tenant_status import TenantInactiveError, assert_tenant_active
+from services.tenant_status import (
+    TenantInactiveError,
+    assert_tenant_active,
+    assert_tenant_writable,
+)
+from services.tenant_tool_policy import filter_available_tools
 from services.usage_metering import check_quota, check_sandbox_preflight
 
 try:
@@ -169,6 +174,7 @@ def _register_tools(mcp: FastMCP) -> None:
             allowed_scopes=allowed_scopes,
             mode=mode,
         )
+        items = await filter_available_tools(identity.tenant_id, items)
         return {
             "query": query,
             "limit": limit,
@@ -193,6 +199,7 @@ def _register_tools(mcp: FastMCP) -> None:
                 limit=limit,
                 allowed_scopes=allowed_scopes,
             )
+            items = await filter_available_tools(identity.tenant_id, items)
             return {
                 "tools": items,
                 "next_cursor": None,
@@ -211,6 +218,7 @@ def _register_tools(mcp: FastMCP) -> None:
         has_more = len(items) > page_size
         if has_more:
             items = items[:page_size]
+        items = await filter_available_tools(identity.tenant_id, items)
         return {
             "tools": items,
             "next_cursor": offset + page_size if has_more else None,
@@ -233,6 +241,10 @@ def _register_tools(mcp: FastMCP) -> None:
         identity = _resolve_identity(tenant_id)
         try:
             await assert_tenant_active(identity.tenant_id)
+            # Read-only tenants block invocation while staying discoverable; this
+            # raises TenantReadOnlyError (a TenantInactiveError) which the same
+            # audit + re-raise path renders to the caller.
+            await assert_tenant_writable(identity.tenant_id)
         except TenantInactiveError as exc:
             _audit(
                 identity,
