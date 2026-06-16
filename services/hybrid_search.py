@@ -27,9 +27,7 @@ _warned_fallback_reasons: set[str] = set()
 # per-task (per-request) and is visible to the caller once `search_tools` returns,
 # so the /rpc layer can record it in audit telemetry. Values are a closed set:
 # "native_rankfusion", "app_side_rrf", "vector", "text", "lexical_fallback".
-_fusion_path: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "hybrid_fusion_path", default=""
-)
+_fusion_path: contextvars.ContextVar[str] = contextvars.ContextVar("hybrid_fusion_path", default="")
 
 
 def get_last_fusion_path() -> str:
@@ -40,6 +38,7 @@ def get_last_fusion_path() -> str:
     own ContextVar value.
     """
     return _fusion_path.get()
+
 
 # The three retrieval strategies this service can run over the SAME collection
 # and the SAME two indexes. The whole point of the gateway is that switching

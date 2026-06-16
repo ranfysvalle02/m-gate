@@ -161,15 +161,15 @@ async def test_readme_hybrid_corrects_lexical_noise(live_search):
     assert order_tools & set(hybrid), f"hybrid dropped all order tools: {hybrid}"
     first_weather_rank = next((i for i, n in enumerate(hybrid) if n in weather_tools), len(hybrid))
     last_order_rank = max((i for i, n in enumerate(hybrid) if n in order_tools), default=-1)
-    assert last_order_rank < first_weather_rank, (
-        f"a weather tool outranked an order tool under hybrid: {hybrid}"
-    )
+    assert (
+        last_order_rank < first_weather_rank
+    ), f"a weather tool outranked an order tool under hybrid: {hybrid}"
 
     # Sanity: the text/hybrid arms genuinely disagree on this query (otherwise the
     # README's "watch the arms disagree" demo — and this test — would be vacuous).
-    assert text[:3] != hybrid[:3], (
-        f"text and hybrid agreed on top-3 ({hybrid}); the lexical-noise demo is moot"
-    )
+    assert (
+        text[:3] != hybrid[:3]
+    ), f"text and hybrid agreed on top-3 ({hybrid}); the lexical-noise demo is moot"
 
 
 async def test_all_three_modes_return_comparable_shape(live_search):

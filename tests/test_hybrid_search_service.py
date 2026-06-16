@@ -146,8 +146,9 @@ class _RecordingHandler(logging.Handler):
 
 @pytest.mark.asyncio
 async def test_rankfusion_fallback_logs_once_then_debug(patch_mongo, fake_embeddings):
-    import services.hybrid_search as hs
     from fakes import lexical_overlap_handler
+
+    import services.hybrid_search as hs
 
     catalog = patch_mongo["tool_catalog"]
     catalog.docs.extend(CATALOG)

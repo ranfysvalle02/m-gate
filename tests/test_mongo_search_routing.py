@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from fakes import FakeMongoClient
+
 import database.mongo as mongo
 from config.settings import Settings
-from fakes import FakeMongoClient
 
 
 def test_search_routing_uses_normal_client_when_qe_disabled(monkeypatch):
