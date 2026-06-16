@@ -463,23 +463,40 @@ def test_apply_posix_rlimits_cpu_clears_wall_plus_boot_grace(monkeypatch):
     # Match serve mode: NOFILE raised to 256 (64 was too tight for cold boot) and
     # SIGXFSZ ignored so an over-limit write fails the job, not the worker.
     assert calls["rlimits"][fake_resource.RLIMIT_NOFILE] == (256, 256)
-    assert fake_resource.RLIMIT_FSIZE in calls["rlimits"]
+    # FSIZE carries serve mode's 16MiB floor so a legitimate near-cap guest result
+    # is bounded gracefully by _bounded_frame rather than killed by EFBIG.
+    expected_fsize = max(worker.frame_budget_bytes(128 * 1024), 16 * 1024 * 1024, 64 * 1024)
+    assert calls["rlimits"][fake_resource.RLIMIT_FSIZE] == (expected_fsize, expected_fsize)
     assert ("xfsz", "ign") in calls["signals"]
     # Never cap address space: wasmtime's large reservation would be killed on CI.
     assert fake_resource.RLIMIT_AS not in calls["rlimits"]
 
 
-def test_main_one_shot_threads_module_cache_and_boot_grace(monkeypatch, tmp_path):
+def test_main_one_shot_loads_module_before_rlimits(monkeypatch, tmp_path):
     worker = _load_worker_module(monkeypatch)
+    order: list[str] = []
     captured: dict = {}
+    sentinel_engine = object()
+    sentinel_module = object()
+
+    monkeypatch.setattr(worker, "_build_engine", lambda: sentinel_engine)
+
+    def _fake_load_module(engine, wasm_file, cache):
+        order.append("load_module")
+        captured["module_cache"] = cache
+        return sentinel_module
 
     def _fake_apply(**kwargs):
+        order.append("apply_rlimits")
         captured["rlimit_kwargs"] = kwargs
 
-    def _fake_run_wasm(job_file, wasm_file, limits, *, module_cache=None, **_k):
-        captured["module_cache"] = module_cache
+    def _fake_run_wasm(job_file, wasm_file, limits, *, engine=None, module=None, **_k):
+        order.append("run_wasm")
+        captured["run_engine"] = engine
+        captured["run_module"] = module
         return {"ok": True, "result": {"v": 1}, "stdout": "", "stderr": ""}
 
+    monkeypatch.setattr(worker, "_load_module", _fake_load_module)
     monkeypatch.setattr(worker, "_apply_posix_rlimits", _fake_apply)
     monkeypatch.setattr(worker, "_run_wasm", _fake_run_wasm)
 
@@ -497,9 +514,17 @@ def test_main_one_shot_threads_module_cache_and_boot_grace(monkeypatch, tmp_path
     )
 
     assert worker.main() == 0
+    # The ~40MB compiled-module image (and the CPU-heavy cold compile) MUST be
+    # materialized before the per-job FSIZE/CPU caps, or wasmtime's mmap/memfd
+    # write trips EFBIG/SIGXFSZ and the worker dies before emitting any frame.
+    assert order == ["load_module", "apply_rlimits", "run_wasm"]
     # The compiled-module cache is reused for throwaway workers too (was serve-only),
     # so a one-shot worker deserializes instead of paying the full cold compile.
     assert captured["module_cache"] == "cache-dir"
+    # The prebuilt engine/module are handed to _run_wasm so it never recompiles
+    # under the caps.
+    assert captured["run_engine"] is sentinel_engine
+    assert captured["run_module"] is sentinel_module
     # boot_grace is threaded into the CPU backstop math so it can never be tighter
     # than the guest's epoch deadline.
     assert captured["rlimit_kwargs"]["boot_grace_ms"] == 10_000

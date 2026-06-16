@@ -466,8 +466,11 @@ def _apply_posix_rlimits(
     cpu_seconds = max(5, _COMPILE_CPU_ALLOWANCE_SECONDS + wall_budget_seconds + 5)
     # Clear the frame budget (the guest-written result.json exceeds the raw
     # output cap once JSON-framed) so a legitimate near-limit result is bounded
-    # gracefully by _bounded_frame instead of being killed by EFBIG.
-    fsize_cap = max(frame_budget_bytes(max_output_bytes), 64 * 1024)
+    # gracefully by _bounded_frame instead of being killed by EFBIG. The 16MiB
+    # floor matches serve mode: the worker's own compiled-module image is
+    # materialized before this cap is applied (see main), so the cap only needs
+    # to bound guest output, not wasmtime's code image.
+    fsize_cap = max(frame_budget_bytes(max_output_bytes), 16 * 1024 * 1024, 64 * 1024)
     # An over-FSIZE write must fail the job with EFBIG (handled in-band), not
     # SIGXFSZ-kill the worker; serve mode ignores this signal for the same reason.
     try:
@@ -891,6 +894,21 @@ def main() -> int:
 
     job = _read_json(job_file)
     limits = _normalize_limits(job.get("limits") or {})
+
+    # Materialize the module (cold compile + its ~40MB compiled-code image, or a
+    # deserialize of the cached artifact) BEFORE applying the per-job rlimits.
+    # wasmtime backs that code image with an mmap/memfd that RLIMIT_FSIZE bounds,
+    # and the cold compile is CPU-heavy -- doing it under the tiny per-job
+    # FSIZE/CPU caps is exactly what killed the throwaway worker (SIGXFSZ ->
+    # silent death, or SIGXCPU) before it could emit any frame. serve mode warms
+    # up the same way (pre-rlimit), so this brings the two paths to parity.
+    engine = _build_engine()
+    try:
+        module = _load_module(engine, wasm_file, args.module_cache)
+    except Exception as exc:  # noqa: BLE001 - emit a protocol-safe frame, never crash
+        _emit({"ok": False, "error": {"type": "execution_error", "message": str(exc)}})
+        return 1
+
     _apply_posix_rlimits(
         wall_timeout_ms=int(limits["wall_timeout_ms"]),
         memory_bytes=int(limits["memory_bytes"]),
@@ -899,7 +917,7 @@ def main() -> int:
     )
 
     started = time.perf_counter()
-    frame = _run_wasm(job_file, wasm_file, limits, module_cache=args.module_cache)
+    frame = _run_wasm(job_file, wasm_file, limits, engine=engine, module=module)
     frame["worker_elapsed_ms"] = int((time.perf_counter() - started) * 1000)
     _emit(frame)
     return 0 if frame.get("ok") else 1
