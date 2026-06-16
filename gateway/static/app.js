@@ -496,7 +496,7 @@ window.adminConsole = function adminConsole(config) {
       }
     },
 
-    async copyText(text, label = "Snippet") {
+    async copyText(text, label = "Snippet", ev = null) {
       const value = String(text || "").trim();
       if (!value) return;
       try {
@@ -515,9 +515,46 @@ window.adminConsole = function adminConsole(config) {
           document.body.removeChild(helper);
         }
         this.notify(`${label} copied to clipboard.`, "success");
+        this.flashCopied(ev);
       } catch (error) {
         this.setError(`Copy failed: ${error.message || error}`);
       }
+    },
+
+    // Inline affordance: briefly swap the clicked copy button to a "Copied ✓"
+    // state so the action feels tactile even if the toast is missed. No-op when
+    // invoked without an event (programmatic copies). Restores the original
+    // label after the timeout and guards against re-entrancy on rapid clicks.
+    flashCopied(ev) {
+      const btn = ev && ev.currentTarget;
+      if (!btn || btn.dataset.copying === "1") return;
+      const original = btn.innerHTML;
+      btn.dataset.copying = "1";
+      btn.classList.add("is-copied");
+      btn.innerHTML = "Copied ✓";
+      window.setTimeout(() => {
+        btn.innerHTML = original;
+        btn.classList.remove("is-copied");
+        delete btn.dataset.copying;
+      }, 1400);
+    },
+
+    // Dashboard "Connect Now": a ready-to-paste Cursor mcp.json with the live
+    // gateway endpoint baked in and a ${TOKEN} placeholder, so an operator can
+    // grab it before (or instead of) minting a token in the Users tab.
+    quickConnectMcp() {
+      return [
+        "{",
+        '  "mcpServers": {',
+        '    "mdb-mcp-gateway": {',
+        `      "url": "${this.mcpEndpoint()}",`,
+        '      "headers": {',
+        '        "Authorization": "Bearer ${TOKEN}"',
+        "      }",
+        "    }",
+        "  }",
+        "}",
+      ].join("\n");
     },
 
     initTheme() {

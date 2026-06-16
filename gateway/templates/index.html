@@ -7,6 +7,95 @@
   x-transition:enter-end="view-to"
 >
   <h1 class="text-2xl font-semibold">Dashboard</h1>
+
+  <!-- Connect Now: the fastest path from zero to a connected MCP client. -->
+  <section class="connect-now" aria-labelledby="connect-now-title">
+    <div class="connect-now-aura" aria-hidden="true"></div>
+    <div class="connect-now-head">
+      <div class="connect-now-copy">
+        <div class="connect-now-eyebrow">Get started</div>
+        <h2 class="connect-now-title" id="connect-now-title">
+          Connect a client in seconds
+        </h2>
+        <p class="connect-now-sub">
+          One click mints a tool-ready demo account, then hands you a bearer
+          token and a ready-to-paste Cursor <code>mcp.json</code>. No terminal
+          required.
+        </p>
+      </div>
+      <button
+        type="button"
+        class="btn-primary connect-now-cta"
+        @click="createDemoUser()"
+        :disabled="state.demoCreating"
+        title="Create a tool-invoking demo account and get a token + mcp.json"
+      >
+        <span
+          class="spinner"
+          x-show="state.demoCreating"
+          x-cloak
+          aria-hidden="true"
+        ></span>
+        <span
+          x-text="state.demoCreating ? 'Creating…' : '✨ Create demo user & connect'"
+        ></span>
+      </button>
+    </div>
+
+    <ol class="connect-steps">
+      <li class="connect-step">
+        <span class="connect-step-num">1</span>
+        <span><strong>Create</strong> a demo user &amp; token (button above)</span>
+      </li>
+      <li class="connect-step">
+        <span class="connect-step-num">2</span>
+        <span><strong>Paste</strong> the snippet into <code>~/.cursor/mcp.json</code></span>
+      </li>
+      <li class="connect-step">
+        <span class="connect-step-num">3</span>
+        <span><strong>Reload</strong> your client — the gateway's tools appear</span>
+      </li>
+    </ol>
+
+    <div class="connect-now-grid">
+      <div class="code-block">
+        <div class="code-head">
+          <span class="code-cap">~/.cursor/mcp.json</span>
+          <button
+            type="button"
+            class="code-copy"
+            @click="copyText(quickConnectMcp(), 'MCP config', $event)"
+          >
+            Copy
+          </button>
+        </div>
+        <pre x-text="quickConnectMcp()"></pre>
+      </div>
+      <div class="code-block">
+        <div class="code-head">
+          <span class="code-cap">MCP endpoint</span>
+          <button
+            type="button"
+            class="code-copy"
+            @click="copyText(mcpEndpoint(), 'MCP endpoint', $event)"
+          >
+            Copy
+          </button>
+        </div>
+        <pre x-text="mcpEndpoint()"></pre>
+      </div>
+    </div>
+
+    <p class="connect-now-foot">
+      Swap <code>${TOKEN}</code> for the bearer from the modal (or
+      <strong>Users → Generate token</strong>). Prefer curl or
+      username/password?
+      <button type="button" class="link-btn" @click="openHelp('mcp')">
+        See the full guide
+      </button>
+    </p>
+  </section>
+
   <button type="button" class="learn-cta" @click="openHelp('mcp')">
     <span class="learn-cta-icon" aria-hidden="true">📡</span>
     <span class="learn-cta-text">
@@ -2676,7 +2765,7 @@
           <button
             type="button"
             class="code-copy"
-            @click="copyText(rpcEndpoint(), 'RPC endpoint')"
+            @click="copyText(rpcEndpoint(), 'RPC endpoint', $event)"
           >
             Copy
           </button>
@@ -2698,7 +2787,7 @@
             <button
               type="button"
               class="code-copy"
-              @click="copyText(passwordTokenCommand(), 'token request')"
+              @click="copyText(passwordTokenCommand(), 'token request', $event)"
             >
               Copy
             </button>
@@ -2714,7 +2803,7 @@
           <button
             type="button"
             class="code-copy"
-            @click="copyText(rpcCurlSample(), 'curl sample')"
+            @click="copyText(rpcCurlSample(), 'curl sample', $event)"
           >
             Copy
           </button>
@@ -2729,7 +2818,7 @@
           <button
             type="button"
             class="code-copy"
-            @click="copyText(mcpClientSnippet(), 'MCP config')"
+            @click="copyText(mcpClientSnippet(), 'MCP config', $event)"
           >
             Copy
           </button>
@@ -2886,7 +2975,7 @@
                 <button
                   type="button"
                   class="code-copy"
-                  @click="copyText(state.userTokenNewPassword, 'password')"
+                  @click="copyText(state.userTokenNewPassword, 'password', $event)"
                 >
                   Copy
                 </button>
@@ -2911,7 +3000,7 @@
                 <button
                   type="button"
                   class="code-copy"
-                  @click="copyText(state.userTokenResult.token, 'token')"
+                  @click="copyText(state.userTokenResult.token, 'token', $event)"
                 >
                   Copy
                 </button>
@@ -2928,7 +3017,7 @@
             <button
               type="button"
               class="code-copy"
-              @click="copyText(userMcpSnippet(), 'MCP config')"
+              @click="copyText(userMcpSnippet(), 'MCP config', $event)"
             >
               Copy
             </button>
@@ -2943,7 +3032,7 @@
             <button
               type="button"
               class="code-copy"
-              @click="copyText(userCurlSample(), 'curl sample')"
+              @click="copyText(userCurlSample(), 'curl sample', $event)"
             >
               Copy
             </button>
