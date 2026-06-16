@@ -34,7 +34,9 @@ from services.embedding_config import (
 def _settings(**overrides) -> Settings:
     base = {"embedding_secret": "unit-test-embedding-secret"}
     base.update(overrides)
-    return Settings(**base)
+    # _env_file=None keeps these unit settings hermetic: a developer's local .env
+    # (e.g. VOYAGE_API_KEY) must never leak into env-default resolution here.
+    return Settings(_env_file=None, **base)
 
 
 def test_encrypt_decrypt_round_trip_and_marker():
@@ -78,6 +80,50 @@ def test_default_config_from_settings_openai_defers_dimensions():
     assert cfg.model == "text-embedding-3-small"
     # Cloud providers detect width at runtime, so the default is "unknown".
     assert cfg.dimensions == 0
+
+
+def test_voyage_api_key_alone_selects_and_authenticates_voyage():
+    # The Voyage drop-in: VOYAGE_API_KEY by itself promotes the default provider
+    # (ollama) to voyage and supplies the key, with no other config required.
+    cfg = default_config_from_settings(_settings(voyage_api_key="pa-secret"))
+    assert cfg.provider == "voyage"
+    assert cfg.model == "voyage-3"
+    assert cfg.api_key == "pa-secret"
+    assert cfg.dimensions == 0  # detected at runtime
+
+
+def test_explicit_provider_overrides_voyage_drop_in():
+    cfg = default_config_from_settings(
+        _settings(embedding_provider="openai", voyage_api_key="pa-secret")
+    )
+    assert cfg.provider == "openai"
+    # The Voyage key must never leak into a different provider's config.
+    assert cfg.api_key == ""
+
+
+def test_generic_embedding_api_key_wins_over_voyage_key():
+    cfg = default_config_from_settings(
+        _settings(
+            embedding_provider="voyage",
+            embedding_api_key="explicit-key",
+            voyage_api_key="pa-secret",
+        )
+    )
+    assert cfg.provider == "voyage"
+    assert cfg.api_key == "explicit-key"
+
+
+@pytest.mark.asyncio
+async def test_load_persisted_voyage_falls_back_to_env_key(patch_mongo):
+    # An admin can switch the platform default to Voyage in the UI without
+    # re-pasting the key when VOYAGE_API_KEY is already in the environment.
+    settings = _settings(voyage_api_key="pa-env-key")
+    cfg = EmbeddingConfig(provider="voyage", model="voyage-3", api_key="", dimensions=1024)
+    await save_persisted_config(cfg, settings)
+    loaded = await load_persisted_config(settings)
+    assert loaded.provider == "voyage"
+    assert loaded.api_key == "pa-env-key"
+    assert loaded.source == "db"
 
 
 @pytest.mark.parametrize(
@@ -134,7 +180,9 @@ async def test_resolve_dimensions_falls_back_when_detection_fails(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_load_returns_env_default_when_unset(patch_mongo):
-    cfg = await load_persisted_config()
+    # Pass hermetic settings so a developer's local .env (e.g. VOYAGE_API_KEY)
+    # cannot flip the asserted env default away from ollama.
+    cfg = await load_persisted_config(_settings())
     assert cfg.provider == "ollama"
     assert cfg.source == "env"
 

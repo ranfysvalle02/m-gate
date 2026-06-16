@@ -199,9 +199,9 @@ that drift out of sync the moment one write lands in one store but not the other
 Collapsing that to one query over one collection is the core architectural bet of
 this project.
 
-**Why not** force it everywhere: `$rankFusion` is a MongoDB 8.0+ preview feature.
-So the gateway degrades gracefully — if the fusion stage is unavailable it falls
-back to application-side RRF, and ultimately to the semantic arm, so search
+**Why not** force it everywhere: `$rankFusion` is a MongoDB 8.1+ stage (this repo
+runs 8.3). So the gateway degrades gracefully — if the fusion stage is unavailable
+it falls back to application-side RRF, and ultimately to the semantic arm, so search
 never hard-fails.
 
 ### Escaping relevance on purpose: always-included tools

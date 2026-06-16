@@ -66,6 +66,19 @@ Store the output in a file and set:
 QE is enabled. If key-vault access or `crypt_shared` resolution fails, readiness
 returns degraded (`503`).
 
+## Hybrid search (`$rankFusion`) under QE
+
+An auto-encryption client must run every command through `crypt_shared`'s query
+analysis, which cannot resolve the named sub-pipelines inside `$rankFusion` — even on
+`tool_catalog`, which holds **no** encrypted fields. To keep native server-side
+`$rankFusion` working with QE on, catalog search is routed through a scoped
+`bypass_auto_encryption` client (`database/mongo.py: get_tenant_database_for_search` /
+`get_qe_bypass_client`). That client skips outgoing-command analysis while still
+auto-decrypting responses, and is used for **reads/aggregations only** — never to write
+`routing_registry`. If anything still blocks the native stage, the gateway falls back to
+app-side reciprocal rank fusion (identical ranking). Full rationale, options matrix, and
+verification steps: [`QUERYABLE_ENCRYPTION_CAVEATS.md`](../QUERYABLE_ENCRYPTION_CAVEATS.md).
+
 ## Operational limitations
 
 - This integration uses unindexed encrypted fields for registry secrets; it does

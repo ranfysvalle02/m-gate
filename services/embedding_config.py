@@ -170,9 +170,7 @@ def default_model_for(provider: str, settings: Settings | None = None) -> str:
 
 def default_config_from_settings(settings: Settings | None = None) -> EmbeddingConfig:
     settings = settings or get_settings()
-    provider = settings.embedding_provider
-    if provider not in SUPPORTED_PROVIDERS:
-        provider = "ollama"
+    provider, api_key = _resolve_provider_and_key(settings)
     base_url = settings.embedding_base_url
     if provider == "ollama":
         base_url = base_url or settings.ollama_base_url
@@ -184,12 +182,34 @@ def default_config_from_settings(settings: Settings | None = None) -> EmbeddingC
         model=default_model_for(provider, settings),
         base_url=base_url,
         dimensions=dimensions,
-        api_key=settings.embedding_api_key or "",
+        api_key=api_key,
         azure_endpoint=settings.azure_openai_endpoint,
         azure_api_version=settings.azure_openai_api_version,
         azure_deployment=settings.azure_openai_deployment,
         source="env",
     )
+
+
+def _resolve_provider_and_key(settings: Settings) -> tuple[str, str]:
+    """Resolve the env-default ``(provider, api_key)`` with Voyage drop-in support.
+
+    Voyage AI is MongoDB's first-party retrieval stack, so a lone ``VOYAGE_API_KEY``
+    is treated as "use Voyage": it promotes the *default* provider (``ollama``) to
+    ``voyage`` and supplies the key when no generic ``EMBEDDING_API_KEY`` is set.
+    An explicit non-default ``EMBEDDING_PROVIDER`` and an explicit
+    ``EMBEDDING_API_KEY`` always take precedence.
+    """
+    provider = settings.embedding_provider
+    if provider not in SUPPORTED_PROVIDERS:
+        provider = "ollama"
+    api_key = settings.embedding_api_key or ""
+    voyage_key = (settings.voyage_api_key or "").strip()
+    if voyage_key:
+        if provider == "ollama":
+            provider = "voyage"
+        if provider == "voyage" and not api_key:
+            api_key = voyage_key
+    return provider, api_key
 
 
 def validate_config(config: EmbeddingConfig) -> None:
@@ -274,8 +294,12 @@ async def load_persisted_config(settings: Settings | None = None) -> EmbeddingCo
     api_key = decrypt_api_key(doc.get("api_key_encrypted"), settings)
     if not api_key:
         # Allow the API key to live purely in the environment even when the rest
-        # of the config is DB-managed.
+        # of the config is DB-managed. For a DB-selected Voyage provider, fall back
+        # to VOYAGE_API_KEY so an admin can switch to Voyage in the UI without
+        # re-pasting the key when it is already provided via the environment.
         api_key = settings.embedding_api_key or ""
+        if not api_key and str(doc.get("provider") or "") == "voyage":
+            api_key = (settings.voyage_api_key or "").strip()
     return _config_from_doc(doc, settings, source="db", api_key=api_key)
 
 
@@ -499,6 +523,10 @@ async def tenant_embedding_identity(
 
 class ActiveEmbeddingService:
     """Stable proxy that always delegates to the currently active provider."""
+
+    @property
+    def provider_name(self) -> str:
+        return getattr(_resolve_active_service(), "provider_name", "")
 
     @property
     def model_id(self) -> str:

@@ -8,11 +8,13 @@ pure pipeline-shape tests.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
-from pymongo.errors import OperationFailure
+from pymongo.errors import EncryptionError, OperationFailure
 
 from config.settings import Settings
-from services.hybrid_search import HybridSearchService
+from services.hybrid_search import HybridSearchService, get_last_fusion_path
 
 CATALOG = [
     {
@@ -100,6 +102,159 @@ async def test_rankfusion_operationfailure_falls_back_to_app_side(patch_mongo, f
 
     results = await service.search_tools(query="forecast", mode="hybrid", limit=5)
     assert any(r["name"] == "get_forecast" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_rankfusion_encryptionerror_falls_back_to_app_side(patch_mongo, fake_embeddings):
+    from fakes import lexical_overlap_handler
+
+    catalog = patch_mongo["tool_catalog"]
+    catalog.docs.extend(CATALOG)
+    lexical = lexical_overlap_handler(lambda: catalog.docs)
+
+    def handler(pipeline):
+        # Simulate Queryable Encryption blocking native $rankFusion analysis.
+        if any("$rankFusion" in stage for stage in pipeline):
+            raise EncryptionError(
+                Exception('[crypt_shared] "analyze_query" failed: No resolved namespace provided')
+            )
+        return lexical(pipeline)
+
+    catalog._aggregate_handler = handler
+    service = HybridSearchService(settings=Settings(), embedding_service=fake_embeddings)
+
+    # Hybrid must still return fused results via the app-side RRF safety net.
+    results = await service.search_tools(query="forecast", mode="hybrid", limit=5)
+    assert any(r["name"] == "get_forecast" for r in results)
+
+
+class _RecordingHandler(logging.Handler):
+    """Captures records straight off a logger, immune to global logging config.
+
+    The app configures logging via dictConfig (disable_existing_loggers / custom
+    handlers), which can defeat pytest's propagation-based ``caplog``. Attaching
+    directly to the module logger keeps these assertions deterministic.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@pytest.mark.asyncio
+async def test_rankfusion_fallback_logs_once_then_debug(patch_mongo, fake_embeddings):
+    import services.hybrid_search as hs
+    from fakes import lexical_overlap_handler
+
+    catalog = patch_mongo["tool_catalog"]
+    catalog.docs.extend(CATALOG)
+    lexical = lexical_overlap_handler(lambda: catalog.docs)
+
+    def handler(pipeline):
+        if any("$rankFusion" in stage for stage in pipeline):
+            raise OperationFailure("$rankFusion is not supported")
+        return lexical(pipeline)
+
+    catalog._aggregate_handler = handler
+    # The "warn once per reason" guard is process-global; clear it so this test sees
+    # the first-time WARNING regardless of test ordering.
+    hs._warned_fallback_reasons.clear()
+
+    cap = _RecordingHandler()
+    prev_level, prev_disabled = hs.logger.level, hs.logger.disabled
+    hs.logger.addHandler(cap)
+    hs.logger.setLevel(logging.DEBUG)
+    hs.logger.disabled = False
+    try:
+        service = HybridSearchService(settings=Settings(), embedding_service=fake_embeddings)
+        first = await service.search_tools(query="forecast", mode="hybrid", limit=5)
+        await service.search_tools(query="forecast", mode="hybrid", limit=5)
+    finally:
+        hs.logger.removeHandler(cap)
+        hs.logger.setLevel(prev_level)
+        hs.logger.disabled = prev_disabled
+
+    # Fallback still returns fused results...
+    assert any(r["name"] == "get_forecast" for r in first)
+    fallbacks = [r for r in cap.records if "app-side RRF" in r.getMessage()]
+    warnings = [r for r in fallbacks if r.levelno == logging.WARNING]
+    debugs = [r for r in fallbacks if r.levelno == logging.DEBUG]
+    # ...the first degradation WARNs (with the cause), the repeat is demoted to DEBUG.
+    assert len(warnings) == 1
+    assert "OperationFailure" in warnings[0].getMessage()
+    assert len(debugs) == 1
+
+
+@pytest.mark.asyncio
+async def test_fusion_path_native_for_hybrid(service):
+    await service.search_tools(query="order by id", mode="hybrid", limit=5)
+    assert get_last_fusion_path() == "native_rankfusion"
+
+
+@pytest.mark.asyncio
+async def test_fusion_path_text_and_vector(service):
+    await service.search_tools(query="forecast", mode="text", limit=5)
+    assert get_last_fusion_path() == "text"
+    await service.search_tools(query="forecast", mode="vector", limit=5)
+    assert get_last_fusion_path() == "vector"
+
+
+@pytest.mark.asyncio
+async def test_fusion_path_lexical_fallback_on_embedding_failure(patch_mongo):
+    from fakes import FakeEmbeddingService, lexical_overlap_handler
+
+    catalog = patch_mongo["tool_catalog"]
+    catalog.docs.extend(CATALOG)
+    catalog._aggregate_handler = lexical_overlap_handler(lambda: catalog.docs)
+    service = HybridSearchService(
+        settings=Settings(), embedding_service=FakeEmbeddingService(fail=True)
+    )
+
+    await service.search_tools(query="forecast", mode="hybrid", limit=5)
+    assert get_last_fusion_path() == "lexical_fallback"
+
+
+@pytest.mark.asyncio
+async def test_fusion_path_app_side_on_operationfailure(patch_mongo, fake_embeddings):
+    from fakes import lexical_overlap_handler
+
+    catalog = patch_mongo["tool_catalog"]
+    catalog.docs.extend(CATALOG)
+    lexical = lexical_overlap_handler(lambda: catalog.docs)
+
+    def handler(pipeline):
+        if any("$rankFusion" in stage for stage in pipeline):
+            raise OperationFailure("$rankFusion is not supported")
+        return lexical(pipeline)
+
+    catalog._aggregate_handler = handler
+    service = HybridSearchService(settings=Settings(), embedding_service=fake_embeddings)
+
+    await service.search_tools(query="forecast", mode="hybrid", limit=5)
+    assert get_last_fusion_path() == "app_side_rrf"
+
+
+@pytest.mark.asyncio
+async def test_fusion_path_app_side_on_encryptionerror(patch_mongo, fake_embeddings):
+    from fakes import lexical_overlap_handler
+
+    catalog = patch_mongo["tool_catalog"]
+    catalog.docs.extend(CATALOG)
+    lexical = lexical_overlap_handler(lambda: catalog.docs)
+
+    def handler(pipeline):
+        if any("$rankFusion" in stage for stage in pipeline):
+            raise EncryptionError(Exception("analyze_query failed"))
+        return lexical(pipeline)
+
+    catalog._aggregate_handler = handler
+    service = HybridSearchService(settings=Settings(), embedding_service=fake_embeddings)
+
+    await service.search_tools(query="forecast", mode="hybrid", limit=5)
+    assert get_last_fusion_path() == "app_side_rrf"
 
 
 @pytest.mark.asyncio

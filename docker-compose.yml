@@ -9,7 +9,10 @@ services:
     restart: "no"
 
   mongodb:
-    image: mongodb/mongodb-atlas-local:8.0
+    # 8.3 (>= 8.1) is required for the $rankFusion hybrid-search stage used by
+    # tools/search mode=hybrid. The QE crypt_shared lib in the Dockerfile must
+    # match (MONGODB_CRYPT_VERSION) so client-side query analysis recognizes it.
+    image: mongodb/mongodb-atlas-local:8.3
     container_name: mdb-gateway-mongodb
     ports:
       - "27017:27017"
@@ -84,7 +87,11 @@ services:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: nomic-embed-text
       OLLAMA_DIMENSIONS: 768
-      # For cloud providers, prefer HTTPS base URLs and mount EMBEDDING_API_KEY_FILE.
+      # Voyage AI drop-in (MongoDB's first-party embeddings): put VOYAGE_API_KEY in
+      # your local .env and the stack auto-selects + authenticates Voyage (model
+      # voyage-3, width auto-detected). Leave it empty to stay on offline Ollama.
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      # For other cloud providers, prefer HTTPS base URLs and mount EMBEDDING_API_KEY_FILE.
       # EMBEDDING_PROVIDER: openai
       # EMBEDDING_API_KEY_FILE: /gateway-secrets/embedding_api_key
       INCLUDE_SCORE_DETAILS: "true"
@@ -141,7 +148,12 @@ services:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: nomic-embed-text
       OLLAMA_DIMENSIONS: 768
-      # For cloud providers, prefer HTTPS base URLs and mount EMBEDDING_API_KEY_FILE.
+      # Voyage AI drop-in (MongoDB's first-party embeddings): put VOYAGE_API_KEY in
+      # your local .env and the gateway auto-selects + authenticates Voyage (model
+      # voyage-3, width auto-detected). Leave it empty to stay on offline Ollama.
+      # The admin panel (/ui -> Embeddings) can override provider/model/key at runtime.
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      # For other cloud providers, prefer HTTPS base URLs and mount EMBEDDING_API_KEY_FILE.
       # EMBEDDING_PROVIDER: openai
       # EMBEDDING_API_KEY_FILE: /gateway-secrets/embedding_api_key
       INCLUDE_SCORE_DETAILS: "true"

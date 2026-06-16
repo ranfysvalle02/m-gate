@@ -38,7 +38,9 @@ def _settings(**overrides) -> Settings:
         "embedding_cache_max_entries": 2,
     }
     base.update(overrides)
-    return Settings(**base)
+    # _env_file=None keeps these unit settings hermetic: a developer's local .env
+    # (e.g. VOYAGE_API_KEY) must never leak into provider construction here.
+    return Settings(_env_file=None, **base)
 
 
 @pytest.mark.asyncio

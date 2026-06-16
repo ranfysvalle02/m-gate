@@ -118,7 +118,7 @@ db.tool_catalog.aggregate([
 ])
 ```
 
-No second store. No client-side merge. No CDC job reconciling two indexes. The catalog, both indexes, and the fusion math live on one engine — so there is no window in which lexical and vector disagree about what exists, because they're reading the same documents. (`$rankFusion` fuses by *rank*; if you need score-based fusion with normalization, `$scoreFusion` is the sibling stage. Both are recent — MongoDB 8.0+ — the one thing to check against your cluster version.)
+No second store. No client-side merge. No CDC job reconciling two indexes. The catalog, both indexes, and the fusion math live on one engine — so there is no window in which lexical and vector disagree about what exists, because they're reading the same documents. (`$rankFusion` fuses by *rank*; if you need score-based fusion with normalization, `$scoreFusion` is the sibling stage. Both are recent — `$rankFusion` lands in MongoDB 8.1+ (this stack runs 8.3) — the one thing to check against your cluster version.)
 
 That single-query, single-collection property is the foundation everything below stands on. Watch how much it buys: the identity filter in the next section rides the *same* query; the audit trail in Section 6 is just more documents in the *same* database; freshness is a bulk upsert into the *same* collection. We didn't add hybrid search and then surround it with four systems. We added one stage, and everything else stayed in one place.
 

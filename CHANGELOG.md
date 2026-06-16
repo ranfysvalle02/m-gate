@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Feature: native server-side `$rankFusion` under Queryable Encryption
+- Hybrid search now runs **native server-side `$rankFusion`** even when Queryable
+  Encryption is enabled. Previously an auto-encryption client's `crypt_shared`
+  query analysis could not resolve the namespaces inside `$rankFusion`'s
+  sub-pipelines ("No resolved namespace provided"), forcing the app-side fallback.
+- Catalog search is now routed through a scoped **`bypass_auto_encryption`** client
+  (`database/mongo.py`: `get_qe_bypass_client` / `get_tenant_database_for_search`),
+  which skips client-side query analysis while preserving automatic decryption.
+  `tool_catalog` holds no encrypted fields, so the bypass is safe; the client is
+  scoped to reads/aggregations and is **never** used to write `routing_registry`.
+- The **app-side reciprocal-rank-fusion (RRF) fallback is retained** as a safety
+  net for clusters without native `$rankFusion` (8.1+) or any residual QE/version
+  drift, and now also catches `EncryptionError` (not just `OperationFailure`).
+- **Observability:** the previously silent fallback now logs a WARNING (deduped to
+  once per cause per process, DEBUG thereafter) so a degraded native path is
+  visible instead of indistinguishable from healthy.
+- **Version alignment:** the whole stack now standardizes on the latest 8.x —
+  `mongodb-atlas-local:8.3` (Compose + integration tier + CI) with a matching
+  `crypt_shared` 8.3.2 baked into the image. `$rankFusion` needs **8.1+**, so the
+  prior `8.0` pin silently exercised the fallback while claiming to test the native
+  stage; server and `crypt_shared` are kept on the same minor. Docs corrected from
+  the inaccurate "8.0+" to "8.1+".
+- **Observability:** `tools/search` and routed `tools/list` now record which
+  retrieval/fusion path served the request (`native_rankfusion` / `app_side_rrf` /
+  `vector` / `text` / `lexical_fallback`) in `audit_telemetry` metadata via a
+  concurrency-safe `ContextVar` (`get_last_fusion_path`), with no API contract
+  change.
+- New: `QUERYABLE_ENCRYPTION_CAVEATS.md` documents the QE × `$rankFusion`
+  interaction, the options matrix, and verification steps.
+
 ### Feature: always-included (pinned) tools
 - Tools flagged `metadata.always_included` are now pinned to the top of every
   routed result — `tools/search`, `tools/list?query=…`, and the `/mcp`

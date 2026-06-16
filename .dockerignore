@@ -3,6 +3,9 @@
 # artifacts, and never copy the local virtualenv or VCS metadata.
 .git
 .gitignore
+# Never bake local secrets (VOYAGE_API_KEY, etc.) into the image. Runtime config
+# is supplied via compose `environment:` / Render dashboard env vars instead.
+.env
 .venv
 venv
 vendor/.wasm-cache/

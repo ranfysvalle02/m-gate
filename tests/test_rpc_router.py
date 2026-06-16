@@ -620,6 +620,47 @@ async def test_tools_list_routed_when_query_present(rpc_module, patch_mongo, mon
 
 
 @pytest.mark.asyncio
+async def test_tools_search_records_fusion_path_in_telemetry(rpc_module, patch_mongo, monkeypatch):
+    from fakes import lexical_overlap_handler
+
+    catalog = patch_mongo["tool_catalog"]
+    catalog.docs.append(
+        {
+            "server": "weather",
+            "name": "get_forecast",
+            "description": "weather forecast",
+            "scopes": [],
+            "input_schema": {},
+            "embedding": [0.0],
+        }
+    )
+    catalog._aggregate_handler = lexical_overlap_handler(lambda: catalog.docs)
+
+    captured: list[dict] = []
+
+    class _CapturingTelemetry:
+        def log_background(self, **kwargs):
+            captured.append(kwargs)
+
+    monkeypatch.setattr(rpc_module, "get_telemetry_logger", lambda: _CapturingTelemetry())
+
+    resp = await _handle(
+        rpc_module,
+        "tools/search",
+        {"query": "forecast", "mode": "hybrid", "limit": 3},
+        _FakeRequest(scopes=None),
+    )
+
+    # Response contract is unchanged (fusion_path is telemetry-only).
+    assert resp.error is None
+    assert set(resp.result.keys()) == {"mode", "items"}
+    assert resp.result["mode"] == "hybrid"
+    # The native path served it, and that fact landed in audit telemetry.
+    assert captured, "no telemetry event recorded"
+    assert captured[-1]["metadata"]["fusion_path"] == "native_rankfusion"
+
+
+@pytest.mark.asyncio
 async def test_tools_search_passes_mode_through(rpc_module, monkeypatch):
     captured = {}
 

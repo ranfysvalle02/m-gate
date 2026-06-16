@@ -20,7 +20,7 @@ from services.authorization import AuthorizationService, get_authorization_servi
 from services.cache_manager import SemanticCacheManager
 from services.credential_broker import CallerIdentity
 from services.data_plane import record_billable_call
-from services.hybrid_search import HybridSearchService
+from services.hybrid_search import HybridSearchService, get_last_fusion_path
 from services.metrics import (
     observe_cache_event,
     observe_downstream_error,
@@ -662,6 +662,9 @@ async def _handle_tools_list(context: RpcContext) -> JsonRpcResponse:
             "returned": len(items),
             "next_cursor": next_cursor,
             "catalog_version": catalog_version,
+            # Only the routed (query) branch runs ranked search; the full-list page
+            # does no fusion, so report None there rather than a stale value.
+            "fusion_path": get_last_fusion_path() if query else None,
         },
     )
     return JsonRpcResponse(
@@ -698,6 +701,9 @@ async def _handle_tools_search(context: RpcContext) -> JsonRpcResponse:
             "limit": search_params.limit,
             "scopes": scopes,
             "mode": search_params.mode,
+            # Which retrieval/fusion path actually served this query (native
+            # $rankFusion vs app-side RRF vs single-arm). Observability only.
+            "fusion_path": get_last_fusion_path(),
         },
     )
     return JsonRpcResponse(id=request.id, result={"mode": search_params.mode, "items": items})

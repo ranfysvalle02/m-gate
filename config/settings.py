@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     embedding_base_url: str | None = None
     embedding_api_key: str = ""
     embedding_api_key_file: str | None = None
+    # Voyage AI is MongoDB's first-party embedding/rerank stack, so it gets a
+    # dedicated, drop-in env var: setting VOYAGE_API_KEY alone is enough to both
+    # select AND authenticate Voyage. It promotes the *default* provider (ollama)
+    # to voyage and supplies the key when no generic EMBEDDING_API_KEY is set. An
+    # explicit EMBEDDING_PROVIDER / EMBEDDING_API_KEY always wins, and the admin
+    # panel can still override everything at runtime.
+    voyage_api_key: str = ""
+    voyage_api_key_file: str | None = None
     azure_openai_endpoint: str | None = None
     azure_openai_api_version: str = "2023-05-15"
     azure_openai_deployment: str | None = None
@@ -309,6 +317,7 @@ class Settings(BaseSettings):
             ("admin_password_file", "admin_password"),
             ("admin_session_secret_file", "admin_session_secret"),
             ("embedding_api_key_file", "embedding_api_key"),
+            ("voyage_api_key_file", "voyage_api_key"),
             ("embedding_secret_file", "embedding_secret"),
             ("downstream_jwt_private_key_file", "downstream_jwt_private_key"),
             ("qe_local_master_key_file", "qe_local_master_key"),

@@ -2,7 +2,11 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ARG MONGODB_CRYPT_VERSION=8.0.1
+# >= 8.1 so QE client-side query analysis (crypt_shared) recognizes the
+# $rankFusion hybrid-search stage; keep aligned with the mongod image minor
+# (docker-compose.yml mongodb-atlas-local:8.3). crypt_shared is published per
+# server patch on the Enterprise downloads CDN.
+ARG MONGODB_CRYPT_VERSION=8.3.2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

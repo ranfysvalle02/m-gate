@@ -55,6 +55,31 @@ async def test_hybrid_emits_scoredetails_receipts(live_search, settings):
     assert "scoreDetails" in top
 
 
+async def test_hybrid_scoredetails_is_native_server_shape(live_search, settings):
+    """Pin that hybrid runs NATIVE $rankFusion, not the app-side RRF fallback.
+
+    The engine emits scoreDetails as an OBJECT ({value, description, details:[…]})
+    that the app-side reconstruction cannot fake — it returns a LIST of per-pipeline
+    entries instead. Asserting the object shape (and the engine's RRF description)
+    guards against the native path silently regressing to the fallback, which would
+    otherwise be invisible because both produce correct rankings. Requires the 8.1+
+    engine the integration tier now pins.
+    """
+    if not settings.include_score_details:
+        pytest.skip("INCLUDE_SCORE_DETAILS is off in this environment")
+    results = await live_search.search_tools(query="order status", mode=SEARCH_MODE_HYBRID)
+    assert results
+    score_details = results[0].get("scoreDetails")
+    assert isinstance(score_details, dict), (
+        "expected native server-side $rankFusion scoreDetails (object); got "
+        f"{type(score_details).__name__} — the app-side RRF fallback likely served this"
+    )
+    assert "details" in score_details
+    assert "reciprocal rank fusion" in score_details.get("description", "").lower()
+    pipelines = {entry.get("inputPipelineName") for entry in score_details["details"]}
+    assert {"vectorPipeline", "fullTextPipeline"} <= pipelines
+
+
 async def test_vector_mode_finds_semantically_related_tool(live_search):
     """$vectorSearch should match on meaning, not exact tokens.
 

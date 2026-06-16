@@ -190,8 +190,8 @@ limiting.
 
 - **Must be Atlas-capable**: the registry watcher uses **change streams** (replica set
   required) and routing uses **Atlas Search + Vector Search**. A standalone `mongod`
-  will not work. Use an Atlas cluster or Atlas Local; `$rankFusion` needs MongoDB 8.0+
-  (the gateway falls back to application-side RRF otherwise).
+  will not work. Use an Atlas cluster or Atlas Local; `$rankFusion` needs MongoDB 8.1+
+  (this repo standardizes on 8.3; the gateway falls back to application-side RRF otherwise).
 - **Harden the connection**: TLS (`ATLAS_TLS=true`), SCRAM or X.509 auth, and a least-
   privilege database user. See [`deploy/README.md`](deploy/README.md).
 - **Lock the network**: use Atlas PrivateLink/peering and a strict network access list so

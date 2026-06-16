@@ -1,15 +1,45 @@
 from __future__ import annotations
 
+import contextvars
+import logging
 from collections import defaultdict
 from typing import Any
 
-from pymongo.errors import OperationFailure
+from pymongo.errors import EncryptionError, OperationFailure
 
 from config.settings import Settings, get_settings
 from database.indexes import TEXT_INDEX_NAME, VECTOR_INDEX_NAME
-from database.mongo import get_tenant_database
+from database.mongo import get_tenant_database, get_tenant_database_for_search
 from services.embedding_config import get_embedding_service_for
 from services.embeddings import EmbeddingService, EmbeddingUnavailableError
+
+logger = logging.getLogger(__name__)
+
+# Native $rankFusion falling back to app-side RRF is a degradation worth surfacing,
+# but in a misconfigured deployment it would fire on *every* request. Warn once per
+# distinct reason (per process) and DEBUG thereafter, so the signal survives without
+# flooding the logs.
+_warned_fallback_reasons: set[str] = set()
+
+# Which retrieval/fusion path actually served the most recent search *in this
+# request's context*. HybridSearchService is a process-wide singleton, so an
+# instance attribute would be clobbered under concurrency; a ContextVar is
+# per-task (per-request) and is visible to the caller once `search_tools` returns,
+# so the /rpc layer can record it in audit telemetry. Values are a closed set:
+# "native_rankfusion", "app_side_rrf", "vector", "text", "lexical_fallback".
+_fusion_path: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "hybrid_fusion_path", default=""
+)
+
+
+def get_last_fusion_path() -> str:
+    """Return the fusion path taken by the most recent search in this context.
+
+    Empty string if no ranked search has run in the current request context (e.g.
+    a non-routed ``tools/list`` page). Concurrency-safe: each request task has its
+    own ContextVar value.
+    """
+    return _fusion_path.get()
 
 # The three retrieval strategies this service can run over the SAME collection
 # and the SAME two indexes. The whole point of the gateway is that switching
@@ -279,6 +309,7 @@ class HybridSearchService:
         """
         if mode == SEARCH_MODE_TEXT:
             # Lexical-only needs no embedding -- skip the hot-path embed call.
+            _fusion_path.set("text")
             pipeline = build_text_pipeline(
                 query=query,
                 output_limit=effective_limit,
@@ -295,6 +326,7 @@ class HybridSearchService:
             query_vector = await embedding_service.embed_text(query)
         except EmbeddingUnavailableError:
             # Resiliency fallback: keep routing alive with lexical-only retrieval.
+            _fusion_path.set("lexical_fallback")
             pipeline = build_text_pipeline(
                 query=query,
                 output_limit=effective_limit,
@@ -305,6 +337,7 @@ class HybridSearchService:
             return await cursor.to_list(length=effective_limit)
 
         if mode == SEARCH_MODE_VECTOR:
+            _fusion_path.set("vector")
             pipeline = build_vector_pipeline(
                 query_vector=query_vector,
                 num_candidates=self.settings.hybrid_num_candidates,
@@ -316,6 +349,7 @@ class HybridSearchService:
             return await cursor.to_list(length=effective_limit)
 
         if self.settings.fusion_strategy == "app_side":
+            _fusion_path.set("app_side_rrf")
             return await self._search_hybrid_app_side(
                 collection=collection,
                 query=query,
@@ -339,11 +373,34 @@ class HybridSearchService:
             allowed_scopes=allowed_scopes,
             server=server,
         )
+        # Native server-side $rankFusion (the differentiator). Under QE this MUST run
+        # through the bypass-auto-encryption client: the shared client's crypt_shared
+        # query analysis can't resolve $rankFusion's sub-pipeline namespaces. tool_catalog
+        # has no encrypted fields, so the bypass is safe and decryption still works.
+        # See QUERYABLE_ENCRYPTION_CAVEATS.md.
+        search_collection = get_tenant_database_for_search(resolved_tenant_id)["tool_catalog"]
         try:
-            cursor = await collection.aggregate(pipeline)
-            return await cursor.to_list(length=effective_limit)
-        except OperationFailure:
+            cursor = await search_collection.aggregate(pipeline)
+            results = await cursor.to_list(length=effective_limit)
+            _fusion_path.set("native_rankfusion")
+            return results
+        except (OperationFailure, EncryptionError) as exc:
             # GA-safe fallback: run both retrievers and fuse with app-side RRF.
+            # OperationFailure covers servers without native $rankFusion; EncryptionError
+            # covers the residual QE case (e.g. a non-bypass client, or the known
+            # empty-sub-pipeline analysis bug). The single-stage $vectorSearch/$search
+            # arms used by the app-side path analyze fine under QE, so hybrid still works.
+            _fusion_path.set("app_side_rrf")
+            reason = exc.__class__.__name__
+            log = logger.warning if reason not in _warned_fallback_reasons else logger.debug
+            _warned_fallback_reasons.add(reason)
+            log(
+                "Native $rankFusion unavailable (%s); using app-side RRF fallback "
+                "[tenant=%s mode=%s]. See QUERYABLE_ENCRYPTION_CAVEATS.md.",
+                reason,
+                resolved_tenant_id,
+                mode,
+            )
             return await self._search_hybrid_app_side(
                 collection=collection,
                 query=query,

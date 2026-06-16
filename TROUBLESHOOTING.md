@@ -35,27 +35,47 @@ guesses. Each section includes:
 - `Downstream Errors by Type`
 - Prometheus alert: `GatewayTargetDown`
 
-## 2) `$rankFusion` unavailable, hybrid search quality drops
+## 2) Hybrid search silently using the app-side fallback instead of native `$rankFusion`
 
 **Symptom**
 
-- Hybrid retrieval appears degraded or behaves like lexical/vector fallback.
-- You may see backend `OperationFailure` related to aggregation features.
+- Hybrid retrieval still returns ranked results, but you want to confirm it ran the
+  native server-side stage (the differentiator) rather than the app-side fallback.
+- A `WARNING` in the logs: `Native $rankFusion unavailable (...); using app-side RRF
+  fallback`.
 
 **Why it happens**
 
-- `$rankFusion` is not available in some deployments/configurations.
-- `services/hybrid_search.py` catches `OperationFailure` and intentionally
-  falls back to app-side RRF (`_search_hybrid_app_side`) to keep routing alive.
+- `$rankFusion` needs **MongoDB 8.1+** (this repo standardizes on 8.3). Older
+  servers raise `OperationFailure` (`Unrecognized pipeline stage name`).
+- Under Queryable Encryption, an auto-encryption client's `crypt_shared` query
+  analysis cannot resolve `$rankFusion`'s sub-pipeline namespaces (`EncryptionError`).
+  The gateway routes catalog search through a scoped `bypass_auto_encryption` client
+  (`database/mongo.py: get_tenant_database_for_search`) so the native stage runs even
+  with QE on. See [`QUERYABLE_ENCRYPTION_CAVEATS.md`](QUERYABLE_ENCRYPTION_CAVEATS.md).
+- `services/hybrid_search.py` catches **both** `OperationFailure` and
+  `EncryptionError` and falls back to app-side RRF (`_search_hybrid_app_side`) so
+  routing never hard-fails; the fallback warns once per cause (then DEBUG).
+
+**How to confirm which path served a query**
+
+- Telemetry: every `tools/search` and routed `tools/list` writes
+  `metadata.fusion_path` to `audit_telemetry` — `native_rankfusion`, `app_side_rrf`,
+  `vector`, `text`, or `lexical_fallback`.
+- Live: the native path returns `scoreDetails` as an **object** (`{value, description,
+  details:[…]}`); the app-side fallback returns a **list**.
 
 **How to fix**
 
-- Keep fallback enabled (default behavior is resilient).
-- Upgrade/align MongoDB/Atlas feature set if you require server-side rank fusion.
+- Keep fallback enabled (default behavior is resilient — identical ranking).
+- Ensure server + `crypt_shared` are both 8.1+ and on the same minor (image
+  `mongodb-atlas-local:8.3` + `MONGODB_CRYPT_VERSION=8.3.2`); after a version change,
+  start from a clean data volume so FCV permits the stage.
 - Verify text and vector indexes are queryable.
 
 **What to watch**
 
+- `audit_telemetry` rows where `metadata.fusion_path == "app_side_rrf"`
 - `Latency p95 by Path` and `Latency Quantiles`
 - `HTTP Request Rate by Path` for `/rpc`
 - `Downstream Errors by Type`

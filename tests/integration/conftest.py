@@ -51,8 +51,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # Pinned Atlas Local image. A fixed minor tag keeps the engine deterministic;
-# bump deliberately, never float on :latest/:preview.
-ATLAS_LOCAL_IMAGE = os.environ.get("INTEGRATION_ATLAS_IMAGE", "mongodb/mongodb-atlas-local:8.0")
+# bump deliberately, never float on :latest/:preview. Must match the runtime
+# (docker-compose.yml + the Dockerfile's crypt_shared 8.3.2): native $rankFusion
+# is 8.1+, so 8.0 silently exercised the app-side fallback instead of the real
+# server-side stage these tests claim to cover.
+ATLAS_LOCAL_IMAGE = os.environ.get("INTEGRATION_ATLAS_IMAGE", "mongodb/mongodb-atlas-local:8.3")
 # A unique DB per run so the suite is fully self-contained and never collides
 # with application data on a shared cluster.
 INTEGRATION_DB_NAME = f"itest_{uuid.uuid4().hex[:10]}"

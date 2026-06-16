@@ -9,6 +9,14 @@ if str(ROOT) not in sys.path:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# Make the entire unit suite hermetic: never read a developer's local .env. A real
+# .env (e.g. with VOYAGE_API_KEY) must not change env-default resolution under test.
+# Done before importing any app module so the cached Settings singleton is clean.
+from config.settings import Settings, get_settings  # noqa: E402
+
+Settings.model_config["env_file"] = None
+get_settings.cache_clear()
+
 from fakes import (  # noqa: E402
     FakeDatabase,
     FakeEmbeddingService,

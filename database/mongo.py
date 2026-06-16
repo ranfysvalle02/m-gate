@@ -8,9 +8,12 @@ from datetime import UTC, datetime
 from pymongo import AsyncMongoClient
 
 from config.settings import Settings, get_settings
-from database.encryption import build_auto_encryption_opts
+from database.encryption import build_auto_encryption_opts, build_watcher_client
 
 _client: AsyncMongoClient | None = None
+# Long-lived companion client that bypasses QE auto-encryption *query analysis*
+# (created lazily, only when QE is enabled). See get_qe_bypass_client().
+_qe_bypass_client: AsyncMongoClient | None = None
 
 
 async def connect_to_mongo(settings: Settings | None = None) -> AsyncMongoClient:
@@ -38,7 +41,12 @@ async def connect_to_mongo(settings: Settings | None = None) -> AsyncMongoClient
 
 
 async def disconnect_from_mongo() -> None:
-    global _client
+    global _client, _qe_bypass_client
+    if _qe_bypass_client is not None:
+        close_result = _qe_bypass_client.close()
+        if inspect.isawaitable(close_result):
+            await close_result
+        _qe_bypass_client = None
     if _client is not None:
         close_result = _client.close()
         if inspect.isawaitable(close_result):
@@ -50,6 +58,28 @@ def get_client() -> AsyncMongoClient:
     if _client is None:
         raise RuntimeError("MongoDB client is not connected. Call connect_to_mongo() first.")
     return _client
+
+
+def get_qe_bypass_client() -> AsyncMongoClient:
+    """Long-lived client that bypasses QE auto-encryption *query analysis*.
+
+    Under Queryable Encryption the shared app client must run every command through
+    ``crypt_shared``'s allow-listed query analysis. That analysis rejects compound
+    Atlas Search stages like ``$rankFusion`` ("No resolved namespace provided")
+    even on collections that hold no encrypted fields. This client sets
+    ``bypass_auto_encryption=True`` so such reads/aggregations reach the server
+    unmodified, while automatic *decryption* of any returned encrypted fields still
+    happens (via embedded libmongocrypt; no crypt_shared/mongocryptd needed).
+
+    Scope: READS / AGGREGATIONS on non-encrypted collections only (e.g.
+    ``tool_catalog`` hybrid search). NEVER use it to WRITE ``routing_registry`` —
+    those fields must still be auto-encrypted by the shared client. Only call this
+    when ``qe_enabled`` is true (it builds QE auto-encryption options).
+    """
+    global _qe_bypass_client
+    if _qe_bypass_client is None:
+        _qe_bypass_client = build_watcher_client(get_settings())
+    return _qe_bypass_client
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -117,3 +147,16 @@ def tenant_id_from_db_name(db_name: str) -> str | None:
 
 def get_tenant_database(tenant_id: str):
     return get_database(tenant_db_name(tenant_id))
+
+
+def get_tenant_database_for_search(tenant_id: str):
+    """Tenant DB handle for Atlas Search / Vector Search / ``$rankFusion`` reads.
+
+    Under QE, the shared client's auto-encryption query analysis can't analyze
+    ``$rankFusion`` (see get_qe_bypass_client), so catalog search is routed through
+    the bypass client. Without QE the normal client is returned unchanged. Safe
+    because ``tool_catalog`` holds no encrypted fields.
+    """
+    if get_settings().qe_enabled:
+        return get_qe_bypass_client()[tenant_db_name(tenant_id)]
+    return get_tenant_database(tenant_id)

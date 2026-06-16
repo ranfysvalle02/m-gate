@@ -97,6 +97,11 @@ class BaseHttpEmbeddingService:
     ``model_id`` / ``dimensions``.
     """
 
+    # Stable provider identifier (matches SUPPORTED_PROVIDERS). Used for logs,
+    # bootstrap preflight, and admin status so the *active* provider is reported
+    # accurately regardless of the raw EMBEDDING_PROVIDER env field.
+    provider_name: str = ""
+
     def __init__(self, *, settings: Settings) -> None:
         self.settings = settings
         self._cache = TtlLruCache(
@@ -216,6 +221,8 @@ class OllamaEmbeddingService(BaseHttpEmbeddingService):
     direct callers get the configured defaults for free.
     """
 
+    provider_name = "ollama"
+
     def __init__(
         self,
         *,
@@ -251,6 +258,7 @@ class OllamaEmbeddingService(BaseHttpEmbeddingService):
 class OpenAIEmbeddingService(BaseHttpEmbeddingService):
     """OpenAI (and OpenAI-compatible) embeddings via ``POST /v1/embeddings``."""
 
+    provider_name = "openai"
     DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
     def __init__(
@@ -287,6 +295,8 @@ class OpenAIEmbeddingService(BaseHttpEmbeddingService):
 
 class AzureOpenAIEmbeddingService(BaseHttpEmbeddingService):
     """Azure OpenAI embeddings against a deployment endpoint."""
+
+    provider_name = "azure_openai"
 
     def __init__(
         self,
@@ -332,6 +342,7 @@ class AzureOpenAIEmbeddingService(BaseHttpEmbeddingService):
 class VoyageEmbeddingService(BaseHttpEmbeddingService):
     """Voyage AI embeddings via ``POST /v1/embeddings``."""
 
+    provider_name = "voyage"
     DEFAULT_BASE_URL = "https://api.voyageai.com/v1"
 
     def __init__(
@@ -369,6 +380,7 @@ class VoyageEmbeddingService(BaseHttpEmbeddingService):
 class GeminiEmbeddingService(BaseHttpEmbeddingService):
     """Google Gemini embeddings via the Generative Language ``batchEmbedContents`` API."""
 
+    provider_name = "gemini"
     DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
     def __init__(

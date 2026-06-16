@@ -53,7 +53,9 @@ jobs:
       - name: Fetch pinned python.wasm runtime
         run: python scripts/fetch_python_wasm.py
       - name: Pre-pull the pinned Atlas Local image
-        run: docker pull mongodb/mongodb-atlas-local:8.0
+        # Keep in lockstep with tests/integration/conftest.py ATLAS_LOCAL_IMAGE
+        # and docker-compose.yml; $rankFusion needs 8.1+.
+        run: docker pull mongodb/mongodb-atlas-local:8.3
       - name: Install and warm Ollama (embeddings provider)
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
