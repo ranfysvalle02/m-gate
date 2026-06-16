@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import io
 import json
+import math
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -419,3 +420,87 @@ def test_load_module_handles_cache_dir(monkeypatch, tmp_path):
     cache_file.write_bytes(b"garbage")
     module = worker._load_module(object(), wasm, str(cache))
     assert module is not None
+
+
+def test_apply_posix_rlimits_cpu_clears_wall_plus_boot_grace(monkeypatch):
+    worker = _load_worker_module(monkeypatch)
+    monkeypatch.setattr(worker.os, "name", "posix")
+    calls: dict = {"rlimits": {}, "signals": []}
+
+    fake_resource = SimpleNamespace(
+        RLIMIT_FSIZE=1,
+        RLIMIT_NOFILE=2,
+        RLIMIT_CPU=3,
+        RLIMIT_AS=4,
+        setrlimit=lambda which, pair: calls["rlimits"].__setitem__(which, pair),
+    )
+    fake_signal = SimpleNamespace(
+        SIGXFSZ="xfsz",
+        SIG_IGN="ign",
+        signal=lambda sig, handler: calls["signals"].append((sig, handler)),
+    )
+    monkeypatch.setitem(sys.modules, "resource", fake_resource)
+    monkeypatch.setitem(sys.modules, "signal", fake_signal)
+
+    wall_ms, boot_ms = 300, 10_000
+    worker._apply_posix_rlimits(
+        wall_timeout_ms=wall_ms,
+        memory_bytes=64 * 1024 * 1024,
+        max_output_bytes=128 * 1024,
+        boot_grace_ms=boot_ms,
+    )
+
+    cpu_soft, cpu_hard = calls["rlimits"][fake_resource.RLIMIT_CPU]
+    wall_budget = math.ceil((wall_ms + boot_ms) / 1000)
+    # The CPU backstop must outlast the guest's OWN epoch deadline (wall+boot_grace)
+    # so a CPU-bound guest is gracefully epoch-interrupted into a timeout frame,
+    # not hard SIGXCPU-killed first -- the regression these CI tests hit when
+    # boot_grace was added to the epoch timer but not to this budget.
+    assert cpu_soft >= wall_budget
+    # ...and clear the one-time cold-compile cost on top of that wall budget.
+    assert cpu_soft >= worker._COMPILE_CPU_ALLOWANCE_SECONDS + wall_budget
+    assert cpu_hard >= cpu_soft
+    # Match serve mode: NOFILE raised to 256 (64 was too tight for cold boot) and
+    # SIGXFSZ ignored so an over-limit write fails the job, not the worker.
+    assert calls["rlimits"][fake_resource.RLIMIT_NOFILE] == (256, 256)
+    assert fake_resource.RLIMIT_FSIZE in calls["rlimits"]
+    assert ("xfsz", "ign") in calls["signals"]
+    # Never cap address space: wasmtime's large reservation would be killed on CI.
+    assert fake_resource.RLIMIT_AS not in calls["rlimits"]
+
+
+def test_main_one_shot_threads_module_cache_and_boot_grace(monkeypatch, tmp_path):
+    worker = _load_worker_module(monkeypatch)
+    captured: dict = {}
+
+    def _fake_apply(**kwargs):
+        captured["rlimit_kwargs"] = kwargs
+
+    def _fake_run_wasm(job_file, wasm_file, limits, *, module_cache=None, **_k):
+        captured["module_cache"] = module_cache
+        return {"ok": True, "result": {"v": 1}, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(worker, "_apply_posix_rlimits", _fake_apply)
+    monkeypatch.setattr(worker, "_run_wasm", _fake_run_wasm)
+
+    job = tmp_path / "job.json"
+    job.write_text(
+        json.dumps({"limits": {"wall_timeout_ms": 300, "boot_grace_ms": 10_000}}),
+        encoding="utf-8",
+    )
+    wasm = tmp_path / "python.wasm"
+    wasm.write_bytes(b"wasm")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["sandbox_worker", "--job", str(job), "--wasm", str(wasm), "--module-cache", "cache-dir"],
+    )
+
+    assert worker.main() == 0
+    # The compiled-module cache is reused for throwaway workers too (was serve-only),
+    # so a one-shot worker deserializes instead of paying the full cold compile.
+    assert captured["module_cache"] == "cache-dir"
+    # boot_grace is threaded into the CPU backstop math so it can never be tighter
+    # than the guest's epoch deadline.
+    assert captured["rlimit_kwargs"]["boot_grace_ms"] == 10_000
+    assert captured["rlimit_kwargs"]["wall_timeout_ms"] == 300

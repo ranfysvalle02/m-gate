@@ -154,6 +154,11 @@ class WasmExecutor:
                         "--wasm",
                         self.settings.sandbox_python_wasm_path,
                     ]
+                    if self.settings.sandbox_module_cache_path:
+                        # Reuse the precompiled module cache (the warm pool already
+                        # does) so a throwaway worker deserializes python.wasm
+                        # instead of paying the full cold compile on every call.
+                        command += ["--module-cache", self.settings.sandbox_module_cache_path]
                     process = await asyncio.create_subprocess_exec(
                         *command,
                         stdout=asyncio.subprocess.PIPE,
@@ -201,11 +206,31 @@ class WasmExecutor:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         stderr = stderr_raw.decode("utf-8", errors="replace")
         if frame is None:
-            message = stderr.strip()
-            if process is not None:
-                message = message or f"worker exit code {process.returncode}"
-            raise SandboxError(f"Sandbox worker failed: {message}")
+            raise SandboxError(
+                "Sandbox worker exited before returning a result"
+                + self._worker_exit_detail(process, stderr)
+            )
         return self._result_from_frame(frame, limits=limits, elapsed_ms=elapsed_ms)
+
+    @staticmethod
+    def _worker_exit_detail(process: Any, stderr: str) -> str:
+        """Build a diagnosable suffix for an early worker exit.
+
+        Surfaces the worker's buffered stderr and, crucially, whether it was
+        killed by a signal (a negative ``returncode``) -- e.g. SIGXCPU (-24) or
+        SIGKILL (-9) -- which is what an opaque EOF would otherwise hide.
+        """
+        parts: list[str] = []
+        rc = getattr(process, "returncode", None)
+        if isinstance(rc, int):
+            if rc < 0:
+                parts.append(f"killed by signal {-rc}")
+            else:
+                parts.append(f"exit code {rc}")
+        detail = stderr.strip()
+        if detail:
+            parts.append(detail)
+        return f" ({'; '.join(parts)})." if parts else "."
 
     def _db_bridge_enabled(self) -> bool:
         return bool(self.settings.sandbox_db_bridge_enabled)
@@ -305,7 +330,7 @@ class WasmExecutor:
         timeout_ms: int,
         startup_grace_ms: int = 0,
         dispatch: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         # The deadline is a host-side backstop for a hung/dead worker, NOT the
         # guest compute limit (the worker self-enforces that via wasm epoch + fuel
         # + a CPU rlimit). It therefore adds a startup grace so a slow runtime cold
@@ -319,7 +344,11 @@ class WasmExecutor:
                 raise TimeoutError("Sandbox worker timed out before returning a result frame.")
             line = await asyncio.wait_for(reader.readline(), timeout=remaining)
             if not line:
-                raise SandboxError("Sandbox worker exited before returning a result.")
+                # The worker died/closed stdout before a result. Return None
+                # rather than raising here so the caller can drain the worker's
+                # buffered stderr + exit/signal into a diagnosable error (an EOF
+                # alone is opaque -- it hides SIGXCPU kills, import failures, etc).
+                return None
             try:
                 frame = json.loads(line.decode("utf-8", errors="replace"))
             except json.JSONDecodeError as exc:

@@ -436,20 +436,44 @@ def _apply_serve_rlimits(*, max_output_bytes: int) -> None:
         return
 
 
-def _apply_posix_rlimits(*, wall_timeout_ms: int, memory_bytes: int, max_output_bytes: int) -> None:
+# Cold compiling CPython-on-WASI (Cranelift, with fuel + epoch instrumentation)
+# is CPU-heavy and runs in this same process BEFORE the guest does any work, so
+# the process CPU backstop must clear it or a loaded CI host trips SIGXCPU mid
+# compile -- the worker dies before emitting any frame and the parent only sees
+# an opaque EOF. A throwaway worker compiles at most once, so a generous,
+# constant allowance here is safe; precise per-job compute stays bounded by wasm
+# fuel + the epoch wall-timer + the parent's wall-clock kill.
+_COMPILE_CPU_ALLOWANCE_SECONDS = 30
+
+
+def _apply_posix_rlimits(
+    *, wall_timeout_ms: int, memory_bytes: int, max_output_bytes: int, boot_grace_ms: int = 0
+) -> None:
     if os.name != "posix":
         return
     import resource
+    import signal
 
-    # RLIMIT_CPU is a coarse process-level backstop. Keep it intentionally
-    # looser than the per-call wall timeout so wasmtime/module bootstrap and
-    # JSON framing don't get SIGXCPU-killed before parent-side timeout/fuel
-    # enforcement can produce a protocol-safe frame.
-    cpu_seconds = max(5, math.ceil(wall_timeout_ms / 1000) + 5)
+    # RLIMIT_CPU is a coarse process-level backstop, NOT the guest compute limit.
+    # It must stay looser than the guest's own epoch wall deadline (which is
+    # wall_timeout + boot_grace, see _run_wasm) PLUS the one-time cold-compile
+    # allowance, so a slow compile or a CPU-bound guest is interrupted gracefully
+    # by the epoch timer (yielding a protocol-safe timeout frame) instead of
+    # being hard-killed by SIGXCPU first. Omitting boot_grace here was the bug:
+    # the epoch deadline could exceed RLIMIT_CPU, so a busy loop died as an
+    # opaque SandboxError instead of a clean SandboxTimeoutError.
+    wall_budget_seconds = math.ceil((max(0, wall_timeout_ms) + max(0, boot_grace_ms)) / 1000)
+    cpu_seconds = max(5, _COMPILE_CPU_ALLOWANCE_SECONDS + wall_budget_seconds + 5)
     # Clear the frame budget (the guest-written result.json exceeds the raw
     # output cap once JSON-framed) so a legitimate near-limit result is bounded
     # gracefully by _bounded_frame instead of being killed by EFBIG.
     fsize_cap = max(frame_budget_bytes(max_output_bytes), 64 * 1024)
+    # An over-FSIZE write must fail the job with EFBIG (handled in-band), not
+    # SIGXFSZ-kill the worker; serve mode ignores this signal for the same reason.
+    try:
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    except (OSError, ValueError):
+        pass
     try:
         resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 5))
         # Do NOT set RLIMIT_AS here: wasmtime reserves a large virtual address
@@ -457,7 +481,7 @@ def _apply_posix_rlimits(*, wall_timeout_ms: int, memory_bytes: int, max_output_
         # before any result frame is emitted (serve mode omits it for the same
         # reason). Per-job memory stays bounded by store.set_limits + fuel.
         resource.setrlimit(resource.RLIMIT_FSIZE, (fsize_cap, fsize_cap))
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
     except Exception:
         # Platform/container limits may reject one or more controls; keep
         # execution alive and rely on wasmtime + parent timeout for enforcement.
@@ -554,6 +578,7 @@ def _run_wasm(
     *,
     engine: Engine | None = None,
     module: Module | None = None,
+    module_cache: str | None = None,
 ) -> dict[str, Any]:
     job = _read_json(job_file)
     job_dir = job_file.parent
@@ -616,7 +641,11 @@ def _run_wasm(
     frame: dict[str, Any] | None = None
     try:
         if module is None:
-            module = Module.from_file(engine, str(wasm_file))
+            # Deserialize the cached compiled module when available so a throwaway
+            # worker skips the expensive cold Cranelift compile; _load_module
+            # falls back to a clean compile (and repopulates the cache) on any
+            # cache miss/corruption, so this can never wedge the worker.
+            module = _load_module(engine, wasm_file, module_cache)
         if bridge_enabled:
             rpc_dir.mkdir(parents=True, exist_ok=True)
         instance = linker.instantiate(store, module)
@@ -866,10 +895,11 @@ def main() -> int:
         wall_timeout_ms=int(limits["wall_timeout_ms"]),
         memory_bytes=int(limits["memory_bytes"]),
         max_output_bytes=int(limits["max_output_bytes"]),
+        boot_grace_ms=int(limits.get("boot_grace_ms", 0)),
     )
 
     started = time.perf_counter()
-    frame = _run_wasm(job_file, wasm_file, limits)
+    frame = _run_wasm(job_file, wasm_file, limits, module_cache=args.module_cache)
     frame["worker_elapsed_ms"] = int((time.perf_counter() - started) * 1000)
     _emit(frame)
     return 0 if frame.get("ok") else 1

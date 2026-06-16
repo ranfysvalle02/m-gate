@@ -154,6 +154,74 @@ async def test_run_success_parses_worker_frame(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_one_shot_command_includes_module_cache(monkeypatch):
+    captured: dict = {}
+
+    async def _spawn(*args, **_kwargs):
+        captured["args"] = list(args)
+        return _FakeProcess(
+            stdout=b'{"ok": true, "result": {"sum": 3}, "stdout": "", "stderr": ""}\n',
+            returncode=0,
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
+    settings = Settings(sandbox_module_cache_path="vendor/.wasm-cache")
+    executor = WasmExecutor(settings=settings, python_bin="python")
+    await executor.run(_request())
+
+    cmd = captured["args"]
+    # A throwaway worker now reuses the precompiled module cache (parity with the
+    # warm pool), so it deserializes python.wasm instead of cold-compiling it.
+    assert "--module-cache" in cmd
+    assert cmd[cmd.index("--module-cache") + 1] == "vendor/.wasm-cache"
+
+
+@pytest.mark.asyncio
+async def test_one_shot_command_omits_module_cache_when_unset(monkeypatch):
+    captured: dict = {}
+
+    async def _spawn(*args, **_kwargs):
+        captured["args"] = list(args)
+        return _FakeProcess(
+            stdout=b'{"ok": true, "result": {}, "stdout": "", "stderr": ""}\n',
+            returncode=0,
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
+    settings = Settings(sandbox_module_cache_path="")
+    executor = WasmExecutor(settings=settings, python_bin="python")
+    await executor.run(_request())
+
+    assert "--module-cache" not in captured["args"]
+
+
+@pytest.mark.asyncio
+async def test_early_exit_surfaces_stderr_and_signal(monkeypatch):
+    # A worker killed mid-cold-start (here: SIGXCPU -> returncode -24) closes its
+    # stdout before any frame. The error must name the signal AND carry the
+    # worker's stderr, not the opaque "exited before returning a result" alone.
+    process = _FakeProcess(
+        stdout=b"",
+        stderr=b"ModuleNotFoundError: No module named 'wasmtime'",
+        returncode=-24,
+    )
+
+    async def _spawn(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
+    settings = Settings(sandbox_worker_startup_grace_ms=0)
+    executor = WasmExecutor(settings=settings, python_bin="python")
+
+    with pytest.raises(SandboxError) as excinfo:
+        await executor.run(_request())
+    message = str(excinfo.value)
+    assert "exited before returning a result" in message
+    assert "killed by signal 24" in message
+    assert "wasmtime" in message
+
+
+@pytest.mark.asyncio
 async def test_run_times_out_and_kills_worker(monkeypatch):
     process = _FakeProcess(delay_seconds=1.0)
 
