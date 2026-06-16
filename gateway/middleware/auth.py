@@ -156,10 +156,8 @@ class AuthMiddleware:
         request = Request(scope, receive=receive)
         request.state.tenant_id = self.settings.default_tenant_id
         request.state.user_id = "anonymous"
-        request.state.roles = ["admin"] if self.settings.auth_mode == "disabled" else []
-        request.state.scopes = (
-            self._header_scopes(request) if self.settings.auth_mode == "disabled" else []
-        )
+        request.state.roles = []
+        request.state.scopes = []
         request.state.is_admin_principal = False
         request.state.admin_auth_via_cookie = False
         request.state.authenticated_via_basic = False
@@ -181,12 +179,8 @@ class AuthMiddleware:
 
         # Optional HTTP Basic on the MCP surface: let an MCP client present
         # username/password directly instead of exchanging it at /auth/token.
-        # Only meaningful when auth is actually enforced — in disabled mode the
-        # gateway already trusts every caller, so attempting (and possibly
-        # rejecting) Basic there would be contradictory.
         if (
-            self.settings.auth_mode != "disabled"
-            and not request.state.is_admin_principal
+            not request.state.is_admin_principal
             and self.settings.mcp_basic_auth_enabled
             and self._is_mcp_path(request.url.path)
         ):
@@ -210,11 +204,7 @@ class AuthMiddleware:
                 request.state.is_admin_principal = self._has_admin_role(roles)
                 request.state.authenticated_via_basic = True
 
-        if (
-            self.settings.auth_mode != "disabled"
-            and not request.state.is_admin_principal
-            and not request.state.authenticated_via_basic
-        ):
+        if not request.state.is_admin_principal and not request.state.authenticated_via_basic:
             path = request.url.path
             if (
                 self._is_observability_path(path)
@@ -249,10 +239,6 @@ class AuthMiddleware:
                 return await response(scope, receive, send)
 
         await self.app(scope, request.receive, send)
-
-    def _header_scopes(self, request: Request) -> list[str]:
-        raw = request.headers.get(self.settings.scopes_header, "")
-        return [scope.strip() for scope in raw.split(",") if scope.strip()]
 
     @staticmethod
     def _bearer_token(request: Request) -> str | None:
@@ -300,15 +286,20 @@ class AuthMiddleware:
         """Inbound auth endpoints must be reachable without an existing token."""
         return path in {"/auth/token", "/.well-known/oauth-protected-resource"}
 
-    def _session_roles(self, claims: dict[str, Any]) -> list[str]:
+    @staticmethod
+    def _session_roles(claims: dict[str, Any]) -> list[str]:
+        """Read roles straight from the verified session claim — fail-safe.
+
+        A session that carries no ``roles`` claim gets **no** privileges (not an
+        implicit admin). Every token minted by this gateway embeds explicit roles
+        (``resolve_login_principal`` always supplies them, including the env
+        bootstrap admin), so a missing/empty claim means "authenticated identity,
+        no authority" rather than silently escalating to platform-admin.
+        """
         raw = claims.get("roles")
         if isinstance(raw, list):
-            roles = [role for role in raw if isinstance(role, str)]
-            if roles:
-                return roles
-        # Legacy session tokens (and the env bootstrap admin) carry no roles claim;
-        # treat them as full platform admins so existing deployments keep working.
-        return [self.settings.platform_admin_role, "admin"]
+            return [role for role in raw if isinstance(role, str)]
+        return []
 
     def _has_admin_role(self, roles: list[str]) -> bool:
         role_set = set(roles)

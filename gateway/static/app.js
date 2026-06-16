@@ -128,6 +128,14 @@ window.adminConsole = function adminConsole(config) {
       tenantConnectTenant: "",
       tenantConnectEgress: null,
       tenantConnectSaving: false,
+      userTokenOpen: false,
+      userTokenUser: "",
+      userTokenResult: null,
+      userTokenGenerating: false,
+      // One-time password shown in the token modal right after a demo account is
+      // created (it is never retrievable again). Cleared when the modal closes.
+      userTokenNewPassword: "",
+      demoCreating: false,
       serverComposerOpen: false,
       serverComposerMode: "create",
       serverWorkspace: {
@@ -295,24 +303,95 @@ window.adminConsole = function adminConsole(config) {
       this.state.tenantConnectSaving = false;
     },
 
+    async generateUserToken(user, options = {}) {
+      this.clearError();
+      this.state.userTokenGenerating = true;
+      // Carry a one-time password only when the caller (createDemoUser) just
+      // minted the account; a plain "Generate token" never exposes a password.
+      this.state.userTokenNewPassword = options.password || "";
+      try {
+        const result = await this.apiRequest(
+          `/admin/users/${encodeURIComponent(user.id)}/token`,
+          { method: "POST", body: {} },
+        );
+        this.state.userTokenResult = result;
+        this.state.userTokenUser = user.email;
+        this.state.userTokenOpen = true;
+        this.notify(`Token generated for '${user.email}'.`);
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.userTokenGenerating = false;
+      }
+    },
+
+    async createDemoUser() {
+      this.clearError();
+      this.state.userNotice = "";
+      this.state.demoCreating = true;
+      try {
+        const result = await this.apiRequest("/admin/users/demo", {
+          method: "POST",
+          body: { tenant_id: this.state.tenantId },
+        });
+        await this.loadUsers();
+        this.notify(`Demo user '${result.user.email}' created.`);
+        // Immediately hand over a working credential: open the token modal with
+        // the freshly minted bearer plus the one-time password.
+        await this.generateUserToken(result.user, { password: result.password });
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.demoCreating = false;
+      }
+    },
+
+    closeUserToken() {
+      this.state.userTokenOpen = false;
+      this.state.userTokenResult = null;
+      this.state.userTokenUser = "";
+      this.state.userTokenNewPassword = "";
+    },
+
+    mcpEndpoint() {
+      // The mounted FastMCP sub-app requires the trailing slash.
+      return `${window.location.origin}/mcp/`;
+    },
+
+    userMcpSnippet() {
+      const result = this.state.userTokenResult;
+      if (!result) return "";
+      return [
+        "{",
+        '  \"mcpServers\": {',
+        '    \"mdb-mcp-gateway\": {',
+        `      \"url\": \"${this.mcpEndpoint()}\",`,
+        '      \"headers\": {',
+        `        \"Authorization\": \"Bearer ${result.token || ""}\"`,
+        "      }",
+        "    }",
+        "  }",
+        "}",
+      ].join("\n");
+    },
+
+    userCurlSample() {
+      const result = this.state.userTokenResult;
+      if (!result) return "";
+      return [
+        "curl -X POST " + this.rpcEndpoint() + " \\",
+        '  -H "Content-Type: application/json" \\',
+        `  -H "Authorization: Bearer ${result.token || ""}" \\`,
+        "  -d '{\"jsonrpc\":\"2.0\",\"id\":\"list-1\",\"method\":\"tools/list\",\"params\":{}}'",
+      ].join("\n");
+    },
+
     rpcEndpoint() {
       return `${window.location.origin}/rpc`;
     },
 
     authModeLabel() {
-      return this.state.whoami?.auth_mode || "disabled";
-    },
-
-    recommendedScopes() {
-      const scopes = (this.state.whoami?.scopes || []).filter(Boolean);
-      if (scopes.length > 0) return scopes.join(",");
-      return "weather,readonly,server:weather";
-    },
-
-    tokenMintCommand() {
-      const tenantId =
-        this.state.tenantConnectTenant || this.state.tenantId || "local-dev";
-      return `python -m scripts.mint_token --tenant-id ${tenantId} --groups weather readonly server:weather --roles tool:invoke`;
+      return this.state.whoami?.auth_mode || "hs256";
     },
 
     tokenEndpoint() {
@@ -334,19 +413,6 @@ window.adminConsole = function adminConsole(config) {
     rpcCurlSample() {
       const tenantId =
         this.state.tenantConnectTenant || this.state.tenantId || "local-dev";
-      if (this.authModeLabel() === "disabled") {
-        return [
-          "curl -X POST " + this.rpcEndpoint() + " \\",
-          '  -H "Content-Type: application/json" \\',
-          `  -H "X-MCP-Scopes: ${this.recommendedScopes()}" \\`,
-          "  -d '{",
-          '    \"jsonrpc\":\"2.0\",',
-          '    \"id\":\"list-1\",',
-          '    \"method\":\"tools/list\",',
-          '    "params":{}',
-          "  }'",
-        ].join("\n");
-      }
       return [
         "curl -X POST " + this.rpcEndpoint() + " \\",
         '  -H "Content-Type: application/json" \\',
@@ -374,9 +440,7 @@ window.adminConsole = function adminConsole(config) {
         '      \"transport\": \"streamable_http\",',
         `      \"url\": \"${this.rpcEndpoint()}\",`,
         '      \"headers\": {',
-        this.authModeLabel() === "disabled"
-          ? `        \"X-MCP-Scopes\": \"${this.recommendedScopes()}\"`
-          : '        \"Authorization\": \"Bearer ${TOKEN}\"',
+        '        \"Authorization\": \"Bearer ${TOKEN}\"',
         "      }",
         "    }",
         "  }",
@@ -658,6 +722,7 @@ window.adminConsole = function adminConsole(config) {
 
     roleOptions: [
       { value: "user", label: "User" },
+      { value: "demo", label: "Demo (can invoke tools)" },
       { value: "tenant-admin", label: "Tenant admin" },
       { value: "platform-admin", label: "Platform admin" },
     ],
@@ -665,13 +730,32 @@ window.adminConsole = function adminConsole(config) {
     rolesForSelection(selection) {
       if (selection === "platform-admin") return ["platform-admin", "admin"];
       if (selection === "tenant-admin") return ["admin"];
+      // A demo account can authenticate AND reach the /rpc + /mcp data plane
+      // (rbac requires 'admin' or 'tool:invoke'), without any admin console access.
+      if (selection === "demo") return ["user", "tool:invoke"];
       return ["user"];
+    },
+
+    async onUserRoleChange() {
+      // Picking "Demo" should produce a user that can actually call tools. Empty
+      // scopes silently fail discovery + invocation, so prefill the catalog-derived
+      // demo scopes (only when the operator hasn't typed their own).
+      if (this.forms.user.role !== "demo" || this.forms.user.scopes.trim()) return;
+      try {
+        const payload = await this.apiRequest(
+          `/admin/users/demo-scopes?tenant_id=${encodeURIComponent(this.state.tenantId)}`,
+        );
+        this.forms.user.scopes = (payload.scopes || []).join(", ");
+      } catch (error) {
+        this.setError(error);
+      }
     },
 
     roleLabel(roles) {
       const set = new Set(roles || []);
       if (set.has("platform-admin")) return "Platform admin";
       if (set.has("admin")) return "Tenant admin";
+      if (set.has("tool:invoke")) return "Demo (can invoke tools)";
       return (roles || []).join(", ") || "user";
     },
 

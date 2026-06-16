@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from config.settings import get_settings
-from database.mongo import get_control_database
+from database.mongo import get_control_database, get_tenant_database
 from services.admin_session import verify_credentials
 from services.passwords import hash_password, verify_password
 
@@ -17,6 +17,35 @@ logger = logging.getLogger(__name__)
 # tenant is resolved, and a platform-admin spans every tenant.
 USERS_COLLECTION = "users"
 SESSION_CONTEXT_COLLECTION = "session_context"
+
+# A demo account must be able to BOTH discover and invoke tools. The RBAC gate
+# (gateway/middleware/rbac.py) needs `tool:invoke`; the scope filter
+# (services/hybrid_search.py) and per-call authorization (services/authorization.py)
+# need a `server:*`/`server:<name>` scope plus a matching tool scope. So a demo
+# carries `tool:invoke` and catalog-derived scopes (see derive_demo_scopes).
+DEMO_USER_ROLES = ["user", "tool:invoke"]
+
+
+async def derive_demo_scopes(tenant_id: str) -> list[str]:
+    """Compute scopes that let a demo user see and call *everything* in a tenant.
+
+    `server:*` grants visibility/authorization across all servers (current and
+    future), and every distinct tool scope already present in the tenant's
+    ``tool_catalog`` is granted so scope-gated tools are actually invocable. This
+    is catalog-aware on purpose: a demo created in any tenant "just works" against
+    whatever tools that tenant has, with no hand-maintained scope list.
+    """
+    collection = get_tenant_database(tenant_id)["tool_catalog"]
+    docs = await collection.find({}, {"scopes": 1, "_id": 0}).to_list(length=10_000)
+    tool_scopes = sorted(
+        {
+            scope
+            for doc in docs
+            for scope in (doc.get("scopes") or [])
+            if isinstance(scope, str) and scope and not scope.startswith("server:")
+        }
+    )
+    return ["server:*", *tool_scopes]
 
 
 class UserError(ValueError):

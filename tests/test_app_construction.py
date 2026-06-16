@@ -80,8 +80,12 @@ async def test_mcp_server_lists_expected_tools(reset_settings):
     assert {"search_tools", "list_catalog_tools", "call_downstream_tool"} <= names
 
 
-def test_build_auth_verifier_returns_none_when_disabled(reset_settings):
+def test_build_auth_verifier_returns_none_for_hs256(reset_settings, monkeypatch):
+    from config.settings import get_settings
     from gateway.mcp_server import _build_auth_verifier
 
-    # Default auth_mode is "disabled" -> no verifier.
+    # The FastMCP verifier is only built for jwks; hs256 is verified by the
+    # gateway middleware, so no FastMCP verifier is constructed.
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    get_settings.cache_clear()
     assert _build_auth_verifier() is None

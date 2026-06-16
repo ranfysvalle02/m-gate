@@ -84,8 +84,10 @@ All references point at the code that implements the control.
 > For the full end-to-end picture (request pipeline, settings reference,
 > recipes), see [`AUTH.md`](AUTH.md).
 
-- **Three modes** via `AUTH_MODE` (`config/settings.py`): `disabled` (local dev only),
-  `hs256` (shared-secret JWT), `jwks` (asymmetric RS256 verified against a JWKS).
+- **Security is always enforced** — there is no "off" mode. Two modes via
+  `AUTH_MODE` (`config/settings.py`): `hs256` (shared-secret JWT, the default) and
+  `jwks` (asymmetric RS256 verified against a JWKS). Mint ready-to-use scoped
+  tokens for managed users straight from the admin console (Users → Generate token).
 - Bearer tokens are verified in `gateway/middleware/auth.py`. Issuer (`JWT_ISSUER`)
   and audience (`JWT_AUDIENCE`) are enforced when configured.
 - **JWKS resolver hardening**: key cache with TTL; an unknown `kid` triggers a single
@@ -333,10 +335,10 @@ per tenant, exactly which hosts/networks the gateway may reach:
 
 ### Fail-closed production safety
 
-When `ENVIRONMENT=production`, the gateway **refuses to start** unless
+Auth is always enforced (there is no open mode to disable). When
+`ENVIRONMENT=production`, the gateway additionally **refuses to start** unless
 (`config/settings.py::_validate_prod_safety`):
 
-- `AUTH_MODE` is not `disabled`.
 - `hs256`: `JWT_SECRET` is ≥16 chars and not a known weak value.
 - `jwks`: `JWT_ISSUER` and `JWT_AUDIENCE` are set, plus `JWKS_URI` or `JWKS_LOCAL_PATH`.
 - `CORS_ALLOW_ORIGINS` is **not** `*`.

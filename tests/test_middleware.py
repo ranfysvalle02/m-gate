@@ -339,18 +339,6 @@ def test_guardrails_extracts_query_and_string_arguments():
 
 
 @pytest.mark.asyncio
-async def test_rbac_skipped_when_auth_disabled(patch_mongo, reset_settings):
-    from gateway.middleware.rbac import RbacMiddleware
-
-    mw = RbacMiddleware(_ok_app)
-    scope = _scope()
-    scope["state"] = {"roles": ["admin"], "is_admin_principal": False}
-    sink = _Sink()
-    await mw(scope, sink.receive, sink.send)
-    assert sink.status == 200
-
-
-@pytest.mark.asyncio
 async def test_rbac_denies_without_invoke_role(patch_mongo, monkeypatch):
     from config.settings import get_settings
     from gateway.middleware.rbac import RbacMiddleware

@@ -39,7 +39,10 @@ jobs:
       OLLAMA_MODEL: nomic-embed-text
       OLLAMA_DIMENSIONS: "768"
       INCLUDE_SCORE_DETAILS: "true"
-      AUTH_MODE: disabled
+      # Security is always enforced; "disabled" no longer exists. Run the
+      # integration tier in the default hs256 mode with a CI-only secret.
+      AUTH_MODE: hs256
+      JWT_SECRET: ci-integration-jwt-secret
       FUSION_STRATEGY: rank_fusion
     steps:
       - uses: actions/checkout@v4

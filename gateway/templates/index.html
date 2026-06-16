@@ -546,7 +546,11 @@
     </div>
     <div>
       <label class="field-label">Role</label>
-      <select class="field-input" x-model="forms.user.role">
+      <select
+        class="field-input"
+        x-model="forms.user.role"
+        @change="onUserRoleChange()"
+      >
         <template x-for="opt in roleOptions" :key="opt.value">
           <option :value="opt.value" x-text="opt.label"></option>
         </template>
@@ -567,8 +571,17 @@
         <option value="disabled">disabled</option>
       </select>
     </div>
-    <div class="flex items-end gap-2 md:col-span-3">
+    <div class="flex items-end gap-2 md:col-span-3 flex-wrap">
       <button type="submit" class="btn-primary">Create User</button>
+      <button
+        type="button"
+        class="btn-primary"
+        @click="createDemoUser()"
+        :disabled="state.demoCreating"
+        title="Create a ready-to-use, tool-invoking demo account and get a token + mcp.json"
+      >
+        <span x-text="state.demoCreating ? 'Creating…' : '✨ Create demo user'"></span>
+      </button>
       <button type="button" class="btn-secondary" @click="resetUserForm()">
         Reset
       </button>
@@ -576,6 +589,11 @@
         Refresh
       </button>
     </div>
+    <p class="text-xs text-slate-500 md:col-span-3">
+      <strong>Create demo user</strong> mints a scoped, tool-invoking account with a
+      generated password and catalog-derived scopes — then hands you a bearer token
+      and a ready-to-paste Cursor <code>mcp.json</code>. No terminal required.
+    </p>
   </form>
   <div class="table-wrap">
     <table class="table">
@@ -605,6 +623,14 @@
             <td x-text="(user.scopes || []).join(', ') || '-'"></td>
             <td x-text="user.status"></td>
             <td class="space-x-2">
+              <button
+                type="button"
+                class="link-btn"
+                @click="generateUserToken(user)"
+                :disabled="state.userTokenGenerating"
+              >
+                Generate token
+              </button>
               <button
                 type="button"
                 class="link-btn"
@@ -2634,21 +2660,12 @@
         <span aria-hidden="true">🔐</span>
         <span>
           <strong>Auth mode:</strong>
-          <span x-text="authModeLabel()"></span>.
-          <template x-if="authModeLabel() === 'disabled'">
-            <span
-              >Demo mode trusts <code>X-MCP-Scopes</code>. For production,
-              switch to <code>hs256</code> or <code>jwks</code>.</span
-            >
-          </template>
-          <template x-if="authModeLabel() !== 'disabled'">
-            <span
-              >Get a bearer from <code>POST /auth/token</code>
-              (username/password), or bring your own JWT with
-              <code>tenant_id</code>, <code>roles:["tool:invoke"]</code>, and
-              scopes/groups.</span
-            >
-          </template>
+          <span x-text="authModeLabel()"></span>. Security is always enforced.
+          The fastest path: open the <strong>Users</strong> tab and click
+          <strong>Generate token</strong>. Or get a bearer from
+          <code>POST /auth/token</code> (username/password), or bring your own JWT
+          with <code>tenant_id</code>, <code>roles:["tool:invoke"]</code>, and
+          scopes/groups.
         </span>
       </div>
 
@@ -2667,39 +2684,30 @@
         <pre x-text="rpcEndpoint()"></pre>
       </div>
 
-      <template x-if="authModeLabel() !== 'disabled'">
-        <div class="space-y-3">
-          <h4>2) Get a token</h4>
-          <div class="code-block">
-            <div class="code-head">
-              <span class="code-cap">Username/password (OAuth2 password grant)</span>
-              <button
-                type="button"
-                class="code-copy"
-                @click="copyText(passwordTokenCommand(), 'token request')"
-              >
-                Copy
-              </button>
-            </div>
-            <pre x-text="passwordTokenCommand()"></pre>
+      <div class="space-y-3">
+        <h4>2) Get a token</h4>
+        <p class="muted">
+          Fastest path: open the <strong>Users</strong> tab and click
+          <strong>Generate token</strong> on a user — it mints a scoped bearer and
+          hands you a ready-to-paste Cursor <code>mcp.json</code> and curl. Or
+          exchange a username/password for a bearer below.
+        </p>
+        <div class="code-block">
+          <div class="code-head">
+            <span class="code-cap">Username/password (OAuth2 password grant)</span>
+            <button
+              type="button"
+              class="code-copy"
+              @click="copyText(passwordTokenCommand(), 'token request')"
+            >
+              Copy
+            </button>
           </div>
-          <div class="code-block">
-            <div class="code-head">
-              <span class="code-cap">Or mint a local dev token</span>
-              <button
-                type="button"
-                class="code-copy"
-                @click="copyText(tokenMintCommand(), 'mint token command')"
-              >
-                Copy
-              </button>
-            </div>
-            <pre x-text="tokenMintCommand()"></pre>
-          </div>
+          <pre x-text="passwordTokenCommand()"></pre>
         </div>
-      </template>
+      </div>
 
-      <h4 x-text="authModeLabel() === 'disabled' ? '2) Call the gateway' : '3) Call the gateway'"></h4>
+      <h4>3) Call the gateway</h4>
       <div class="code-block">
         <div class="code-head">
           <span class="code-cap">curl sample</span>
@@ -2714,7 +2722,7 @@
         <pre x-text="rpcCurlSample()"></pre>
       </div>
 
-      <h4 x-text="authModeLabel() === 'disabled' ? '3) MCP client configuration' : '4) MCP client configuration'"></h4>
+      <h4>4) MCP client configuration</h4>
       <div class="code-block">
         <div class="code-head">
           <span class="code-cap">Client snippet</span>
@@ -2729,9 +2737,7 @@
         <pre x-text="mcpClientSnippet()"></pre>
       </div>
 
-      <h4
-        x-text="authModeLabel() === 'disabled' ? '4) Egress allowlist (security guardrail)' : '5) Egress allowlist (security guardrail)'"
-      ></h4>
+      <h4>5) Egress allowlist (security guardrail)</h4>
       <p>
         Limit outbound connections for this tenant to approved domains/IPs. One
         entry per line, supports host globs, exact hosts, and CIDRs.
@@ -2781,6 +2787,177 @@
         </button>
       </div>
     </div>
+  </div>
+</div>
+
+<div
+  class="modal-overlay"
+  x-show="state.userTokenOpen"
+  x-cloak
+  @click.self="closeUserToken()"
+  @keydown.escape.window="closeUserToken()"
+  x-transition:enter="modal-overlay-enter-active"
+  x-transition:enter-start="modal-overlay-enter-from"
+  x-transition:enter-end="modal-overlay-enter-to"
+  x-transition:leave="modal-overlay-leave-active"
+  x-transition:leave-start="modal-overlay-leave-from"
+  x-transition:leave-end="modal-overlay-leave-to"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="user-token-title"
+>
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-eyebrow">Access token</div>
+        <h2
+          class="modal-title"
+          id="user-token-title"
+          x-text="`Token for '${state.userTokenUser}'`"
+        ></h2>
+        <p class="modal-subtitle">
+          A ready-to-use credential carrying this user's tenant, roles, and
+          scopes. Paste it into your MCP client to connect as this account.
+        </p>
+      </div>
+      <button
+        type="button"
+        class="modal-close"
+        @click="closeUserToken()"
+        aria-label="Close"
+      >
+        ✕
+      </button>
+    </div>
+    <template x-if="state.userTokenResult">
+      <div class="modal-body space-y-3">
+        <div class="tldr">
+          <span aria-hidden="true">🔐</span>
+          <span>
+            <strong>Auth mode:</strong>
+            <span x-text="state.userTokenResult.auth_mode"></span> ·
+            <strong>Tenant:</strong>
+            <span x-text="state.userTokenResult.tenant_id"></span> ·
+            <strong>Roles:</strong>
+            <span
+              x-text="(state.userTokenResult.roles || []).join(', ') || '(none)'"
+            ></span>
+            ·
+            <strong>Scopes:</strong>
+            <span
+              x-text="(state.userTokenResult.scopes || []).join(', ') || '(none)'"
+            ></span>
+          </span>
+        </div>
+
+        <template x-if="!state.userTokenResult.data_plane_ok">
+          <div
+            class="rounded-md border border-amber-300 bg-amber-50 text-amber-800 px-4 py-3 text-sm"
+          >
+            <strong>Heads up:</strong> this account has neither the
+            <code>admin</code> nor <code>tool:invoke</code> role, so the token
+            authenticates but is rejected at the <code>/rpc</code> and
+            <code>/mcp</code> gate. Give the user the
+            <em>Demo (can invoke tools)</em> role to call tools.
+          </div>
+        </template>
+
+        <template x-if="state.userTokenResult.caveat">
+          <div
+            class="rounded-md border border-sky-300 bg-sky-50 text-sky-800 px-4 py-3 text-sm"
+            x-text="state.userTokenResult.caveat"
+          ></div>
+        </template>
+
+        <template x-if="state.userTokenNewPassword">
+          <div>
+            <div
+              class="rounded-md border border-emerald-300 bg-emerald-50 text-emerald-800 px-4 py-2 text-sm mb-2"
+            >
+              <strong>Demo account created.</strong> Save this password now — it is
+              shown only once and cannot be retrieved later. The bearer token below
+              is enough to connect; the password is for password-grant logins
+              (<code>POST /auth/token</code>).
+            </div>
+            <h4>One-time password</h4>
+            <div class="code-block">
+              <div class="code-head">
+                <span class="code-cap">password</span>
+                <button
+                  type="button"
+                  class="code-copy"
+                  @click="copyText(state.userTokenNewPassword, 'password')"
+                >
+                  Copy
+                </button>
+              </div>
+              <pre class="break-all whitespace-pre-wrap" x-text="state.userTokenNewPassword"></pre>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="state.userTokenResult.token">
+          <div>
+            <h4>Bearer token</h4>
+            <div class="code-block">
+              <div class="code-head">
+                <span class="code-cap">
+                  Token<template x-if="state.userTokenResult.expires_in"
+                    ><span
+                      x-text="` (expires in ${Math.round(state.userTokenResult.expires_in / 60)} min)`"
+                    ></span
+                  ></template>
+                </span>
+                <button
+                  type="button"
+                  class="code-copy"
+                  @click="copyText(state.userTokenResult.token, 'token')"
+                >
+                  Copy
+                </button>
+              </div>
+              <pre class="break-all whitespace-pre-wrap" x-text="state.userTokenResult.token"></pre>
+            </div>
+          </div>
+        </template>
+
+        <h4>Cursor MCP config (<code>~/.cursor/mcp.json</code>)</h4>
+        <div class="code-block">
+          <div class="code-head">
+            <span class="code-cap">mcp.json</span>
+            <button
+              type="button"
+              class="code-copy"
+              @click="copyText(userMcpSnippet(), 'MCP config')"
+            >
+              Copy
+            </button>
+          </div>
+          <pre x-text="userMcpSnippet()"></pre>
+        </div>
+
+        <h4>Verify with curl</h4>
+        <div class="code-block">
+          <div class="code-head">
+            <span class="code-cap">curl sample</span>
+            <button
+              type="button"
+              class="code-copy"
+              @click="copyText(userCurlSample(), 'curl sample')"
+            >
+              Copy
+            </button>
+          </div>
+          <pre x-text="userCurlSample()"></pre>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button type="button" class="btn-secondary" @click="closeUserToken()">
+            Done
+          </button>
+        </div>
+      </div>
+    </template>
   </div>
 </div>
 {% endblock %}

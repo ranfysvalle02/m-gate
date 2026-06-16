@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from config.settings import get_settings
 from database.mongo import get_control_database, get_tenant_database
+from services import users as users_service
 from services.code_tools import (
     CODE_TRANSPORT,
     CodeToolValidationError,
@@ -11,6 +13,28 @@ from services.code_tools import (
     is_encrypted_token,
     lint_code_tool,
 )
+
+logger = logging.getLogger(__name__)
+
+# Local-only demo account so the admin console's "Generate token" flow has an
+# immediate target out of the box. Never seeded in production (see _seed_demo_user).
+_DEMO_USER_EMAIL = "agent@demo.com"
+_DEMO_USER_PASSWORD = "agent-demo"  # noqa: S105 - local-dev convenience credential only
+_DEMO_USER_SCOPES = [
+    "gateway_demo",
+    "weather",
+    "orders",
+    "utilities",
+    "deepwiki",
+    "analytics",
+    "readonly",
+    "server:gateway_demo",
+    "server:weather",
+    "server:orders",
+    "server:utilities",
+    "server:deepwiki",
+    "server:analytics",
+]
 
 _GATEWAY_DEMO_HELLO_CODE = """def gateway_hello(name: str = "Cursor") -> dict:
     who = (name or "").strip() or "Cursor"
@@ -834,6 +858,32 @@ def guardrail_signatures_seed() -> list[dict]:
     ]
 
 
+async def _seed_demo_user(tenant_id: str) -> None:
+    """Seed a ready-to-use, tool-invoking demo account (local/dev only).
+
+    Skipped entirely in production so a known credential never ships there. The
+    account carries ``tool:invoke`` so the admin console's "Generate token" flow
+    produces a bearer that immediately clears the /rpc + /mcp gate.
+    """
+    settings = get_settings()
+    if settings.environment.lower() in {"prod", "production"}:
+        return
+    try:
+        user = await users_service.create_user(
+            email=_DEMO_USER_EMAIL,
+            password=_DEMO_USER_PASSWORD,
+            tenant_id=tenant_id,
+            roles=["user", "tool:invoke"],
+            scopes=_DEMO_USER_SCOPES,
+            status="active",
+            created_by="bootstrap",
+        )
+    except users_service.UserAlreadyExists:
+        return
+    await users_service.sync_session_context(user)
+    logger.info("Seeded demo user '%s' in tenant '%s'.", _DEMO_USER_EMAIL, tenant_id)
+
+
 async def seed_bootstrap_data() -> None:
     settings = get_settings()
     tenant_id = settings.default_tenant_id
@@ -874,3 +924,5 @@ async def seed_bootstrap_data() -> None:
         },
         upsert=True,
     )
+
+    await _seed_demo_user(tenant_id)

@@ -139,6 +139,9 @@ fusion was computed:
 
 ## Quick Start (Implemented)
 
+> In a hurry? **[QUICKSTART.md](QUICKSTART.md)** is the 5-minute path: `docker compose
+> up`, generate a token in the admin console, and connect Cursor — security on by default.
+
 > Deploying for real? See **[ARCHITECTURE.md](ARCHITECTURE.md)** for a complete
 > as-built system map, then **[DEPLOYMENT.md](DEPLOYMENT.md)** for Docker Compose,
 > single-container, Kubernetes, and Helm paths, plus an embeddings setup and
@@ -275,8 +278,9 @@ Use this progression to move from demo convenience toward production posture:
 2. **Use cloud embedding providers over HTTPS** for real workloads:
    - set `EMBEDDING_PROVIDER=openai|azure_openai|voyage|gemini`
    - mount `EMBEDDING_API_KEY_FILE` (never hardcode the key in compose).
-3. **Turn on real auth**: switch from `AUTH_MODE=disabled` to `hs256` or
-   `jwks`, set issuer/audience, and disable wildcard CORS.
+3. **Harden auth for production**: auth is always on (`AUTH_MODE=hs256` by
+   default); for production move to `jwks`, set issuer/audience, and disable
+   wildcard CORS.
 4. **Pin explicit origins and proxy trust**:
    - `CORS_ALLOW_ORIGINS=https://your-app.example.com`
    - `FORWARDED_ALLOW_IPS=<your-ingress-cidr>`
@@ -288,10 +292,18 @@ The bootstrap service will:
 
 1. Wait for MongoDB
 2. Create Search + Vector Search indexes
-3. Seed `routing_registry` and `session_context`
+3. Seed `routing_registry`, `session_context`, and a ready-to-use demo user
+   (`agent@demo.com`, role Demo/`tool:invoke`) — skipped when `ENVIRONMENT=production`
 4. Sync downstream tools into `tool_catalog` with embeddings
 
 ### Verify
+
+> **Auth is always on.** Health/observability endpoints are open, but the data
+> plane (`/rpc`, `/mcp`) requires a `Authorization: Bearer <token>`. The fastest
+> way to get one: open the admin console **Users** tab and click **Generate
+> token** on `agent@demo.com` — it hands you a ready-to-paste token plus Cursor
+> `mcp.json` / curl snippets. Add `-H "Authorization: Bearer $TOKEN"` to the
+> `/rpc` examples below.
 
 - Health:
 
@@ -359,15 +371,16 @@ curl -X POST http://localhost:8000/rpc \
   -d '{"jsonrpc":"2.0","id":"list-paged","method":"tools/list","params":{"limit":2,"cursor":"0"}}'
 ```
 
-- Identity-bound scope. In `AUTH_MODE=disabled`, you can simulate caller groups
-  via `X-MCP-Scopes`; in authenticated modes (`hs256` / `jwks`), verified token
-  claims (`groups`/`scopes`) are enforced and headers are ignored:
+- Identity-bound scope. Caller groups/scopes come from the verified token claims
+  (`groups`/`scopes`); the catalog returned is filtered to what that identity is
+  allowed to see. Mint a token whose scopes exclude `orders:write` and
+  `update_order_status` is filtered out:
 
 ```bash
-# readonly caller: update_order_status (orders:write) is filtered out
+# token scoped to orders,readonly: update_order_status (orders:write) is filtered out
 curl -X POST http://localhost:8000/rpc \
   -H "Content-Type: application/json" \
-  -H "X-MCP-Scopes: orders,readonly" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"jsonrpc":"2.0","id":"list-2","method":"tools/list","params":{}}'
 ```
 
@@ -559,7 +572,11 @@ whole tier skips cleanly — a no-op on a bare laptop, a hard gate in CI.
 
 ### Local JWKS token flow (offline)
 
-This repo ships a local dev RSA keypair + JWKS for offline auth testing.
+This is the **`AUTH_MODE=jwks`** path, for exercising asymmetric RS256 verification
+offline. (The default setup is `hs256` — there, mint tokens from the admin console's
+**Users → Generate token** button or `POST /auth/token`, not the script below.)
+
+This repo ships a local dev RSA keypair + JWKS so the jwks path needs no external IdP:
 
 ```bash
 python -m scripts.mint_token --groups orders readonly --roles tool:invoke
@@ -686,7 +703,7 @@ in the code, so the post and the implementation stay honest with each other.
 | --- | --- |
 | Route by meaning (curated `tools/list`) | `tools/list` + `X-MCP-Query` in `gateway/routers/rpc.py` → `HybridSearchService.search_tools` |
 | Identity-bound scope (`scopes` + server namespace filters on `$vectorSearch`) | `build_rank_fusion_pipeline(allowed_scopes=...)` in `services/hybrid_search.py`; `scopes` + `server` filter fields in `database/indexes.py` |
-| Verified claim → search filter | `gateway/middleware/auth.py` (claims `groups`/`scopes`, `X-MCP-Scopes` header) threaded into the RPC router |
+| Verified claim → search filter | `gateway/middleware/auth.py` (verified token claims `groups`/`scopes`) threaded into the RPC router |
 | Hybrid search (lexical + vector fusion) | `$rankFusion` (RRF) is the **core** retrieval in `services/hybrid_search.py`; `mode=hybrid\|vector\|text` lets you compare the arms |
 | One control plane on MongoDB | `tool_catalog`, `routing_registry`, `semantic_cache`, `audit_telemetry` on one engine |
 | Resiliency: deadline + protocol-safe failure | `DOWNSTREAM_TIMEOUT_MS` + `DownstreamTimeout`/`DownstreamError` → `UPSTREAM_TIMEOUT`/`INTERNAL_ERROR` frames |
@@ -694,9 +711,9 @@ in the code, so the post and the implementation stay honest with each other.
 | Close the loop with the audit trail | `services/telemetry_logger.py` → time-series `audit_telemetry` |
 
 > Okta JWT verification (Section 2 of the post) is documented as the production
-> wiring; locally the gateway accepts a verified-claim stand-in via `X-MCP-Scopes`
-> (or real JWT claims when `AUTH_MODE=hs256`/`jwks`), so the scope-to-retrieval
-> mapping is fully exercisable without a tenant.
+> wiring; locally the gateway verifies HS256 JWT claims (`AUTH_MODE=hs256`, the
+> default) — mint one from the admin console's **Generate token** button — so the
+> scope-to-retrieval mapping is fully exercisable without an external IdP.
 
 # Architectural Blueprint: Building a High-Throughput, Reactive MCP Gateway with FastAPI and MongoDB Async
 

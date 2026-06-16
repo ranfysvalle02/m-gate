@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    auth_mode: Literal["disabled", "hs256", "jwks"] = "disabled"
+    auth_mode: Literal["hs256", "jwks"] = "hs256"
     mongodb_uri: str = Field(default="mongodb://mongodb:27017/?directConnection=true")
     mongodb_uri_file: str | None = None
     mongodb_db_name: str = "mcp_gateway"
@@ -245,7 +245,6 @@ class Settings(BaseSettings):
     route_top_k: int = 5
     catalog_list_limit: int = 200
     query_header: str = "x-mcp-query"
-    scopes_header: str = "x-mcp-scopes"
 
     semantic_cache_threshold: float = 0.95
     http_timeout_seconds: int = 20
@@ -356,8 +355,6 @@ class Settings(BaseSettings):
         is_prod = env in {"prod", "production"}
         if not is_prod:
             return self
-        if self.auth_mode == "disabled":
-            raise ValueError("auth_mode=disabled is not allowed in production.")
         if self.auth_mode == "hs256":
             weak = {"dev-secret", "change-me", "secret", "password"}
             if len(self.jwt_secret) < 16 or self.jwt_secret in weak:

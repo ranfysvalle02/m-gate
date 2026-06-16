@@ -19,9 +19,10 @@ def test_file_backed_secret_is_loaded(tmp_path):
     assert s.jwt_secret == "super-secret-from-file"
 
 
-def test_prod_rejects_disabled_auth():
-    with pytest.raises(ValueError, match="auth_mode=disabled"):
-        Settings(environment="production", auth_mode="disabled", admin_ui_enabled=False)
+def test_disabled_auth_mode_is_rejected():
+    """The open 'disabled' auth mode no longer exists; security is always on."""
+    with pytest.raises(ValueError, match="auth_mode"):
+        Settings(auth_mode="disabled")
 
 
 def test_prod_rejects_weak_hs256_secret():

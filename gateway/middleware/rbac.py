@@ -39,8 +39,8 @@ class RbacMiddleware:
                 )
                 return await response(scope, request.receive, send)
 
-        roles = set(getattr(request.state, "roles", []))
-        if self.settings.auth_mode != "disabled" and self._is_data_plane(path):
+        if self._is_data_plane(path):
+            roles = set(getattr(request.state, "roles", []))
             tenant_id = getattr(request.state, "tenant_id", self.settings.default_tenant_id)
             user_id = getattr(request.state, "user_id", "unknown-user")
             session = await get_control_database()["session_context"].find_one(
@@ -60,7 +60,8 @@ class RbacMiddleware:
                 roles.update(session["roles"])
             request.state.roles = sorted(roles)
 
-        if self._is_data_plane(path):
+            # Coarse gate: a caller must carry admin or tool:invoke to reach any
+            # tool-invocation surface (/rpc and /mcp at parity).
             if "admin" not in roles and "tool:invoke" not in roles:
                 response = JSONResponse(
                     status_code=403, content={"detail": "Insufficient permissions."}

@@ -81,7 +81,9 @@ async def test_auth_middleware_accepts_admin_session_cookie(reset_settings, monk
         await send({"type": "http.response.body", "body": b"ok", "more_body": False})
 
     middleware = AuthMiddleware(ok_app)
-    token = mint_session("demo@demo.com")
+    # The bootstrap admin logs in with explicit platform-admin roles (see
+    # resolve_login_principal); a session must carry roles to gain authority.
+    token = mint_session("demo@demo.com", roles=["platform-admin", "admin"])
     scope = _scope(
         path="/admin/whoami",
         method="GET",
@@ -155,6 +157,39 @@ async def test_auth_middleware_plain_user_session_is_not_admin_principal(
     assert captured["state"]["is_admin_principal"] is False
     assert captured["state"]["roles"] == ["user"]
     assert captured["state"]["tenant_id"] == "t1"
+
+
+@pytest.mark.asyncio
+async def test_auth_middleware_roleless_session_gets_no_authority(reset_settings, monkeypatch):
+    """A session token with no roles claim must NOT be treated as an admin.
+
+    This is the fail-safe that replaced the old implicit platform-admin fallback:
+    a forged/legacy/empty-roles session authenticates as an identity but carries
+    zero authority, so it cannot reach the admin control plane.
+    """
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a-very-long-admin-secret")
+
+    captured = {}
+
+    async def ok_app(scope, receive, send):
+        captured["state"] = scope.get("state", {})
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    middleware = AuthMiddleware(ok_app)
+    token = mint_session("ghost@x.com")  # deliberately no roles
+    scope = _scope(
+        path="/ui/",
+        method="GET",
+        headers=[(b"cookie", f"{ADMIN_SESSION_COOKIE}={token}".encode())],
+    )
+    sink = _Sink()
+    await middleware(scope, sink.receive, sink.send)
+    assert sink.status == 200
+    assert captured["state"]["is_admin_principal"] is False
+    assert captured["state"]["roles"] == []
 
 
 @pytest.mark.asyncio

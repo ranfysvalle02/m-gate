@@ -196,6 +196,52 @@ class PasswordChangeRequest(BaseModel):
     new_password: str
 
 
+class UserTokenRequest(BaseModel):
+    # Optional override for the minted token's lifetime. Omitted -> the server
+    # default (``admin_session_ttl_seconds``). Bounded server-side.
+    ttl_minutes: int | None = None
+
+
+class UserTokenResponse(BaseModel):
+    auth_mode: str
+    token: str | None = None
+    token_type: str = "bearer"
+    expires_in: int | None = None
+    tenant_id: str
+    roles: list[str] = Field(default_factory=list)
+    scopes: list[str] = Field(default_factory=list)
+    # False when roles carry neither ``admin`` nor ``tool:invoke`` (the token
+    # authenticates but is rejected at the /rpc + /mcp RBAC gate).
+    data_plane_ok: bool = True
+    # Mode-specific limitation surfaced to the operator (e.g. jwks roles-only).
+    caveat: str | None = None
+
+
+class DemoUserCreateRequest(BaseModel):
+    # All optional: omit everything for a fully auto-generated demo account.
+    # ``email`` lets an operator pick a recognizable address; otherwise a unique
+    # ``demo-<rand>@demo.local`` is generated. ``tenant_id`` follows the same
+    # platform-admin cross-tenant rules as the rest of the user surface.
+    email: str | None = None
+    tenant_id: str | None = None
+
+
+class DemoUserCreateResponse(BaseModel):
+    user: UserResponse
+    # The generated (or operator-set) password, returned exactly once at creation
+    # time so it can be handed to the demo consumer. It is never retrievable later.
+    password: str
+    # True when this run created the account; False if the email already existed
+    # (the existing account is returned untouched and ``password`` is empty).
+    created: bool = True
+
+
+class DemoScopesResponse(BaseModel):
+    tenant_id: str
+    roles: list[str] = Field(default_factory=list)
+    scopes: list[str] = Field(default_factory=list)
+
+
 class EgressAllowlistUpdateRequest(BaseModel):
     # Host globs / exact hosts / IP literals / CIDRs the tenant may reach.
     # An empty list clears the tenant allowlist (global guardrail still applies).
@@ -297,7 +343,7 @@ class WhoAmIResponse(BaseModel):
     roles: list[str] = Field(default_factory=list)
     scopes: list[str] = Field(default_factory=list)
     is_platform_admin: bool
-    auth_mode: Literal["disabled", "hs256", "jwks"]
+    auth_mode: Literal["hs256", "jwks"]
 
 
 class CatalogListRequest(BaseModel):

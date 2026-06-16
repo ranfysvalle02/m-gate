@@ -181,11 +181,23 @@ class _RecordingTelemetry:
 @pytest.mark.asyncio
 async def test_call_downstream_tool_closure(patch_mongo, monkeypatch, reset_settings):
     import gateway.mcp_server as mcp_mod
+    from config.settings import get_settings
+    from database.mongo import get_tenant_database
 
-    # The /mcp surface now authorizes per call at parity with /rpc, so the tool
-    # must exist in the tenant catalog. In disabled mode the caller is admin, so
-    # the admin override applies once the tool is found.
-    patch_mongo["tool_catalog"].docs.append({"server": "weather", "name": "get_forecast"})
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    get_settings.cache_clear()
+
+    # The /mcp surface authorizes per call at parity with /rpc, so the tool must
+    # exist in the tenant catalog. The caller is an admin in tenant-a, so the
+    # admin override applies once the tool is found.
+    get_tenant_database("tenant-a")["tool_catalog"].docs.append(
+        {"server": "weather", "name": "get_forecast"}
+    )
+    monkeypatch.setattr(
+        mcp_mod,
+        "get_http_request",
+        lambda: _FakeRequest(tenant_id="tenant-a", roles=["admin"]),
+    )
 
     class _Reg:
         async def call_tool(
@@ -484,6 +496,9 @@ async def test_call_downstream_tool_rejected_by_sandbox_preflight(
     import gateway.mcp_server as mcp_mod
     from config.settings import get_settings
 
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    get_settings.cache_clear()
+
     # 1s sandbox quota = 1000ms remaining; the code tool's 5000ms wall budget
     # cannot fit, so the shared preflight must reject before execution -- exactly
     # as the /rpc data plane does (DESIGN.md parity guarantee).
@@ -497,6 +512,13 @@ async def test_call_downstream_tool_rejected_by_sandbox_preflight(
             "name": "add",
             "metadata": {"transport": "code", "wall_timeout_ms": 5000},
         }
+    )
+    # Admin caller in the default tenant clears authorization so the request
+    # reaches the sandbox preflight that this test exercises.
+    monkeypatch.setattr(
+        mcp_mod,
+        "get_http_request",
+        lambda: _FakeRequest(tenant_id=settings.default_tenant_id, roles=["admin"]),
     )
 
     class _Reg:

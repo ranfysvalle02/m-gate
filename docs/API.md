@@ -10,10 +10,9 @@ represented in OpenAPI docs.
 
 ## Authentication Model
 
-`AUTH_MODE` controls bearer-token behavior:
+Security is always enforced; `AUTH_MODE` controls how the required bearer token is verified:
 
-- `disabled`: REST and JSON-RPC are open (admin UI still uses session auth).
-- `hs256`: bearer JWT required except public/observability paths.
+- `hs256` (default): bearer JWT verified against `JWT_SECRET`, required except public/observability paths.
 - `jwks`: bearer JWT verified via JWKS (remote `JWKS_URI` or local `JWKS_LOCAL_PATH`).
 
 ### Inbound MCP-client auth (username/password + OAuth)
@@ -46,7 +45,6 @@ Useful request headers:
 - `Authorization: Bearer <token>`
 - `X-Tenant-Id: <tenant>` (used by admin routes that accept tenant scoping)
 - `X-MCP-Query: <text>` (semantic shortlist for `tools/list`)
-- `X-MCP-Scopes: scopeA,scopeB` (used in `auth_mode=disabled`)
 
 ## REST Endpoints
 
@@ -158,6 +156,18 @@ require the `platform-admin` role.
   - `POST /admin/users` — create a user (`email`, `password`, optional `tenant_id`,
     `roles`, `scopes`, `status`). Only `platform-admin` may grant the `platform-admin`
     role or target another tenant.
+  - `POST /admin/users/demo` — one-click: create a ready-to-use, tool-invoking demo
+    account. Optional body `{"email"?, "tenant_id"?}`; both are auto-resolved when
+    omitted (a unique `demo-<rand>@demo.local` is generated). Grants `user` +
+    `tool:invoke` plus **catalog-derived scopes** (`server:*` and every distinct tool
+    scope in the tenant) so the account can discover *and* invoke tools immediately.
+    Returns the generated `password` exactly once (never retrievable later) alongside
+    the created user. Same tenant-scoping RBAC as the other user routes; the creation
+    is audit-logged (the password is never logged). This backs the **Create demo user**
+    button in the Users tab.
+  - `GET /admin/users/demo-scopes` — recommended demo `roles`/`scopes` for a tenant
+    (optional `tenant_id` query), derived from its live catalog. Backs the console's
+    **Demo** role preset so a manually-created demo user gets working scopes.
   - `GET /admin/users` — list users (platform-admin sees all; pass `tenant_id` to scope).
   - `GET /admin/users/{id}` — fetch a user.
   - `PATCH /admin/users/{id}` — update `roles`, `scopes`, `status`, or `password`
@@ -167,6 +177,16 @@ require the `platform-admin` role.
   - `DELETE /admin/users/{id}` — delete a user (self-deletion is rejected).
   - `POST /admin/users/me/password` — self-service password change (`current_password`,
     `new_password`); unavailable for the env bootstrap admin.
+  - `POST /admin/users/{id}/token` — mint a ready-to-use bearer token carrying that
+    user's `tenant_id`, `roles`, and `scopes` (the "Generate token" button in the Users
+    tab). Optional body `{"ttl_minutes": <int>}` (clamped server-side). Same RBAC as the
+    other user routes (tenant-admins scoped to their own tenant; never a platform-admin
+    user). Auth-mode aware: `hs256` returns a real scoped bearer; `jwks` returns a
+    roles-only admin-session token plus a `caveat` (scoped tokens come from your IdP).
+    Every mint is recorded in a structured audit log line (actor, target, tenant,
+    roles, ttl). The response flags `data_plane_ok=false` when the account lacks
+    `admin`/`tool:invoke`, so the token authenticates but is rejected at the
+    `/rpc` + `/mcp` gate.
 - **Catalog and telemetry**
   - `GET /admin/catalog`
   - `POST /admin/search` (optional `server` filter for selected-server workspace search)
@@ -356,13 +376,12 @@ that surface; use `/docs` or `/redoc` for REST/admin endpoints.
 The meta-tools (`search_tools`, `list_catalog_tools`, `call_downstream_tool`)
 enforce the same authorization as the `/rpc` data plane:
 
-- **Coarse RBAC** (`AUTH_MODE != disabled`): the caller must carry `admin` or
-  `tool:invoke`, and a suspended account is cut off — same gate as `/rpc`.
+- **Coarse RBAC:** the caller must carry `admin` or `tool:invoke`, and a suspended
+  account is cut off — same gate as `/rpc`.
 - **Tenant binding:** the tenant is taken from the verified token claim. Passing a
   `tenant_id` argument that does not match the authenticated tenant raises a FastMCP
   `ToolError` (`cross_tenant_forbidden`). Cross-tenant access is not available on
-  `/mcp`; use the platform-admin `/admin` API. (In `AUTH_MODE=disabled` local dev,
-  an explicit `tenant_id` is still honored.)
+  `/mcp`; use the platform-admin `/admin` API.
 - **Per-call authorization:** `call_downstream_tool` runs `authorize_tool_call`, so
   the named `(server, tool)` must exist in the tenant catalog and the caller must
   satisfy its required scopes (or be `admin`); otherwise it raises a `ToolError`

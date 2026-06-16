@@ -21,18 +21,16 @@ never the end user's token.
 
 ### 1.1 Auth modes (`AUTH_MODE`)
 
-A single setting picks how inbound bearer tokens are verified
-(`config/settings.py`):
+Security is **always enforced** — there is no "off" mode. A single setting picks
+how inbound bearer tokens are verified (`config/settings.py`):
 
 | `AUTH_MODE` | Bearer verification | Use |
 | --- | --- | --- |
-| `disabled` | none — every caller is trusted as a full admin | **local dev only** (rejected by the production guard) |
-| `hs256` | symmetric HMAC against `JWT_SECRET` | shared-secret deployments, simple CI |
+| `hs256` (default) | symmetric HMAC against `JWT_SECRET` | shared-secret deployments, local dev, simple CI |
 | `jwks` | asymmetric RS256 against a JWKS (your IdP) | production / bring-your-own-IdP OAuth2/OIDC |
 
-In `disabled` mode the middleware seeds `request.state.roles = ["admin"]` and
-reads scopes from the `x-mcp-scopes` header (`SCOPES_HEADER`); none of the gates
-below apply.
+Every caller on `/rpc` and `/mcp` must present a verified credential and clear
+the RBAC gate below; there is no trusted-by-default path.
 
 ### 1.2 Request pipeline
 
@@ -61,7 +59,7 @@ It then tries, in order:
    admin principal. This is the token issued by both the admin UI login **and**
    `POST /auth/token`.
 2. **Optional HTTP Basic on the MCP surface** (`/rpc`, `/mcp`), gated by
-   `MCP_BASIC_AUTH_ENABLED` (default off) and only when `AUTH_MODE != disabled`.
+   `MCP_BASIC_AUTH_ENABLED` (default off).
    Credentials are decoded and resolved per request via
    `resolve_login_principal`. A bad pair returns `401` with
    `WWW-Authenticate: Basic realm="mcp"`.
@@ -182,9 +180,9 @@ Runs right after `AuthMiddleware`, reading the hydrated `request.state`.
   not subject to CSRF.
 - **Admin UI** (non-login paths) requires an admin principal, else a `303`
   redirect to the login page.
-- **`/rpc` and `/mcp`** (when `AUTH_MODE != disabled`): the JSON-RPC data plane and
-  the mounted FastMCP meta-tool surface are held at **parity** — the coarse gate
-  below applies to both:
+- **`/rpc` and `/mcp`**: the JSON-RPC data plane and the mounted FastMCP
+  meta-tool surface are held at **parity** — the coarse gate below always applies
+  to both:
   1. Looks up `session_context` for `(tenant_id, user_id)`. A managed user whose
      mirrored `status` is not `active` is cut off immediately with `403 Account
      suspended` — a standing token stops working the instant an admin disables
@@ -206,12 +204,10 @@ gateway-verified `request.state` (tenant, roles, scopes) via FastMCP's
 `get_http_request()`:
 
 - **Tenant is bound to the verified claim.** The resolved tenant comes from the
-  authenticated token, not from tool arguments. When `AUTH_MODE != disabled`, a
-  `tenant_id` argument that does not equal the verified tenant is rejected with a
-  `ToolError` (`cross_tenant_forbidden`) — there is no cross-tenant override on
-  `/mcp`; cross-tenant work stays on the platform-admin `/admin` API. In
-  `disabled` mode (local dev, everyone is already trusted/admin) an explicit
-  `tenant_id` is still honored.
+  authenticated token, not from tool arguments. A `tenant_id` argument that does
+  not equal the verified tenant is rejected with a `ToolError`
+  (`cross_tenant_forbidden`) — there is no cross-tenant override on `/mcp`;
+  cross-tenant work stays on the platform-admin `/admin` API.
 - **Per-call authorization.** `call_downstream_tool` runs the same
   `authorize_tool_call` the `/rpc` `tools/call` path uses: the tool must exist in
   the tenant catalog and the caller must satisfy its required scopes (or be
@@ -281,7 +277,7 @@ Key properties:
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `AUTH_MODE` | `disabled` | `disabled` \| `hs256` \| `jwks` |
+| `AUTH_MODE` | `hs256` | `hs256` \| `jwks` (security always enforced) |
 | `JWT_SECRET` / `JWT_SECRET_FILE` | `dev-secret` | HS256 verification key |
 | `JWT_ALGORITHM` | `HS256` | algorithm for `hs256` mode |
 | `JWT_ISSUER` | — | enforced `iss` when set (required for `jwks`) |
@@ -292,7 +288,6 @@ Key properties:
 | `JWKS_MIN_REFRESH_SECONDS` | `60` | throttle for unknown-`kid` refreshes |
 | `MCP_BASIC_AUTH_ENABLED` | `false` | allow HTTP Basic on `/rpc`,`/mcp` |
 | `OAUTH_METADATA_ENABLED` | `false` | advertise RFC 9728 discovery (auto-on under `jwks`) |
-| `SCOPES_HEADER` | `x-mcp-scopes` | scopes header read in `disabled` mode |
 | `ADMIN_SESSION_SECRET` / `_FILE` | falls back to `JWT_SECRET` | session signing key |
 | `ADMIN_SESSION_TTL_SECONDS` | `28800` | session/`/auth/token` TTL |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` (`_FILE`) | — | bootstrap admin |
@@ -320,7 +315,8 @@ Key properties:
 
 `Settings` rejects unsafe production configs (`config/settings.py`):
 
-- `AUTH_MODE=disabled` is **not allowed** in production.
+- `AUTH_MODE=disabled` no longer exists — security is always enforced, so there
+  is no open mode to forbid.
 - `hs256` requires a strong, non-default `JWT_SECRET` (≥ 16 chars).
 - `jwks` requires `JWT_ISSUER`, `JWT_AUDIENCE`, and one of
   `JWKS_URI` / `JWKS_LOCAL_PATH`.
@@ -352,3 +348,6 @@ MCP_BASIC_AUTH_ENABLED=true
 ```
 
 Clients call `POST /auth/token` to get a bearer, or send HTTP Basic on `/rpc`.
+The fastest path of all: open the admin console **Users** tab and click
+**Generate token** to mint a ready-to-paste scoped bearer (plus copy-paste Cursor
+`mcp.json` / curl snippets) for any managed user.

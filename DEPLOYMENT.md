@@ -113,13 +113,15 @@ Use this sequence to move from local demo settings to production posture:
    `ADMIN_SESSION_SECRET_FILE`, provider keys).
 2. For external embedding providers, use HTTPS endpoints and mount
    `EMBEDDING_API_KEY_FILE` from a secret file.
-3. Move auth from `AUTH_MODE=disabled` to `hs256`/`jwks`; set issuer/audience.
+3. Auth is always enforced; for production move from the default `AUTH_MODE=hs256`
+   to `jwks` (or keep `hs256` with a strong `JWT_SECRET`); set issuer/audience.
 4. Replace wildcard CORS with explicit origins and set `FORWARDED_ALLOW_IPS`.
 5. Before internet exposure, move to Path B/C/D and complete the
    [Production hardening checklist](#production-hardening-checklist).
 
-The compose stack is **development-shaped** (`AUTH_MODE=disabled`, demo admin
-credentials, wildcard CORS). Do not ship it as-is — see the
+The compose stack is **development-shaped** (auto-generated `JWT_SECRET` with
+`AUTH_MODE=hs256`, a seeded demo account, demo admin credentials, wildcard CORS).
+Do not ship it as-is — see the
 [hardening checklist](#production-hardening-checklist).
 
 ---
@@ -309,7 +311,7 @@ Full list with defaults: [`.env.example`](.env.example). The essentials:
 | `KMS_PROVIDER` | `none` \| `local` \| `aws` |
 | `AWS_KMS_KEY_ARN(_FILE)` / `QE_LOCAL_MASTER_KEY(_FILE)` | KMS key material for QE |
 | `CRYPT_SHARED_LIB_PATH` | Path to `mongo_crypt_v1.so` (required when QE is enabled) |
-| `AUTH_MODE` | `disabled` \| `hs256` \| `jwks` |
+| `AUTH_MODE` | `hs256` (default) \| `jwks` — security always enforced |
 | `JWT_SECRET` / `JWT_ISSUER` / `JWT_AUDIENCE` / `JWKS_URI` | Auth config |
 | `MCP_BASIC_AUTH_ENABLED` | Accept HTTP Basic (username/password) on `/rpc` + `/mcp` |
 | `OAUTH_METADATA_ENABLED` | Advertise RFC 9728 resource metadata (auto-on under `jwks`) |
@@ -347,8 +349,7 @@ For Atlas TLS / X.509 / SCRAM hardening, see [`deploy/README.md`](deploy/README.
 When `ENVIRONMENT=production`, the gateway **fails to start** unless these hold
 (fail-closed by design):
 
-- [ ] `AUTH_MODE` is not `disabled`.
-- [ ] If `hs256`: `JWT_SECRET` is strong (≥16 chars, not a known weak value).
+- [ ] If `hs256` (default): `JWT_SECRET` is strong (≥16 chars, not a known weak value).
 - [ ] If `jwks`: `JWT_ISSUER` and `JWT_AUDIENCE` are set, plus `JWKS_URI` or
       `JWKS_LOCAL_PATH`.
 - [ ] `CORS_ALLOW_ORIGINS` is **not** `*` — list explicit origins.

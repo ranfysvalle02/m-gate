@@ -33,7 +33,6 @@ horizontally and roll it forward/back freely.
 When `ENVIRONMENT=production`, the gateway **refuses to start** unless all of these hold
 (`config/settings.py::_validate_prod_safety`). Treat startup failure as a feature.
 
-- [ ] `AUTH_MODE` ≠ `disabled`.
 - [ ] `hs256`: `JWT_SECRET` ≥16 chars and not a known weak value.
 - [ ] `jwks`: `JWT_ISSUER` **and** `JWT_AUDIENCE` set, plus `JWKS_URI` **or** `JWKS_LOCAL_PATH`.
 - [ ] `CORS_ALLOW_ORIGINS` is **not** `*` (explicit origin list).

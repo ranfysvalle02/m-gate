@@ -1,3 +1,18 @@
+"""Mint a local **RS256** JWT for the gateway's ``AUTH_MODE=jwks`` offline flow.
+
+This signs with the repo's bundled dev RSA private key (`config/dev-private-key.pem`),
+which the gateway verifies via the matching local JWKS (`config/dev-jwks.json`). It
+is therefore only useful when the gateway runs in JWKS mode:
+
+    AUTH_MODE=jwks JWKS_LOCAL_PATH=./config/dev-jwks.json \\
+        JWT_ISSUER=http://localhost:8000 JWT_AUDIENCE=mdb-mcp-gateway
+
+For the **default** ``AUTH_MODE=hs256`` setup (incl. ``docker compose up``), don't
+use this script — the gateway signs/verifies with its own ``JWT_SECRET``. Instead
+mint a token from the admin console (**Users -> Generate token**) or exchange
+credentials at ``POST /auth/token``.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -8,7 +23,13 @@ import jwt
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Mint a local RS256 JWT for gateway auth testing.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Mint a local RS256 JWT for the gateway's AUTH_MODE=jwks offline flow. "
+            "For the default hs256 mode, use the admin console 'Generate token' "
+            "button or POST /auth/token instead."
+        )
+    )
     parser.add_argument("--subject", default="local-user", help="JWT subject (sub claim).")
     parser.add_argument("--tenant-id", default="local-dev", help="tenant_id claim.")
     parser.add_argument(

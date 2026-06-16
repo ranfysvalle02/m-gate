@@ -41,7 +41,8 @@ def test_ui_home_redirects_to_login_without_session(monkeypatch, reset_settings)
 
 
 def test_ui_login_sets_session_cookie(monkeypatch, reset_settings):
-    monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
     monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
     client = TestClient(_build_ui_app())
@@ -58,7 +59,8 @@ def test_ui_login_sets_session_cookie(monkeypatch, reset_settings):
 
 
 def test_ui_home_includes_embeddings_section(monkeypatch, reset_settings):
-    monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
     monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
     client = TestClient(_build_ui_app())
@@ -74,7 +76,8 @@ def test_ui_home_includes_embeddings_section(monkeypatch, reset_settings):
 
 
 def test_ui_home_includes_tenant_embeddings_section(monkeypatch, reset_settings):
-    monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
     monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
     client = TestClient(_build_ui_app())
@@ -93,7 +96,8 @@ def test_ui_home_includes_tenant_embeddings_section(monkeypatch, reset_settings)
 
 
 def test_ui_home_distinguishes_platform_and_tenant_embeddings(monkeypatch, reset_settings):
-    monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
     monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
     client = TestClient(_build_ui_app())
@@ -114,7 +118,8 @@ def test_ui_home_distinguishes_platform_and_tenant_embeddings(monkeypatch, reset
 
 
 def test_ui_home_includes_export_server_affordance(monkeypatch, reset_settings):
-    monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
     monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
     client = TestClient(_build_ui_app())

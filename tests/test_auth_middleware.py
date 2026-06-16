@@ -140,7 +140,6 @@ async def test_auth_middleware_uses_verified_claim_scopes(monkeypatch):
         "query_string": b"",
         "headers": [
             (b"authorization", f"Bearer {token}".encode()),
-            (b"x-mcp-scopes", b"weather"),
         ],
         "client": ("127.0.0.1", 5000),
         "server": ("testserver", 80),
@@ -151,7 +150,7 @@ async def test_auth_middleware_uses_verified_claim_scopes(monkeypatch):
     assert status == 200
     assert captured["state"]["tenant_id"] == "t1"
     assert captured["state"]["user_id"] == "u1"
-    # Header scopes are ignored when auth is enabled; verified token claims win.
+    # Scopes always come from the verified token claims.
     assert captured["state"]["scopes"] == ["orders", "readonly"]
 
     monkeypatch.delenv("AUTH_MODE", raising=False)

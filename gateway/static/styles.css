@@ -21,6 +21,18 @@
   --radius-md: 0.85rem;
   --radius-lg: 1rem;
   --radius-xl: 1.35rem;
+
+  /* Brand typography stack (theme-independent). Inter powers the UI, Space
+     Grotesk gives the wordmark + headings a distinctive geometric voice, and
+     JetBrains Mono renders every code surface. */
+  --font-sans:
+    "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display:
+    "Space Grotesk", "Inter", system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --font-mono:
+    "JetBrains Mono", "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
 }
 
 html {
@@ -29,16 +41,39 @@ html {
 
 body {
   margin: 0;
-  font-family:
-    Inter,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--font-sans);
+  /* Inter tabular figures + contextual alternates → crisp numerals in metrics
+     tables and a more refined, "designed" letterform throughout. */
+  font-feature-settings:
+    "cv02" 1,
+    "cv03" 1,
+    "cv04" 1,
+    "ss01" 1;
+  font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+/* Display voice: the wordmark, page headings, modal titles, and big metrics all
+   speak in Space Grotesk with tightened tracking for a confident, branded feel. */
+.brand-title,
+.workspace-shell h1,
+.workspace-shell h2,
+.studio-h1,
+.modal-title,
+.card-value,
+.fn-pane-name,
+.auth-brand .brand-title {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+/* Tabular, slashed-zero numerals everywhere numbers carry meaning. */
+.card-value,
+.table td,
+.table th {
+  font-variant-numeric: tabular-nums slashed-zero;
 }
 
 ::selection {
@@ -215,7 +250,15 @@ body {
   display: flex;
   isolation: isolate;
   color: var(--text-primary);
-  background: var(--bg);
+  /* Layered ground: a faint top-down gradient adds depth behind the aurora so
+     the canvas never reads as a flat fill. */
+  background:
+    radial-gradient(
+      130% 90% at 50% -10%,
+      var(--bg-soft),
+      transparent 55%
+    ),
+    var(--bg);
   transition:
     background-color var(--dur-slow) var(--ease-out),
     color var(--dur-slow) var(--ease-out);
@@ -333,16 +376,27 @@ body {
 }
 
 .brand-kicker {
-  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-secondary);
+  letter-spacing: 0.16em;
+  color: color-mix(in srgb, var(--accent) 78%, var(--text-secondary));
 }
 
 .brand-title {
-  font-size: 1.12rem;
+  font-size: 1.18rem;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.025em;
+  /* Gradient wordmark — the signature brand flourish. */
+  background: linear-gradient(
+    104deg,
+    var(--text-primary) 18%,
+    var(--accent) 130%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .brand-copy {
@@ -481,9 +535,10 @@ body {
 }
 
 .topbar-label {
-  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.13em;
   color: var(--text-secondary);
 }
 
@@ -616,10 +671,11 @@ body {
 }
 
 .card-label {
+  font-family: var(--font-mono);
   color: var(--text-secondary);
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   text-transform: uppercase;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.12em;
 }
 
 .card-value {
@@ -694,9 +750,7 @@ textarea.field-input {
 }
 
 .code-editor-host .cm-scroller {
-  font-family:
-    "JetBrains Mono", "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
-    "Liberation Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 0.875rem;
   line-height: 1.65;
   letter-spacing: 0.01em;
@@ -1265,7 +1319,7 @@ textarea.field-input {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 0.6rem 0.72rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.76rem;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -1543,10 +1597,11 @@ textarea.field-input {
 }
 
 .studio-eyebrow {
-  font-size: 0.72rem;
-  font-weight: 700;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   color: var(--accent);
 }
 
@@ -2646,11 +2701,12 @@ textarea.field-input {
 }
 
 .modal-eyebrow {
-  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
   text-transform: uppercase;
-  letter-spacing: 0.11em;
+  letter-spacing: 0.14em;
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .modal-title {
@@ -2769,7 +2825,7 @@ textarea.field-input {
 }
 
 .modal-body code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.82em;
   background: var(--accent-soft);
   color: var(--text-primary);
@@ -2875,7 +2931,7 @@ textarea.field-input {
   border: 1px solid var(--border);
   background: var(--bg-soft);
   overflow-x: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.78rem;
   line-height: 1.55;
   color: var(--text-primary);

@@ -34,9 +34,10 @@ def mint_session(
     """Issue a signed admin-session token.
 
     ``tenant_id`` and ``roles`` are embedded so the auth middleware can hydrate
-    ``request.state`` directly from the verified token. They are optional: a token
-    minted without them (legacy callers, the env bootstrap admin) is treated as a
-    full platform admin for backward compatibility.
+    ``request.state`` directly from the verified token. Callers should always pass
+    the principal's real roles: the middleware grants **no** authority to a session
+    that carries no roles claim (it is authenticated but unprivileged), so an
+    empty/omitted ``roles`` is fail-safe rather than an implicit admin.
     """
     settings = get_settings()
     now = datetime.now(UTC)
@@ -53,6 +54,49 @@ def mint_session(
     return jwt.encode(
         payload, settings.admin_session_secret or settings.jwt_secret, algorithm="HS256"
     )
+
+
+def mint_bearer_jwt(
+    email: str,
+    *,
+    tenant_id: str,
+    roles: list[str] | None = None,
+    scopes: list[str] | None = None,
+    ttl_seconds: int | None = None,
+) -> str:
+    """Issue a *real* bearer JWT (not an admin-session token).
+
+    Unlike :func:`mint_session`, this signs with ``jwt_secret`` and omits the
+    ``kind: admin_session`` marker so the token travels the middleware's bearer
+    path (``AuthMiddleware._decode_claims``) rather than the admin-session short
+    circuit. That path is the only one that hydrates ``request.state.scopes``, so
+    fine-grained scopes survive on the token — which is exactly what a scoped
+    MCP client (e.g. a demo account) needs.
+
+    ``iss`` / ``aud`` are stamped only when configured, because the same decode
+    path enforces them whenever ``jwt_issuer`` / ``jwt_audience`` are set; adding
+    them unconditionally would make a token the gateway then rejects.
+    """
+    settings = get_settings()
+    now = datetime.now(UTC)
+    ttl = ttl_seconds if ttl_seconds is not None else settings.admin_session_ttl_seconds
+    normalized_scopes = [scope for scope in (scopes or []) if isinstance(scope, str)]
+    payload: dict[str, Any] = {
+        "sub": email,
+        "tenant_id": tenant_id,
+        "roles": [role for role in (roles or []) if isinstance(role, str)],
+        # The middleware reads ``groups`` first, then ``scopes``; set both so the
+        # token is robust regardless of which claim a downstream check consults.
+        "groups": normalized_scopes,
+        "scopes": normalized_scopes,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=ttl)).timestamp()),
+    }
+    if settings.jwt_issuer:
+        payload["iss"] = settings.jwt_issuer
+    if settings.jwt_audience:
+        payload["aud"] = settings.jwt_audience
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
 def verify_session(token: str) -> dict[str, Any] | None:

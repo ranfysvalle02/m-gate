@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Breaking: security is always enforced — `AUTH_MODE=disabled` removed
+- **`AUTH_MODE=disabled` is gone.** The `AUTH_MODE` setting now accepts only
+  `hs256` (default) or `jwks`; loading with `disabled` fails validation. Every
+  caller on `/rpc` and `/mcp` must present a verified credential and clear the
+  `admin`/`tool:invoke` RBAC gate — there is no trusted-by-default path. All
+  `disabled`-mode branches were deleted from `gateway/middleware/auth.py` (incl.
+  the `X-MCP-Scopes` header-trust path and the `SCOPES_HEADER` setting),
+  `gateway/middleware/rbac.py`, and `gateway/mcp_server.py`.
+- **The `X-MCP-Scopes` header is no longer trusted.** Scopes come exclusively
+  from verified token claims (`groups`/`scopes`).
+- **Fail-safe session authority (security hardening).** An admin-session token
+  that carries no `roles` claim is now treated as an authenticated identity with
+  **zero** authority instead of an implicit platform-admin. Every token this
+  gateway mints already embeds explicit roles, so a missing/empty claim can only
+  come from a stale or hand-forged token — those no longer escalate. The CLI dev
+  helper `scripts/mint_token.py` is documented as the `AUTH_MODE=jwks`-only path,
+  and the misleading "mint a local dev token" snippet was removed from the
+  tenant-connect UI in favor of the Generate-token button and `POST /auth/token`.
+- **Generate-token onboarding.** The admin console's **Users → Generate token**
+  flow is the fastest way to get a working bearer; the token endpoint
+  (`POST /admin/users/{id}/token`) drops the `disabled` branch and `scopes_header`
+  field, and now writes a structured **audit log** on every mint (actor, target,
+  tenant, roles, ttl).
+- **One-click demo user.** A new **Create demo user** button (and
+  `POST /admin/users/demo`) provisions a ready-to-use, tool-invoking account in one
+  step: generated password + **catalog-derived scopes** (`server:*` plus every tool
+  scope in the tenant) so it can discover *and* invoke tools immediately, then hands
+  back a bearer + Cursor `mcp.json`. The manual create form's **Demo** role preset
+  auto-fills the same scopes via `GET /admin/users/demo-scopes`. Demo creation is
+  audit-logged; the generated password is shown once and never logged or stored in
+  cleartext. This replaces the previous "create a user, then know to add `tool:invoke`
+  and the right scopes yourself" expert-only path.
+- **Automagic secure local setup.** `docker compose up` now generates a random
+  `JWT_SECRET` (secrets-init → `JWT_SECRET_FILE`), runs the gateway and bootstrap
+  with `AUTH_MODE=hs256`, and seeds a ready-to-use demo account `agent@demo.com`
+  (role Demo / `tool:invoke`, local password) so the Generate-token button has an
+  immediate target. Demo seeding is skipped when `ENVIRONMENT=production`.
+- **Migration:** if you ran with `AUTH_MODE=disabled`, switch to `hs256` and set a
+  strong `JWT_SECRET` (or `jwks` with your IdP). Replace any `X-MCP-Scopes`
+  callers with a bearer token whose claims carry the desired scopes.
+
 ### Feature: native server-side `$rankFusion` under Queryable Encryption
 - Hybrid search now runs **native server-side `$rankFusion`** even when Queryable
   Encryption is enabled. Previously an auto-encryption client's `crypt_shared`
@@ -54,8 +95,7 @@
   `call_downstream_tool`) now enforces the same controls as the `/rpc` data plane.
   Previously `/mcp` was weaker: it skipped per-call authorization, was not covered
   by coarse RBAC / the account kill-switch, and let a `tenant_id` argument override
-  the token claim. Harmless in `disabled`-mode local dev; meaningful the moment auth
-  is enabled and `/mcp` is relied on for tenant isolation.
+  the token claim — a real gap the moment `/mcp` is relied on for tenant isolation.
 - `call_downstream_tool` now runs per-call `authorize_tool_call` (the tool must
   exist in the tenant catalog and the caller must satisfy its scopes, or be
   `admin`), raising `ToolError (forbidden)` otherwise — mirroring `/rpc`'s
@@ -72,10 +112,9 @@
   `/rpc`: it requires `admin`/`tool:invoke`, honors the per-user kill-switch, and
   hydrates `session_context` roles on both surfaces.
 - **Tenant binding:** the `/mcp` meta-tools derive the tenant from the
-  gateway-verified `request.state` (via FastMCP `get_http_request()`). When
-  `AUTH_MODE != disabled`, a `tenant_id` argument that does not match the verified
-  claim is rejected with `ToolError (cross_tenant_forbidden)` — no cross-tenant
-  override on `/mcp`. `disabled` mode is unchanged.
+  gateway-verified `request.state` (via FastMCP `get_http_request()`). A
+  `tenant_id` argument that does not match the verified claim is rejected with
+  `ToolError (cross_tenant_forbidden)` — no cross-tenant override on `/mcp`.
 
 ### Hardening: tightened broad exception handling
 - Added observability to previously silent failure sites so a degraded result is

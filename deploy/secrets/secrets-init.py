@@ -28,6 +28,9 @@ def main() -> None:
 
     _ensure_secret(root / "embedding_secret", secrets.token_urlsafe(48))
     _ensure_secret(root / "admin_session_secret", secrets.token_urlsafe(48))
+    # Auth is always enforced (AUTH_MODE=hs256); the gateway verifies inbound
+    # bearer tokens against this secret. Generated once and reused across runs.
+    _ensure_secret(root / "jwt_secret", secrets.token_urlsafe(48))
 
     print("Initialized gateway secret files in /gateway-secrets")
 

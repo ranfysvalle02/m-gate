@@ -106,11 +106,10 @@ def _register_tools(mcp: FastMCP) -> None:
     def _resolve_identity(override_tenant_id: str | None = None) -> _CallerIdentity:
         """Resolve the caller's tenant/roles/scopes from the verified request.
 
-        The tenant is bound to the authenticated claim: when auth is enabled, a
-        ``tenant_id`` argument that does not match the verified tenant is refused
-        rather than silently honored, so the meta-tool surface cannot be used to
-        reach across tenant boundaries. In ``disabled`` mode there is no verified
-        claim and the caller is already trusted, so an explicit override is kept.
+        The tenant is bound to the authenticated claim: a ``tenant_id`` argument
+        that does not match the verified tenant is refused rather than silently
+        honored, so the meta-tool surface cannot be used to reach across tenant
+        boundaries.
         """
         request = None
         if get_http_request is not None:
@@ -130,16 +129,12 @@ def _register_tools(mcp: FastMCP) -> None:
             request_id = getattr(state, "request_id", None)
         else:
             verified_tenant = settings.default_tenant_id
-            roles = ["admin"] if settings.auth_mode == "disabled" else []
+            roles = []
             scopes = []
-            user_id = "local-dev" if settings.auth_mode == "disabled" else "unknown-user"
+            user_id = "unknown-user"
             request_id = None
 
-        if (
-            override_tenant_id
-            and settings.auth_mode != "disabled"
-            and override_tenant_id != verified_tenant
-        ):
+        if override_tenant_id and override_tenant_id != verified_tenant:
             raise ToolError(
                 "cross_tenant_forbidden: the tenant_id argument does not match the "
                 "authenticated tenant; cross-tenant access is not allowed on /mcp."

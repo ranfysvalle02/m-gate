@@ -227,8 +227,8 @@ async def test_protected_resource_metadata_present_under_jwks(reset_settings, mo
 
 
 @pytest.mark.asyncio
-async def test_protected_resource_metadata_404_when_disabled(reset_settings, monkeypatch):
-    monkeypatch.setenv("AUTH_MODE", "disabled")
+async def test_protected_resource_metadata_404_when_metadata_disabled(reset_settings, monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "hs256")
     monkeypatch.setenv("OAUTH_METADATA_ENABLED", "false")
     response = await protected_resource_metadata(
         _request("GET", "/.well-known/oauth-protected-resource")
@@ -292,31 +292,3 @@ async def test_basic_auth_on_mcp_rejects_bad_credentials(reset_settings, monkeyp
     await middleware(scope, sink.receive, sink.send)
     assert sink.status == 401
     assert "basic" in sink.headers.get("www-authenticate", "").lower()
-
-
-@pytest.mark.asyncio
-async def test_basic_auth_on_mcp_ignored_when_auth_disabled(reset_settings, monkeypatch):
-    # In disabled mode the gateway trusts every caller, so a stray (even invalid)
-    # Basic header must not turn an open deployment into a 401 machine.
-    monkeypatch.setenv("AUTH_MODE", "disabled")
-    monkeypatch.setenv("MCP_BASIC_AUTH_ENABLED", "true")
-
-    async def fail_resolve(email, password):  # pragma: no cover - must not be called
-        raise AssertionError("Basic auth must not run in disabled mode")
-
-    monkeypatch.setattr("gateway.middleware.auth.resolve_login_principal", fail_resolve)
-
-    reached = {}
-
-    async def ok_app(scope, receive, send):
-        reached["ok"] = True
-        await send({"type": "http.response.start", "status": 200, "headers": []})
-        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
-
-    middleware = AuthMiddleware(ok_app)
-    creds = base64.b64encode(b"svc@x.com:wrong").decode()
-    scope = _scope("/rpc", "POST", headers=[(b"authorization", f"Basic {creds}".encode())])
-    sink = _Sink()
-    await middleware(scope, sink.receive, sink.send)
-    assert reached.get("ok") is True
-    assert sink.status == 200

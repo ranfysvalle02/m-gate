@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
+import logging
+import secrets
 from typing import Any
 
 from fastapi import HTTPException, Query, Request, status
 
 from models.admin import (
+    DemoScopesResponse,
+    DemoUserCreateRequest,
+    DemoUserCreateResponse,
     PasswordChangeRequest,
     UserCreateRequest,
     UserListResponse,
     UserResponse,
+    UserTokenRequest,
+    UserTokenResponse,
     UserUpdateRequest,
     WhoAmIResponse,
 )
 from services import users as users_service
+from services.admin_session import mint_bearer_jwt, mint_session
 from services.passwords import verify_password
+from services.users import DEMO_USER_ROLES, derive_demo_scopes
 
 from ._common import (
     _assert_can_assign_roles,
@@ -25,6 +34,13 @@ from ._common import (
     router,
     settings,
 )
+
+logger = logging.getLogger(__name__)
+
+# Bound the operator-supplied token lifetime so a typo can't mint a decade-long
+# credential, while still allowing a comfortably long demo token.
+_MIN_TOKEN_TTL_SECONDS = 60
+_MAX_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 
 
 @router.get("/whoami", response_model=WhoAmIResponse)
@@ -80,6 +96,100 @@ async def list_users(
     return UserListResponse(tenant_id=target_tenant, items=[UserResponse(**u) for u in users])
 
 
+@router.get("/users/demo-scopes", response_model=DemoScopesResponse)
+async def get_demo_scopes(
+    request: Request,
+    tenant_id: str | None = Query(default=None),
+) -> DemoScopesResponse:
+    """Recommended demo roles/scopes for a tenant, derived from its live catalog.
+
+    Powers the console's "Demo" role preset so a manually-created demo user gets a
+    scope set that actually clears discovery + invocation — declared before
+    ``GET /users/{user_id}`` so the literal path wins over the wildcard.
+    """
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    scopes = await derive_demo_scopes(target_tenant)
+    return DemoScopesResponse(tenant_id=target_tenant, roles=list(DEMO_USER_ROLES), scopes=scopes)
+
+
+@router.post(
+    "/users/demo", response_model=DemoUserCreateResponse, status_code=status.HTTP_201_CREATED
+)
+async def create_demo_user(
+    request: Request,
+    payload: DemoUserCreateRequest | None = None,
+) -> DemoUserCreateResponse:
+    """One-click: create a ready-to-use, tool-invoking demo account.
+
+    Generates a password and (unless supplied) a unique email, grants
+    ``tool:invoke`` plus catalog-derived scopes, and returns the credential once.
+    The result is immediately usable with ``POST /users/{id}/token`` to hand the
+    demo consumer a bearer + ``mcp.json``. Honors the same tenant-scoping RBAC as
+    the rest of the user surface (a tenant-admin can only target their own tenant).
+    """
+    payload = payload or DemoUserCreateRequest()
+    target_tenant = _resolve_target_tenant(request, payload.tenant_id)
+    scopes = await derive_demo_scopes(target_tenant)
+    password = secrets.token_urlsafe(12)
+    created_by = str(getattr(request.state, "user_id", "")) or None
+
+    user = await _create_demo_user_record(
+        email=payload.email,
+        tenant_id=target_tenant,
+        scopes=scopes,
+        password=password,
+        created_by=created_by,
+    )
+    await users_service.sync_session_context(user)
+
+    logger.info(
+        "Demo user created: actor=%s target=%s tenant=%s scopes=%s",
+        created_by or "unknown",
+        user["email"],
+        target_tenant,
+        scopes,
+    )
+    return DemoUserCreateResponse(user=UserResponse(**user), password=password, created=True)
+
+
+async def _create_demo_user_record(
+    *,
+    email: str | None,
+    tenant_id: str,
+    scopes: list[str],
+    password: str,
+    created_by: str | None,
+) -> dict[str, Any]:
+    """Create the demo user, retrying generated emails on the rare collision.
+
+    An operator-supplied email that already exists is a hard 409 (the caller chose
+    it); an auto-generated address simply gets re-rolled so one-click never fails
+    on an astronomically unlikely clash.
+    """
+    operator_supplied = bool(email and email.strip())
+    attempts = 1 if operator_supplied else 5
+    last_exc: users_service.UserAlreadyExists | None = None
+    for _ in range(attempts):
+        candidate = email if operator_supplied else f"demo-{secrets.token_hex(3)}@demo.local"
+        try:
+            return await users_service.create_user(
+                email=candidate or "",
+                password=password,
+                tenant_id=tenant_id,
+                roles=list(DEMO_USER_ROLES),
+                scopes=scopes,
+                status="active",
+                created_by=created_by,
+            )
+        except users_service.UserAlreadyExists as exc:
+            last_exc = exc
+        except users_service.UserError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+            ) from exc
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(last_exc))
+
+
 @router.post("/users/me/password")
 async def change_my_password(request: Request, payload: PasswordChangeRequest) -> dict[str, Any]:
     caller_email = str(getattr(request.state, "user_id", ""))
@@ -104,6 +214,93 @@ async def change_my_password(request: Request, payload: PasswordChangeRequest) -
 async def get_user(request: Request, user_id: str) -> UserResponse:
     doc = await _load_managed_user(request, user_id)
     return UserResponse(**users_service.public_user(doc))
+
+
+@router.post("/users/{user_id}/token", response_model=UserTokenResponse)
+async def mint_user_token(
+    request: Request,
+    user_id: str,
+    payload: UserTokenRequest | None = None,
+) -> UserTokenResponse:
+    """Mint a ready-to-use bearer token carrying a managed user's identity.
+
+    Authorization reuses :func:`_load_managed_user`: a tenant-admin may only mint
+    for users inside their own tenant and never for a platform-admin account.
+    This grants no privilege the caller lacks -- it is no more powerful than the
+    admin-initiated password reset already exposed on this surface.
+
+    The token's shape is auth-mode aware:
+
+    * ``hs256`` -- a real scoped bearer (roles + groups/scopes), which the
+      gateway verifies against ``jwt_secret``.
+    * ``jwks`` -- the gateway cannot forge a token its IdP-backed verifier
+      trusts, so it falls back to a roles-only admin-session token (accepted on
+      ``/rpc`` + ``/mcp``) and surfaces a caveat.
+    """
+    doc = await _load_managed_user(request, user_id)
+    user = users_service.public_user(doc)
+    email = str(user.get("email", ""))
+    tenant_id = str(user.get("tenant_id", "")) or settings.default_tenant_id
+    roles = list(user.get("roles", []))
+    scopes = list(user.get("scopes", []))
+    role_set = set(roles)
+    data_plane_ok = "admin" in role_set or "tool:invoke" in role_set
+
+    caveat: str | None = None
+
+    if settings.auth_mode == "jwks":
+        token = mint_session(email, tenant_id=tenant_id, roles=roles)
+        expires_in = settings.admin_session_ttl_seconds
+        caveat = (
+            "auth_mode is 'jwks': this is a roles-only admin-session token "
+            "(no fine-grained scopes). For scoped tokens, issue them from your IdP."
+        )
+    else:  # hs256
+        expires_in = _resolve_token_ttl(payload)
+        token = mint_bearer_jwt(
+            email,
+            tenant_id=tenant_id,
+            roles=roles,
+            scopes=scopes,
+            ttl_seconds=expires_in,
+        )
+
+    if not data_plane_ok:
+        gate_note = (
+            "This account lacks the 'admin' or 'tool:invoke' role, so the token "
+            "authenticates but is rejected at the /rpc and /mcp gate."
+        )
+        caveat = f"{caveat} {gate_note}".strip() if caveat else gate_note
+
+    # A minted token is a credential; record who issued one for whom so the act
+    # is auditable (the token value itself is never logged).
+    logger.info(
+        "Access token minted: actor=%s target=%s tenant=%s roles=%s ttl_seconds=%s",
+        getattr(request.state, "user_id", "unknown"),
+        email,
+        tenant_id,
+        roles,
+        expires_in,
+    )
+
+    return UserTokenResponse(
+        auth_mode=settings.auth_mode,
+        token=token,
+        expires_in=expires_in,
+        tenant_id=tenant_id,
+        roles=roles,
+        scopes=scopes,
+        data_plane_ok=data_plane_ok,
+        caveat=caveat,
+    )
+
+
+def _resolve_token_ttl(payload: UserTokenRequest | None) -> int:
+    """Clamp the requested TTL (minutes) into a sane window of seconds."""
+    if payload is None or payload.ttl_minutes is None:
+        return settings.admin_session_ttl_seconds
+    requested = payload.ttl_minutes * 60
+    return max(_MIN_TOKEN_TTL_SECONDS, min(_MAX_TOKEN_TTL_SECONDS, requested))
 
 
 @router.patch("/users/{user_id}", response_model=UserResponse)
