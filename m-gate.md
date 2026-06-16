@@ -143,7 +143,7 @@ The tabular world makes that four systems: a relational database for the registr
 
 But a tool's registry entry, the policy attached to it, the indexes you search it by, and the telemetry it emits are not four kinds of data. They are one document, viewed four ways. The fragmentation was never inherent to the problem — it was an artifact of storing one shape across four engines that each understood only a slice of it.
 
-Collapse them back into the model they always shared and the payoff isn't a feature you bought — it's surface area you no longer have to operate. Scope becomes a filter on the *same* hybrid query that does the routing — a tool a caller isn't entitled to never becomes a candidate. Keeping the catalog fresh becomes a bulk upsert into the *same* collection. The audit trail stops being mere forensics and becomes a labeled dataset: every query, every tool returned, every call's outcome — the raw material to make the next routing decision better, sitting in the same database you already query. Same documents, same engine, the whole way up.
+Collapse them back into the model they always shared and the payoff isn't a feature you bought — it's surface area you no longer have to operate. Scope becomes a filter on the *same* hybrid query that does the routing — a tool a caller isn't entitled to never becomes a candidate. And because that entitlement is *data* — checked in the query, never whispered to the model and trusted to its good intentions — no amount of clever prompting talks an untrusted agent past it; the boundary lives in the document, where it cannot be argued with. Keeping the catalog fresh becomes a bulk upsert into the *same* collection. The audit trail stops being mere forensics and becomes a labeled dataset: every query, every tool returned, every call's outcome — the raw material to make the next routing decision better, sitting in the same database you already query. Same documents, same engine, the whole way up.
 
 The protocol was a contract. The contract took the shape of JSON. And a store whose native unit *is* JSON was never going to be a compromise. It was always going to be the obvious home.
 
@@ -159,22 +159,3 @@ What is the shape of a request? It is the shape of a document.
 And the place a document was always meant to live is the database that speaks it as a first language.
 
 ---
-
-## And here it is, running
-
-This is not a thought experiment. The `mdb-mcp-gateway` in this repository is the story made real: a [FastMCP](https://github.com/jlowin/fastmcp) + FastAPI gateway speaking JSON-RPC 2.0, with the entire control plane — `tool_catalog`, `routing_registry`, `semantic_cache`, and a time-series `audit_telemetry` — living on one MongoDB Atlas engine. Routing is the `$rankFusion` query from Chapter IV, run over a single collection.
-
-You can watch the arms disagree yourself. The gateway exposes a `mode` so you can run the *same* query three ways and see fusion reconcile them:
-
-```bash
-for MODE in vector text hybrid; do
-  curl -s -X POST http://localhost:8000/rpc \
-    -H "Content-Type: application/json" \
-    -d "{\"jsonrpc\":\"2.0\",\"id\":\"m\",\"method\":\"tools/search\",
-         \"params\":{\"query\":\"look up a purchase by its id\",\"limit\":3,\"mode\":\"$MODE\"}}"
-done
-```
-
-For the full technical companion — identity-bound scope, resiliency, queryable encryption, the unified-platform pattern, and every claim mapped to the code that backs it — see [blog.md](blog.md).
-
-The shape was always the document. The gateway just stopped pretending otherwise.
