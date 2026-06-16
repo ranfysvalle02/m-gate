@@ -145,6 +145,12 @@ curl http://localhost:8000/rpc \
 > Getting a token authenticates you; it does **not** bypass authorization. The
 > principal still needs `admin` or `tool:invoke` to use `/rpc` (see §3).
 
+Not a curl person? The admin console mints the same scoped bearer with one click
+(**Users → Generate token**, or **Create demo user**) and shows the one-time
+password, the token, and a ready-to-paste client snippet:
+
+![Console-minted credential: one-time password, bearer token, and Cursor mcp.json](docs/images/demo-credential.png)
+
 ### 2.2 `GET /.well-known/oauth-protected-resource` — discovery (RFC 9728)
 
 Advertises the configured authorization server so spec-compliant clients can
@@ -226,6 +232,11 @@ gateway-verified `request.state` (tenant, roles, scopes) via FastMCP's
 
 ## 4. Admin sessions & user store
 
+The admin surface (`/ui`, `/admin/*`) is gated by a login in **every** `AUTH_MODE` —
+there is no unauthenticated path:
+
+![Branded admin login screen](docs/images/login.png)
+
 - **Sessions** (`services/admin_session.py`): HS256-signed token, default 8h TTL
   (`ADMIN_SESSION_TTL_SECONDS`). In the UI it rides an **HttpOnly** cookie,
   `Secure` over HTTPS, `SameSite=Lax`. The token carries `tenant_id` + `roles`.
@@ -234,6 +245,13 @@ gateway-verified `request.state` (tenant, roles, scopes) via FastMCP's
   stored and the hash is never returned by the API.
 - **Bootstrap admin**: `ADMIN_EMAIL` / `ADMIN_PASSWORD` survives only as a
   fallback superuser when the user store is empty or unreachable.
+
+Users belong to the tenant selected in the top bar; a tenant admin manages users
+and servers within their tenant, while only a platform admin can grant the
+platform-admin role or manage users across tenants. Each row exposes
+**Generate token**, enable/disable, password reset, and delete:
+
+![Users tab listing accounts with roles, catalog-derived scopes, and per-user actions](docs/images/users.png)
 
 ---
 

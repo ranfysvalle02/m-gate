@@ -138,6 +138,11 @@ PROVIDER_DEFAULT_MODELS: dict[str, str] = {
   `/ui -> Embeddings` (control DB wins over env), so you can move dev -> Voyage
   without a redeploy.
 
+The admin panel makes the active provider obvious — here the platform default is
+running on Voyage (`voyage-3`), with the key encrypted at rest:
+
+![Embeddings panel: active provider voyage, model voyage-3, API key encrypted with a shared Fernet key](docs/images/embeddings.png)
+
 ---
 
 ## 4. The payoff: hybrid search where the model and the engine are the same vendor
@@ -247,6 +252,11 @@ your local `.env`.
 ```bash
 VOYAGE_API_KEY=pa-...             # that's it — provider auto-resolves to voyage
 ```
+
+After `docker compose up`, confirm it took in the admin panel at `/ui -> Embeddings`
+(or `GET /admin/embedding`) — **active provider** should read `voyage`:
+
+![Embeddings panel confirming the active provider is Voyage, model voyage-3](docs/images/embeddings.png)
 
 Equivalent explicit form (and what you set on Render/another host), still fully
 overridable by the admin panel at runtime:

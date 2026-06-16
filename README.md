@@ -419,7 +419,22 @@ python -m scripts.migrate_cache --mode reembed --batch-size 200
 
 ### Web admin console
 
-The gateway now serves a WordPress-style admin UI at `http://localhost:8000/ui`.
+The gateway serves a branded, dark-mode admin UI at `http://localhost:8000/ui` —
+sign in, mint tokens, wire up servers, and connect an MCP client without ever
+touching a terminal.
+
+![Admin console dashboard with the one-click Connect Now hero](docs/images/dashboard-connect-now.png)
+
+The **Connect Now** hero is the zero-to-connected fast path: one click mints a
+tool-ready demo account and hands back a bearer token plus a ready-to-paste Cursor
+`mcp.json` (the one-time password is shown once):
+
+![Demo credential modal showing the bearer token, one-time password, and Cursor mcp.json](docs/images/demo-credential.png)
+
+Author Python functions that run sandboxed in WebAssembly and surface as real MCP
+tools, or connect servers you already run — all from the **MCP Servers** studio:
+
+![MCP Servers studio listing virtual code servers and connected servers](docs/images/servers-studio.png)
 
 - In `docker-compose.yml`, demo credentials are preconfigured:
   - `ADMIN_EMAIL=demo@demo.com`
@@ -448,6 +463,12 @@ ways, with the control DB taking precedence over the environment:
 
 1. **Environment** (boot-time default).
 2. **Admin panel** at `/ui` → **Embeddings** (runtime, persisted, recommended).
+
+Provider, model, and key are editable at runtime (control DB wins over env). The
+screenshot below shows the panel running on **Voyage AI** — MongoDB's first-party
+embedding stack, the recommended drop-in (see [VOYAGE-AI.md](VOYAGE-AI.md)):
+
+![Embeddings panel running on Voyage AI, model voyage-3, with the key encrypted at rest](docs/images/embeddings.png)
 
 Supported providers:
 

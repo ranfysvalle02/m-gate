@@ -14,12 +14,22 @@ console, and connect Cursor — in about five minutes.
 ## 1. Prerequisites
 
 - **Docker** + Docker Compose
-- **[Ollama](https://ollama.com)** running on your host (the default embedding provider)
-- The embedding model pulled (bootstrap fails loudly if it's missing):
+- **Embeddings** — pick one provider (the bootstrap fails loudly if it can't reach one):
+  - **Voyage AI (recommended — no local model):** drop a `VOYAGE_API_KEY` into a local
+    `.env` file. `docker compose` reads it and the gateway **auto-selects Voyage**
+    (model `voyage-3`, vector width auto-detected). Voyage is MongoDB's first-party
+    embedding stack — see [VOYAGE-AI.md](VOYAGE-AI.md).
 
-```bash
-ollama pull nomic-embed-text
-```
+    ```bash
+    echo 'VOYAGE_API_KEY=pa-...' >> .env
+    ```
+
+  - **Ollama (offline fallback):** run [Ollama](https://ollama.com) on your host and
+    pull the default model:
+
+    ```bash
+    ollama pull nomic-embed-text
+    ```
 
 ## 2. Start the stack
 
@@ -47,6 +57,8 @@ curl http://localhost:8000/health
 
 Go to **http://localhost:8000/ui** and sign in with the local bootstrap admin:
 
+![Branded admin login screen](docs/images/login.png)
+
 | Field | Value |
 | --- | --- |
 | Email | `demo@demo.com` |
@@ -55,6 +67,11 @@ Go to **http://localhost:8000/ui** and sign in with the local bootstrap admin:
 > These are local-dev defaults from `docker-compose.yml`. **Never ship them** — set a
 > strong `ADMIN_EMAIL` / `ADMIN_PASSWORD` for any real deployment (the gateway refuses
 > to boot in `ENVIRONMENT=production` with weak ones).
+
+Once you're in, the dashboard greets you with a **Connect Now** hero — the fastest
+path from zero to a connected client:
+
+![Dashboard with the Connect Now hero, mcp.json snippet, and MCP endpoint](docs/images/dashboard-connect-now.png)
 
 ## 4. Get a working credential (no terminal needed)
 
@@ -70,6 +87,8 @@ Open the **Users** tab. You have two one-click options:
 Either way the console mints a *real* scoped bearer JWT signed with the gateway's
 `jwt_secret`, embedding the user's `tenant_id`, `roles`, and `scopes`. Every account
 creation and token issuance is audit-logged.
+
+![Credential modal with the one-time password, bearer token, and ready-to-paste Cursor mcp.json](docs/images/demo-credential.png)
 
 > Want a demo user in the manual form instead? Pick the **Demo (can invoke tools)**
 > role — the scopes field auto-fills from the tenant's catalog so the account works.
@@ -101,6 +120,11 @@ project's `.cursor/mcp.json`). It looks like this:
 }
 ```
 
+Prefer a guided walkthrough? The **Tenants → Connect** dialog hands you the RPC
+endpoint, token recipes, the client snippet, and an egress allowlist in one place:
+
+![Tenant connect dialog with the RPC endpoint, token recipes, and MCP client snippet](docs/images/tenant-connect.png)
+
 Reload Cursor's MCP servers. The gateway exposes meta-tools (`search_tools`,
 `invoke_tool`, …) that route your agent to the right downstream tool by **meaning**.
 
@@ -117,6 +141,11 @@ curl -X POST http://localhost:8000/rpc \
 Pass a task in the `X-MCP-Query` header to get a curated, ranked shortlist instead of
 the full catalog — the "route by meaning" front door.
 
+> New to MCP or JSON-RPC? Click **Learn** in the console's top bar for a built-in,
+> copy-paste guide to the protocol, message shapes, and this gateway's methods:
+>
+> ![Built-in MCP and JSON-RPC protocol guide in the admin console](docs/images/learn-mcp.png)
+
 ---
 
 ## Troubleshooting
@@ -126,7 +155,7 @@ the full catalog — the "route by meaning" front door.
 | `401 {"detail":"Missing bearer token."}` | The data plane always requires auth. Attach `Authorization: Bearer <token>` (step 4). |
 | `401 {"detail":"Invalid bearer token."}` | Token expired or signed with a different secret. Generate a fresh one from the console. |
 | `403 {"detail":"Insufficient permissions."}` | The principal lacks `tool:invoke` (or `admin`). Use `agent@demo.com`, or grant the role in the Users tab. |
-| Bootstrap exits during embedding preflight | Ollama isn't reachable or `nomic-embed-text` isn't pulled. Run `ollama pull nomic-embed-text` and retry. |
+| Bootstrap exits during embedding preflight | The selected embedding provider is unreachable. For **Voyage**, check `VOYAGE_API_KEY` in your `.env`; for **Ollama**, run `ollama pull nomic-embed-text`. Then retry. |
 | `503 {"detail":"Authentication temporarily unavailable."}` | Only in `AUTH_MODE=jwks`: the JWKS endpoint is unreachable. Check `JWKS_URI` / `JWKS_LOCAL_PATH`. |
 
 ## Going to production
