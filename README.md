@@ -1,5 +1,7 @@
 # mdb-mcp-gateway
 
+![](m-gate.png)
+
 > A Smart MCP Gateway that routes AI agents to the right tools by **meaning**, not by a hand-maintained table — powered by **hybrid search on MongoDB Atlas**.
 
 ---
