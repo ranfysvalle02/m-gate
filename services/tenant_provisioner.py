@@ -421,8 +421,7 @@ async def purge_expired_tenants(
                 )
             except Exception:
                 logger.error(
-                    "Failed to release purge claim for tenant '%s'; it will need "
-                    "manual cleanup.",
+                    "Failed to release purge claim for tenant '%s'; it will need manual cleanup.",
                     tenant_id,
                     exc_info=True,
                 )
