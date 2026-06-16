@@ -308,21 +308,31 @@ External controls expected around the gateway:
 
 ## 8) Known Gaps / Roadmap
 
-These are intentionally deferred from the focused hardening pass and should be
-tracked as follow-up work.
+Recently shipped (opt-in, default no-op so behavior is unchanged until configured):
 
-1. Cache migration throughput enhancements
-   - optional bounded concurrency and streaming iteration for very large caches.
-2. Reprovision control plane ergonomics
+- Tenant soft-delete + retention: `DELETE /admin/tenants/{id}` is a reversible
+  soft-delete by default (with a `POST .../restore` and a background purge
+  reaper that drops the DB before removing the control doc); `?hard=true`
+  keeps the immediate hard delete.
+- Streaming usage/telemetry export: `GET /admin/tenants/{id}/usage/export`
+  (CSV) and `GET /admin/telemetry/export` (JSONL) stream over a cursor with no
+  load-all ceiling.
+- Sandbox pool max-age + health sweep: idle workers are proactively retired by
+  age and ping-health, complementing the reactive `max_jobs` recycle.
+- Quota preflight: code tools whose projected worst-case sandbox cost cannot fit
+  the remaining `sandbox_seconds` quota are rejected before execution, via a
+  single shared helper enforced identically on `/rpc` and `/mcp`.
+- OOM-safe cache migration: status/purge/reembed and catalog reprovision stream
+  in bounded pages with batched embed/delete instead of full-collection loads.
+
+Intentionally deferred follow-up work:
+
+1. Reprovision control plane ergonomics
    - cancellation/pause semantics and resumable checkpoints.
-3. Tenant lifecycle extension
-   - explicit deprovision safeguards (dry run/confirmation policy) and retention.
-4. Metering/reporting expansion
-   - richer event analytics windows and export endpoints.
-5. Sandbox pool lifecycle hardening
-   - optional max-age/health sweep policies for long-lived workers.
-6. Quota semantics expansion
-   - optional preflight checks on projected sandbox runtime budgets.
+2. Tenant lifecycle extension
+   - deprovision dry-run/confirmation policy beyond the retention window.
+3. Metering/reporting expansion
+   - richer event analytics windows beyond raw streamed export.
 
 ## 9) Source Map
 

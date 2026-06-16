@@ -173,6 +173,7 @@ class SemanticCacheManager:
         *,
         tenant_id: str,
         ttl_seconds: int = 24 * 3600,
+        embedding: list[float] | None = None,
     ) -> None:
         collection = get_tenant_database(tenant_id)["semantic_cache"]
         embedding_service = await self._embedding_service_for_tenant(tenant_id)
@@ -180,7 +181,12 @@ class SemanticCacheManager:
         embedding_model = embedding_service.model_id
         embedding_dim = embedding_service.dimensions
         serialized = self._serialize(tool_name, arguments)
-        embedding = await embedding_service.embed_text(serialized)
+        # Callers that already embedded the cache key in a batch (e.g. the
+        # migration service) pass the vector in to avoid a redundant per-doc
+        # provider round-trip; the version/model/dims still come from the active
+        # service so the stored doc stays internally consistent.
+        if embedding is None:
+            embedding = await embedding_service.embed_text(serialized)
         arguments_hash = self._hash(serialized)
         expires_at = datetime.now(UTC) + timedelta(seconds=max(1, ttl_seconds))
         await collection.update_one(

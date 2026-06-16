@@ -114,10 +114,22 @@ class Settings(BaseSettings):
     usage_quota_period: Literal["monthly"] = "monthly"
     default_quota_calls_per_period: int = 0
     default_quota_sandbox_seconds_per_period: int = 0
+    # Reject a code-tool call up front when its worst-case sandbox cost cannot fit
+    # the tenant's remaining sandbox-seconds budget, instead of starting work that
+    # gets killed mid-flight. Only applies when a sandbox-seconds quota is set.
+    quota_preflight_enabled: bool = True
     # How long a tenant's suspended/active status is cached per replica. Keeps the
     # hot-path status check cheap; also the max delay before a suspend issued on
     # one replica is honored by the others. 0 => no cache (read every request).
     tenant_status_cache_ttl_seconds: int = 5
+    # Soft-delete retention: a deleted tenant is locked out immediately but its
+    # database is kept for this many days so the delete can be reversed, then the
+    # purge reaper drops it permanently.
+    tenant_retention_days: int = 30
+    # Cadence of the background reaper that hard-drops soft-deleted tenants whose
+    # retention window has elapsed. 0 => disabled (no reaper runs; purge is then a
+    # manual/explicit hard-delete only).
+    tenant_purge_sweep_interval_seconds: int = 0
     # Runtime for executing transport="code" tools when execution is enabled.
     # "wasm" runs code in the WebAssembly sandbox worker; "disabled" keeps the
     # runtime hard-off regardless of code_tool_execution_enabled.
@@ -151,6 +163,13 @@ class Settings(BaseSettings):
     # Recycle a pooled worker after this many jobs (0 => never) as a leak/RSS
     # backstop for long-lived workers.
     sandbox_worker_max_jobs: int = 0
+    # Proactively retire an idle pooled worker once it has been resident this long
+    # (seconds), complementing the reactive per-job recycle above. Bounds memory
+    # fragmentation / drift on long-lived workers. 0 => never retire by age.
+    sandbox_worker_max_age_seconds: int = 0
+    # Cadence of the background pool sweep that retires over-age idle workers and
+    # discards idle workers that fail a health ping. 0 => disabled (no sweep).
+    sandbox_pool_sweep_interval_seconds: int = 0
     # Max wait for a free pooled worker before failing a call (0 => derive from
     # the sandbox wall timeout).
     sandbox_pool_acquire_timeout_ms: int = 0
@@ -229,6 +248,12 @@ class Settings(BaseSettings):
     embedding_circuit_reset_seconds: int = 30
     embedding_cache_ttl_seconds: int = 300
     embedding_cache_max_entries: int = 512
+    # Semantic-cache / catalog re-embedding migration is streamed in bounded pages
+    # so a very large cache never materializes in memory at once. fetch_page_size
+    # bounds how many stale docs are pulled per round trip; embed_concurrency caps
+    # simultaneous re-embed writes (mirrors the sandbox concurrency pattern).
+    cache_migration_fetch_page_size: int = 500
+    cache_migration_embed_concurrency: int = 8
     # Hard deadline for a single downstream JSON-RPC call (Section 4 of the blog).
     downstream_timeout_ms: int = 2000
     downstream_jwt_enabled: bool = True

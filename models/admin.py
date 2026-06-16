@@ -17,6 +17,8 @@ class TenantResponse(BaseModel):
     db_name: str
     status: str = "active"
     suspended_reason: str | None = None
+    deleted_at: datetime | None = None
+    purge_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -28,7 +30,17 @@ class TenantStatusUpdateRequest(BaseModel):
 class TenantDeleteResponse(BaseModel):
     tenant_id: str
     db_name: str
+    # "deleted" => soft-deleted (retained until purge_at); "purged" => hard-dropped.
+    status: str = "deleted"
     deleted: bool = True
+    purge_at: datetime | None = None
+
+
+class TenantRestoreResponse(BaseModel):
+    tenant_id: str
+    db_name: str
+    status: str = "active"
+    restored: bool = True
 
 
 class ServerUpsertRequest(BaseModel):

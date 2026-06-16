@@ -476,6 +476,48 @@ async def test_call_downstream_tool_blocked_when_tenant_suspended(
 
 
 @pytest.mark.asyncio
+async def test_call_downstream_tool_rejected_by_sandbox_preflight(
+    patch_mongo, monkeypatch, reset_settings
+):
+    from fastmcp.exceptions import ToolError
+
+    import gateway.mcp_server as mcp_mod
+    from config.settings import get_settings
+
+    # 1s sandbox quota = 1000ms remaining; the code tool's 5000ms wall budget
+    # cannot fit, so the shared preflight must reject before execution -- exactly
+    # as the /rpc data plane does (DESIGN.md parity guarantee).
+    settings = get_settings()
+    object.__setattr__(settings, "default_quota_sandbox_seconds_per_period", 1)
+    object.__setattr__(settings, "quota_preflight_enabled", True)
+
+    patch_mongo["tool_catalog"].docs.append(
+        {
+            "server": "my-funcs",
+            "name": "add",
+            "metadata": {"transport": "code", "wall_timeout_ms": 5000},
+        }
+    )
+
+    class _Reg:
+        called = False
+
+        async def call_tool(
+            self, *, server_name, tool_name, arguments, tenant_id=None, caller=None
+        ):
+            _Reg.called = True
+            return {"ok": True}
+
+    monkeypatch.setattr(mcp_mod, "get_proxy_registry", lambda: _Reg())
+
+    captured = _capture_tools(mcp_mod)
+    with pytest.raises(ToolError, match="sandbox_quota_preflight"):
+        await captured["call_downstream_tool"](server="my-funcs", name="add", arguments={})
+    # The sandbox/downstream is never reached.
+    assert _Reg.called is False
+
+
+@pytest.mark.asyncio
 async def test_mcp_discovery_blocked_when_tenant_suspended(
     patch_mongo, monkeypatch, reset_settings
 ):

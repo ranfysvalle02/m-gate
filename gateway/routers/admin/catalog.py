@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import Query, Request
+from fastapi import HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 
 from models.admin import (
     AdminSearchRequest,
@@ -22,7 +25,14 @@ from models.admin import (
 from services.registry_watcher import get_catalog_version
 
 from . import _common as c
-from ._common import _is_platform_admin, _resolve_target_tenant, router, settings
+from ._common import (
+    _build_time_range,
+    _is_platform_admin,
+    _require_tenant_admin,
+    _resolve_target_tenant,
+    router,
+    settings,
+)
 
 
 async def _resolve_target_tenants_for_cache_migration(
@@ -130,6 +140,53 @@ async def list_telemetry(
         for doc in docs[: params.limit]
     ]
     return TelemetryListResponse(tenant_id=target_tenant, items=items)
+
+
+@router.get("/telemetry/export")
+async def export_telemetry(
+    request: Request,
+    tenant_id: str | None = Query(default=None),
+    export_format: str = Query(default="jsonl", alias="format"),
+    from_: str | None = Query(default=None, alias="from"),
+    to: str | None = Query(default=None),
+) -> StreamingResponse:
+    """Stream a tenant's ``audit_telemetry`` as JSONL (one object per line).
+
+    Records are iterated off a ``find()`` cursor (``async for``) over the
+    ``timestamp`` range and serialized line by line, so the full time-series is
+    never loaded into memory the way the buffered ``/telemetry`` listing is.
+    """
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    if export_format != "jsonl":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Only format=jsonl is supported for telemetry export.",
+        )
+
+    query: dict[str, Any] = {}
+    ts_range = _build_time_range(from_, to)
+    if ts_range is not None:
+        query["timestamp"] = ts_range
+
+    cursor = (
+        c.get_tenant_database(target_tenant)["audit_telemetry"].find(query).sort("timestamp", 1)
+    )
+
+    async def _stream() -> AsyncIterator[str]:
+        async for doc in cursor:
+            doc.pop("_id", None)
+            yield json.dumps(doc, default=str, separators=(",", ":")) + "\n"
+
+    filename = f"telemetry-{target_tenant}.jsonl"
+    return StreamingResponse(
+        _stream(),
+        media_type="application/x-ndjson",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.get("/stats", response_model=StatsResponse)

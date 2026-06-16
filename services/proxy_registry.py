@@ -200,6 +200,18 @@ class InMemoryFastMCPRegistry:
             tool_metadata = dict(tool.get("metadata") or {})
             if server_transport == "code":
                 tool_metadata["transport"] = "code"
+                # Surface a per-tool wall-clock budget (when authored) so the
+                # quota preflight can project this tool's worst-case sandbox cost
+                # from the catalog doc alone. Sanitize to a positive int; drop it
+                # otherwise so a bogus value falls back to the global default.
+                try:
+                    wall_timeout_ms = int(tool_metadata.get("wall_timeout_ms") or 0)
+                except (TypeError, ValueError):
+                    wall_timeout_ms = 0
+                if wall_timeout_ms > 0:
+                    tool_metadata["wall_timeout_ms"] = wall_timeout_ms
+                else:
+                    tool_metadata.pop("wall_timeout_ms", None)
             text_for_embedding = f"{server_name}\n{name}\n{description}".strip()
             schema_hash = self._schema_hash(
                 server_name=server_name,

@@ -11,20 +11,45 @@ TENANTS_COLLECTION = "tenants"
 
 STATUS_ACTIVE = "active"
 STATUS_SUSPENDED = "suspended"
-VALID_STATUSES = frozenset({STATUS_ACTIVE, STATUS_SUSPENDED})
+STATUS_DELETED = "deleted"
+VALID_STATUSES = frozenset({STATUS_ACTIVE, STATUS_SUSPENDED, STATUS_DELETED})
 
 
-class TenantSuspendedError(Exception):
-    """A request targeted a tenant whose access is administratively suspended.
+class TenantInactiveError(Exception):
+    """Base for hot-path failures where a tenant is not in the ``active`` state.
 
-    Raised on the hot path so callers can return a clear, protocol-safe error
-    instead of executing tools or consuming resources for a suspended tenant.
+    Raised before any tool runs so callers can return a clear, protocol-safe
+    error instead of executing tools or consuming resources for a tenant that is
+    administratively suspended or soft-deleted. Subclasses carry a machine
+    ``status_code`` and a top-level ``message`` so the one error handler on each
+    surface can render the right frame without branching per status.
     """
+
+    status_code: str = "tenant_inactive"
+    message: str = "Tenant is not active."
 
     def __init__(self, tenant_id: str, reason: str | None = None) -> None:
         self.tenant_id = tenant_id
-        self.reason = reason or "Tenant access is suspended."
-        super().__init__(f"Tenant '{tenant_id}' is suspended: {self.reason}")
+        self.reason = reason or self.message
+        super().__init__(f"Tenant '{tenant_id}' is {self.status_code}: {self.reason}")
+
+
+class TenantSuspendedError(TenantInactiveError):
+    """A request targeted a tenant whose access is administratively suspended."""
+
+    status_code = "tenant_suspended"
+    message = "Tenant access is suspended."
+
+
+class TenantDeletedError(TenantInactiveError):
+    """A request targeted a tenant that has been soft-deleted.
+
+    The tenant is locked out immediately on delete; its data lingers only until
+    the retention window elapses and the purge reaper drops it.
+    """
+
+    status_code = "tenant_deleted"
+    message = "Tenant has been deleted."
 
 
 # Per-process status cache: {tenant_id: (status, monotonic_expiry)}. Suspension is
@@ -71,13 +96,22 @@ async def get_tenant_status(tenant_id: str, *, settings: Settings | None = None)
 
 
 async def assert_tenant_active(tenant_id: str, *, settings: Settings | None = None) -> None:
-    """Raise :class:`TenantSuspendedError` when the tenant is suspended."""
+    """Raise when the tenant is not active (suspended or soft-deleted).
+
+    Raises :class:`TenantSuspendedError` for a suspended tenant and
+    :class:`TenantDeletedError` for a soft-deleted one; both subclass
+    :class:`TenantInactiveError` so a single handler can map either to a frame.
+    """
     settings = settings or get_settings()
     status = await get_tenant_status(tenant_id, settings=settings)
-    if status == STATUS_SUSPENDED:
-        doc = await get_control_database()[TENANTS_COLLECTION].find_one({"tenant_id": tenant_id})
-        reason = str((doc or {}).get("suspended_reason", "")) or None
-        raise TenantSuspendedError(tenant_id, reason)
+    if status == STATUS_ACTIVE:
+        return
+    if status == STATUS_DELETED:
+        raise TenantDeletedError(tenant_id)
+    # Only suspended remains; fetch the reason lazily (off the happy path).
+    doc = await get_control_database()[TENANTS_COLLECTION].find_one({"tenant_id": tenant_id})
+    reason = str((doc or {}).get("suspended_reason", "")) or None
+    raise TenantSuspendedError(tenant_id, reason)
 
 
 async def set_tenant_status(
@@ -86,8 +120,14 @@ async def set_tenant_status(
     *,
     updated_by: str | None = None,
     reason: str | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Set a tenant's status. Returns the updated control doc, or None if missing."""
+    """Set a tenant's status. Returns the updated control doc, or None if missing.
+
+    ``extra`` carries additional ``$set`` fields applied atomically with the
+    status change (e.g. ``deleted_at`` / ``purge_at`` for a soft-delete), so the
+    status cache and the lifecycle metadata never land in two separate writes.
+    """
     normalized = _normalize_status(status)
     now = datetime.now(UTC)
     updates: dict[str, Any] = {
@@ -100,6 +140,8 @@ async def set_tenant_status(
         updates["suspended_reason"] = (reason or "").strip()
     else:
         updates["suspended_reason"] = ""
+    if extra:
+        updates.update(extra)
     doc = await get_control_database()[TENANTS_COLLECTION].find_one_and_update(
         {"tenant_id": tenant_id},
         {"$set": updates},

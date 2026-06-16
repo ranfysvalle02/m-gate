@@ -325,7 +325,11 @@ Full list with defaults: [`.env.example`](.env.example). The essentials:
 | `SANDBOX_MAX_OUTPUT_BYTES` / `SANDBOX_MAX_CONCURRENCY_PER_TENANT` | Output cap and per-tenant concurrency cap |
 | `SANDBOX_POOL_SIZE` | Prewarmed warm workers per replica (`0` = throwaway worker per call) |
 | `SANDBOX_WORKER_MAX_JOBS` / `SANDBOX_POOL_ACQUIRE_TIMEOUT_MS` | Worker recycle-after-N-jobs backstop and max wait for a free worker |
+| `SANDBOX_WORKER_MAX_AGE_SECONDS` / `SANDBOX_POOL_SWEEP_INTERVAL_SECONDS` | Retire over-age/unhealthy idle pooled workers and the sweep cadence (`0` = off) |
 | `SANDBOX_POOL_WARMUP_TIMEOUT_MS` / `SANDBOX_MODULE_CACHE_PATH` | Worker warmup deadline and compiled-module cache dir |
+| `QUOTA_PREFLIGHT_ENABLED` | Reject a code-tool call up front when its worst-case sandbox cost can't fit remaining quota |
+| `CACHE_MIGRATION_FETCH_PAGE_SIZE` / `CACHE_MIGRATION_EMBED_CONCURRENCY` | Streamed re-embed page size and bounded re-embed write concurrency |
+| `TENANT_RETENTION_DAYS` / `TENANT_PURGE_SWEEP_INTERVAL_SECONDS` | Soft-delete retention window and the purge-reaper cadence (`0` = off) |
 | `AUTO_BOOTSTRAP` | Create indexes + seed + sync catalog on startup |
 | `AUTO_PROVISION_TENANTS` | Create a tenant DB/indexes on first use |
 

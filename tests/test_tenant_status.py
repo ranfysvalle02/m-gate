@@ -5,7 +5,10 @@ import pytest
 from config.settings import get_settings
 from services.tenant_status import (
     STATUS_ACTIVE,
+    STATUS_DELETED,
     STATUS_SUSPENDED,
+    TenantDeletedError,
+    TenantInactiveError,
     TenantSuspendedError,
     assert_tenant_active,
     get_tenant_status,
@@ -58,6 +61,25 @@ async def test_resume_clears_reason_and_unblocks(patch_mongo):
 @pytest.mark.asyncio
 async def test_set_status_on_missing_tenant_returns_none(patch_mongo):
     assert await set_tenant_status("ghost", STATUS_SUSPENDED) is None
+
+
+@pytest.mark.asyncio
+async def test_set_deleted_blocks_hot_path_with_deleted_error(patch_mongo):
+    control = patch_mongo._control_db
+    await control["tenants"].insert_one({"tenant_id": "t1", "db_name": "db_t1", "status": "active"})
+
+    doc = await set_tenant_status("t1", STATUS_DELETED, updated_by="ops@x")
+    assert doc is not None and doc["status"] == STATUS_DELETED
+
+    assert await get_tenant_status("t1") == STATUS_DELETED
+    # A deleted tenant raises the deleted-specific error (a TenantInactiveError),
+    # not the suspended one, so each surface can render the right reason.
+    with pytest.raises(TenantDeletedError) as exc:
+        await assert_tenant_active("t1")
+    assert exc.value.tenant_id == "t1"
+    assert exc.value.status_code == "tenant_deleted"
+    assert isinstance(exc.value, TenantInactiveError)
+    assert not isinstance(exc.value, TenantSuspendedError)
 
 
 @pytest.mark.asyncio

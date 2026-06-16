@@ -165,6 +165,78 @@ async def test_tools_call_code_tool_execution_enabled_calls_registry(rpc_module,
 
 
 @pytest.mark.asyncio
+async def test_tools_call_code_tool_rejected_by_sandbox_preflight(rpc_module, patch_mongo):
+    # A code tool whose per-tool wall budget cannot fit the remaining sandbox
+    # quota is rejected up front, before the sandbox/downstream is ever invoked.
+    _FakeRegistry.last_call = None
+    patch_mongo["tool_catalog"].docs.append(
+        {
+            "server": "my-funcs",
+            "name": "add",
+            "scopes": ["math:run"],
+            "metadata": {"transport": "code", "wall_timeout_ms": 5000},
+        }
+    )
+    settings = rpc_module.get_settings()
+    original_exec = settings.code_tool_execution_enabled
+    original_sandbox = settings.default_quota_sandbox_seconds_per_period
+    object.__setattr__(settings, "code_tool_execution_enabled", True)
+    # 1s sandbox quota = 1000ms remaining; the tool's 5000ms budget cannot fit.
+    object.__setattr__(settings, "default_quota_sandbox_seconds_per_period", 1)
+    try:
+        request = _FakeRequest(scopes=["math:run", "server:my-funcs"], roles=[])
+        resp = await _handle(
+            rpc_module,
+            "tools/call",
+            {"server": "my-funcs", "name": "add", "arguments": {"a": 1, "b": 2}},
+            request,
+        )
+    finally:
+        object.__setattr__(settings, "code_tool_execution_enabled", original_exec)
+        object.__setattr__(settings, "default_quota_sandbox_seconds_per_period", original_sandbox)
+
+    assert resp.error is not None
+    assert resp.error.code == int(JsonRpcErrorCode.RATE_LIMITED)
+    assert resp.error.data["reason"] == "sandbox_quota_preflight"
+    assert resp.error.data["projected_ms"] == 5000
+    # The sandbox/downstream is never reached.
+    assert _FakeRegistry.last_call is None
+
+
+@pytest.mark.asyncio
+async def test_tools_call_code_tool_admitted_when_projection_fits(rpc_module, patch_mongo):
+    _FakeRegistry.last_call = None
+    patch_mongo["tool_catalog"].docs.append(
+        {
+            "server": "my-funcs",
+            "name": "add",
+            "scopes": ["math:run"],
+            "metadata": {"transport": "code", "wall_timeout_ms": 500},
+        }
+    )
+    settings = rpc_module.get_settings()
+    original_exec = settings.code_tool_execution_enabled
+    original_sandbox = settings.default_quota_sandbox_seconds_per_period
+    object.__setattr__(settings, "code_tool_execution_enabled", True)
+    # 1s = 1000ms remaining; the tool's 500ms budget fits, so it proceeds.
+    object.__setattr__(settings, "default_quota_sandbox_seconds_per_period", 1)
+    try:
+        request = _FakeRequest(scopes=["math:run", "server:my-funcs"], roles=[])
+        resp = await _handle(
+            rpc_module,
+            "tools/call",
+            {"server": "my-funcs", "name": "add", "arguments": {"a": 1, "b": 2}},
+            request,
+        )
+    finally:
+        object.__setattr__(settings, "code_tool_execution_enabled", original_exec)
+        object.__setattr__(settings, "default_quota_sandbox_seconds_per_period", original_sandbox)
+
+    assert resp.error is None
+    assert _FakeRegistry.last_call[0:2] == ("my-funcs", "add")
+
+
+@pytest.mark.asyncio
 async def test_tools_call_quota_exceeded_returns_rate_limited(rpc_module, patch_mongo):
     import services.usage_metering as usage_metering
 
@@ -614,6 +686,25 @@ async def test_non_tenant_scoped_method_ignores_suspension(rpc_module, patch_mon
     )
     resp = await _handle(rpc_module, "initialize", {}, _FakeRequest(tenant_id="local-dev"))
     assert resp.error is None
+
+
+@pytest.mark.asyncio
+async def test_tools_call_blocked_when_tenant_deleted(rpc_module, patch_mongo):
+    # A soft-deleted tenant is locked out on the hot path with a deleted-specific
+    # reason, distinct from suspension, before any authz/quota/downstream work.
+    control = patch_mongo._control_db
+    await control["tenants"].insert_one(
+        {"tenant_id": "local-dev", "db_name": "db", "status": "deleted"}
+    )
+    resp = await _handle(
+        rpc_module,
+        "tools/call",
+        {"server": "orders", "name": "do", "arguments": {}},
+        _FakeRequest(tenant_id="local-dev", scopes=["anything"]),
+    )
+    assert resp.error is not None
+    assert resp.error.code == int(JsonRpcErrorCode.FORBIDDEN)
+    assert resp.error.data["reason"] == "tenant_deleted"
 
 
 @pytest.mark.asyncio

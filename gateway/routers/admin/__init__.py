@@ -49,6 +49,7 @@ from .actions import (
 from .catalog import (
     admin_search,
     admin_stats,
+    export_telemetry,
     list_catalog,
     list_telemetry,
     migrate_cache,
@@ -78,6 +79,7 @@ from .servers import (
 from .tenants import (
     create_tenant,
     delete_tenant,
+    export_tenant_usage,
     get_egress_allowlist,
     get_server_env,
     get_tenant_usage,
@@ -85,6 +87,7 @@ from .tenants import (
     list_tenants,
     put_egress_allowlist,
     put_server_env,
+    restore_tenant,
     resume_tenant,
     suspend_tenant,
     update_tenant_quota,
@@ -108,6 +111,7 @@ __all__ = [
     "create_tenant",
     "list_tenants",
     "delete_tenant",
+    "restore_tenant",
     "suspend_tenant",
     "resume_tenant",
     "get_egress_allowlist",
@@ -116,6 +120,7 @@ __all__ = [
     "put_server_env",
     "get_tenant_usage",
     "get_tenant_usage_events",
+    "export_tenant_usage",
     "update_tenant_quota",
     # servers
     "create_or_update_server",
@@ -156,6 +161,7 @@ __all__ = [
     # catalog
     "list_catalog",
     "list_telemetry",
+    "export_telemetry",
     "admin_stats",
     "admin_search",
     "migrate_cache",

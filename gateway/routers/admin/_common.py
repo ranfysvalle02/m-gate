@@ -20,6 +20,7 @@ and the guards are imported by name instead because they are read, not swapped.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -61,6 +62,7 @@ __all__ = [
     "_require_platform_admin",
     "_require_tenant_admin",
     "_resolve_target_tenant",
+    "_build_time_range",
     "_assert_can_assign_roles",
     "_load_managed_user",
 ]
@@ -109,6 +111,35 @@ def _resolve_target_tenant(request: Request, requested_tenant: str | None = None
             detail="Cross-tenant admin access requires platform-admin role.",
         )
     return target
+
+
+def _parse_iso_timestamp(value: str, field: str) -> datetime:
+    """Parse an ISO-8601 ``from``/``to`` bound, normalizing naive values to UTC."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid '{field}' timestamp; use ISO-8601 (e.g. 2026-06-01 or "
+            "2026-06-01T12:00:00Z).",
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _build_time_range(from_: str | None, to: str | None) -> dict[str, Any] | None:
+    """Build an inclusive ``{$gte, $lte}`` range filter for a timestamp field.
+
+    Returns ``None`` when neither bound is provided so the caller can omit the
+    field from the query entirely (a full scan over the tenant's events).
+    """
+    bounds: dict[str, Any] = {}
+    if from_:
+        bounds["$gte"] = _parse_iso_timestamp(from_, "from")
+    if to:
+        bounds["$lte"] = _parse_iso_timestamp(to, "to")
+    return bounds or None
 
 
 def _assert_can_assign_roles(request: Request, roles: list[str]) -> None:

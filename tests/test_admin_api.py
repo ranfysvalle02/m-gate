@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import csv
+import io
+import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
 
-from database.mongo import get_tenant_database
+from database.mongo import get_tenant_database, tenant_db_name
 from models.admin import (
     AdminSearchRequest,
     CacheMigrateRequest,
@@ -900,8 +903,219 @@ async def test_get_tenant_usage_events_returns_rollup_and_recent_events(patch_mo
     assert len(response.events) == 2
 
 
+async def _collect_stream(response) -> str:
+    parts: list[str] = []
+    async for chunk in response.body_iterator:
+        parts.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8"))
+    return "".join(parts)
+
+
 @pytest.mark.asyncio
-async def test_delete_tenant_requires_platform_admin_and_deletes_when_allowed(
+async def test_export_tenant_usage_streams_csv(patch_mongo):
+    import gateway.routers.admin as admin
+
+    control = patch_mongo._control_db
+    base = datetime(2026, 6, 1, tzinfo=UTC)
+    control["usage_events"].docs.extend(
+        [
+            {
+                "tenant_id": "local-dev",
+                "period": "2026-06",
+                "kind": "calls",
+                "amount": 2,
+                "ts": base,
+                "metadata": {"source": "live_execution"},
+            },
+            {
+                "tenant_id": "local-dev",
+                "period": "2026-06",
+                "kind": "sandbox_ms",
+                "amount": 500,
+                "ts": base + timedelta(hours=1),
+                "metadata": {},
+            },
+            # A different tenant's event must never leak into this export.
+            {
+                "tenant_id": "other",
+                "period": "2026-06",
+                "kind": "calls",
+                "amount": 99,
+                "ts": base,
+                "metadata": {},
+            },
+        ]
+    )
+
+    response = await admin.export_tenant_usage(
+        _Req(tenant_id="local-dev", roles=["admin"]),
+        "local-dev",
+        export_format="csv",
+        from_=None,
+        to=None,
+    )
+    assert response.media_type == "text/csv"
+    assert "attachment" in response.headers["content-disposition"]
+    assert response.headers["cache-control"] == "no-store"
+
+    body = await _collect_stream(response)
+    rows = list(csv.reader(io.StringIO(body)))
+    assert rows[0] == ["ts", "tenant_id", "period", "kind", "amount", "source"]
+    data_rows = rows[1:]
+    assert len(data_rows) == 2
+    assert {row[3] for row in data_rows} == {"calls", "sandbox_ms"}
+    # Ascending ts order and the metadata source projected onto the row.
+    assert data_rows[0][3] == "calls"
+    assert data_rows[0][5] == "live_execution"
+    assert all(row[1] == "local-dev" for row in data_rows)
+
+
+@pytest.mark.asyncio
+async def test_export_tenant_usage_applies_date_range(patch_mongo):
+    import gateway.routers.admin as admin
+
+    control = patch_mongo._control_db
+    base = datetime(2026, 6, 1, tzinfo=UTC)
+    control["usage_events"].docs.extend(
+        [
+            {"tenant_id": "local-dev", "period": "p", "kind": "calls", "amount": 1, "ts": base},
+            {
+                "tenant_id": "local-dev",
+                "period": "p",
+                "kind": "calls",
+                "amount": 1,
+                "ts": base + timedelta(days=2),
+            },
+            {
+                "tenant_id": "local-dev",
+                "period": "p",
+                "kind": "calls",
+                "amount": 1,
+                "ts": base + timedelta(days=5),
+            },
+        ]
+    )
+
+    response = await admin.export_tenant_usage(
+        _Req(tenant_id="local-dev", roles=["admin"]),
+        "local-dev",
+        export_format="csv",
+        from_="2026-06-02",
+        to="2026-06-04",
+    )
+    body = await _collect_stream(response)
+    data_rows = list(csv.reader(io.StringIO(body)))[1:]
+    # Only the single event inside [06-02, 06-04] survives the range filter.
+    assert len(data_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_export_tenant_usage_requires_admin(patch_mongo):
+    import gateway.routers.admin as admin
+
+    with pytest.raises(HTTPException) as exc:
+        await admin.export_tenant_usage(
+            _Req(tenant_id="local-dev", roles=["viewer"]),
+            "local-dev",
+            export_format="csv",
+            from_=None,
+            to=None,
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_export_tenant_usage_rejects_unknown_format(patch_mongo):
+    import gateway.routers.admin as admin
+
+    with pytest.raises(HTTPException) as exc:
+        await admin.export_tenant_usage(
+            _Req(tenant_id="local-dev", roles=["admin"]),
+            "local-dev",
+            export_format="parquet",
+            from_=None,
+            to=None,
+        )
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_export_tenant_usage_rejects_bad_timestamp(patch_mongo):
+    import gateway.routers.admin as admin
+
+    with pytest.raises(HTTPException) as exc:
+        await admin.export_tenant_usage(
+            _Req(tenant_id="local-dev", roles=["admin"]),
+            "local-dev",
+            export_format="csv",
+            from_="not-a-date",
+            to=None,
+        )
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_export_telemetry_streams_jsonl(patch_mongo):
+    import gateway.routers.admin as admin
+
+    base = datetime(2026, 6, 1, tzinfo=UTC)
+    get_tenant_database("local-dev")["audit_telemetry"].docs.extend(
+        [
+            {
+                "timestamp": base,
+                "tenant_id": "local-dev",
+                "user_id": "u1",
+                "request_id": "r1",
+                "method": "tools/call",
+                "status": "ok",
+                "latency_ms": 12.0,
+                "metadata": {"server": "s"},
+            },
+            {
+                "timestamp": base + timedelta(minutes=1),
+                "tenant_id": "local-dev",
+                "user_id": "u2",
+                "request_id": "r2",
+                "method": "tools/list",
+                "status": "ok",
+                "latency_ms": 3.0,
+                "metadata": {},
+            },
+        ]
+    )
+
+    response = await admin.export_telemetry(
+        _Req(tenant_id="local-dev", roles=["admin"]),
+        tenant_id="local-dev",
+        export_format="jsonl",
+        from_=None,
+        to=None,
+    )
+    assert response.media_type == "application/x-ndjson"
+    body = await _collect_stream(response)
+    lines = [line for line in body.splitlines() if line.strip()]
+    assert len(lines) == 2
+    records = [json.loads(line) for line in lines]
+    assert [r["method"] for r in records] == ["tools/call", "tools/list"]
+    assert all("_id" not in r for r in records)
+
+
+@pytest.mark.asyncio
+async def test_export_telemetry_rejects_unknown_format(patch_mongo):
+    import gateway.routers.admin as admin
+
+    with pytest.raises(HTTPException) as exc:
+        await admin.export_telemetry(
+            _Req(tenant_id="local-dev", roles=["admin"]),
+            tenant_id="local-dev",
+            export_format="csv",
+            from_=None,
+            to=None,
+        )
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_delete_tenant_requires_platform_admin_and_soft_deletes_by_default(
     patch_mongo, monkeypatch
 ):
     import gateway.routers.admin as admin
@@ -912,19 +1126,101 @@ async def test_delete_tenant_requires_platform_admin_and_deletes_when_allowed(
             return None
 
     monkeypatch.setattr(admin._common, "get_telemetry_logger", lambda: _Telemetry())
+    object.__setattr__(admin.settings, "qe_enabled", False)
     await tp.provision_tenant("tenant-z", wait_for_queryable_indexes=False)
 
     with pytest.raises(HTTPException) as exc:
         await admin.delete_tenant(_Req(tenant_id="tenant-z", roles=["admin"]), "tenant-z")
     assert exc.value.status_code == 403
 
+    # Default delete is a reversible soft-delete: the tenant is locked out but its
+    # control doc and database are retained until the purge window elapses.
     response = await admin.delete_tenant(
         _Req(roles=[admin.settings.platform_admin_role]),
         "tenant-z",
     )
     assert response.deleted is True
+    assert response.status == "deleted"
     assert response.tenant_id == "tenant-z"
-    assert await patch_mongo._control_db["tenants"].find_one({"tenant_id": "tenant-z"}) is None
+    assert response.purge_at is not None
+    doc = await patch_mongo._control_db["tenants"].find_one({"tenant_id": "tenant-z"})
+    assert doc is not None and doc["status"] == "deleted"
+    assert tenant_db_name("tenant-z") in patch_mongo._client._databases  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_delete_tenant_hard_drops_database(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+    import services.tenant_provisioner as tp
+
+    class _Telemetry:
+        def log_background(self, **kwargs):
+            return None
+
+    monkeypatch.setattr(admin._common, "get_telemetry_logger", lambda: _Telemetry())
+    object.__setattr__(admin.settings, "qe_enabled", False)
+    await tp.provision_tenant("tenant-hard", wait_for_queryable_indexes=False)
+
+    response = await admin.delete_tenant(
+        _Req(roles=[admin.settings.platform_admin_role]),
+        "tenant-hard",
+        hard=True,
+    )
+    assert response.deleted is True
+    assert response.status == "purged"
+    assert await patch_mongo._control_db["tenants"].find_one({"tenant_id": "tenant-hard"}) is None
+    assert tenant_db_name("tenant-hard") not in patch_mongo._client._databases  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_restore_tenant_reverses_soft_delete(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+    import services.tenant_provisioner as tp
+
+    class _Telemetry:
+        def log_background(self, **kwargs):
+            return None
+
+    monkeypatch.setattr(admin._common, "get_telemetry_logger", lambda: _Telemetry())
+    object.__setattr__(admin.settings, "qe_enabled", False)
+    await tp.provision_tenant("tenant-r", wait_for_queryable_indexes=False)
+    platform_admin = _Req(roles=[admin.settings.platform_admin_role])
+
+    await admin.delete_tenant(platform_admin, "tenant-r")
+    restored = await admin.restore_tenant(platform_admin, "tenant-r")
+    assert restored.restored is True
+    assert restored.status == "active"
+    doc = await patch_mongo._control_db["tenants"].find_one({"tenant_id": "tenant-r"})
+    assert doc is not None and doc["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_restore_tenant_requires_platform_admin(patch_mongo):
+    import gateway.routers.admin as admin
+
+    with pytest.raises(HTTPException) as exc:
+        await admin.restore_tenant(_Req(tenant_id="tenant-r", roles=["admin"]), "tenant-r")
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_restore_tenant_404_when_not_soft_deleted(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+    import services.tenant_provisioner as tp
+
+    class _Telemetry:
+        def log_background(self, **kwargs):
+            return None
+
+    monkeypatch.setattr(admin._common, "get_telemetry_logger", lambda: _Telemetry())
+    object.__setattr__(admin.settings, "qe_enabled", False)
+    await tp.provision_tenant("tenant-active", wait_for_queryable_indexes=False)
+
+    with pytest.raises(HTTPException) as exc:
+        await admin.restore_tenant(
+            _Req(roles=[admin.settings.platform_admin_role]), "tenant-active"
+        )
+    assert exc.value.status_code == 404
 
 
 @pytest.mark.asyncio

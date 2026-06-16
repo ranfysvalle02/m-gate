@@ -19,6 +19,11 @@ class ToolDocument(BaseModel):
     # it is persisted and is never written to the searchable tool_catalog.
     raw_code: str | None = None
     requirements: list[str] = Field(default_factory=list)
+    # Free-form per-tool metadata. Recognized keys include ``transport``,
+    # ``action_type``, ``requires_confirmation``, ``always_included``, and
+    # (code tools only) ``wall_timeout_ms`` -- an optional positive per-tool
+    # sandbox wall-clock budget used by the quota preflight to project a code
+    # tool's worst-case cost; falls back to ``settings.sandbox_wall_timeout_ms``.
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

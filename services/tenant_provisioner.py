@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from pymongo.errors import OperationFailure, PyMongoError
 
@@ -23,8 +24,16 @@ from database.mongo import (
 from services.cache_manager import semantic_cache_index_spec
 from services.embedding_config import active_embedding_identity, tenant_embedding_identity
 from services.guardrails import guardrail_signature_index_spec
+from services.tenant_status import (
+    STATUS_ACTIVE,
+    STATUS_DELETED,
+    set_tenant_status,
+)
 
 logger = logging.getLogger(__name__)
+
+# Background reaper that hard-drops soft-deleted tenants past their retention.
+_reaper_task: asyncio.Task | None = None
 
 
 class UnknownTenantError(Exception):
@@ -125,6 +134,10 @@ async def ensure_control_plane_indexes() -> None:
     settings = get_settings()
     control_db = get_control_database()
     await control_db["tenants"].create_index("tenant_id", unique=True)
+    # Backs the soft-delete purge reaper's "due for purge" scan. NOT a TTL index:
+    # a TTL would delete the control doc and orphan the physical tenant database,
+    # so the reaper (which drops the DB first) is the source of truth.
+    await control_db["tenants"].create_index([("status", 1), ("purge_at", 1)])
     # Email is the sole login identifier (the login form has no tenant field), so
     # it must resolve to exactly one account globally.
     await control_db["users"].create_index("email", unique=True)
@@ -290,3 +303,165 @@ async def deprovision_tenant(tenant_id: str) -> bool:
 
     _evict_tenant_cache(tenant_id)
     return int(result.deleted_count) > 0
+
+
+async def soft_delete_tenant(
+    tenant_id: str,
+    *,
+    retention_days: int | None = None,
+    actor: str | None = None,
+) -> dict[str, Any] | None:
+    """Mark a tenant deleted and schedule its purge, keeping the data for now.
+
+    The tenant is locked out of the hot path immediately (status ``deleted``),
+    but its database is retained until ``purge_at`` so the deletion stays
+    reversible via :func:`restore_tenant`. The physical drop is the purge
+    reaper's job (:func:`purge_expired_tenants`); a Mongo TTL index alone would
+    delete the control doc and orphan the tenant database. Returns the updated
+    control doc, or ``None`` if the tenant does not exist.
+    """
+    settings = get_settings()
+    days = settings.tenant_retention_days if retention_days is None else retention_days
+    now = datetime.now(UTC)
+    purge_at = now + timedelta(days=max(0, int(days)))
+    doc = await set_tenant_status(
+        tenant_id,
+        STATUS_DELETED,
+        updated_by=actor,
+        extra={"deleted_at": now, "purge_at": purge_at, "purge_started_at": None},
+    )
+    if doc is None:
+        return None
+    # Drop the hot-path readiness cache so a soft-deleted tenant is re-checked
+    # (and rejected) rather than served from the optimistic ready set.
+    _evict_tenant_cache(tenant_id)
+    return doc
+
+
+async def restore_tenant(
+    tenant_id: str,
+    *,
+    actor: str | None = None,
+) -> dict[str, Any] | None:
+    """Reverse a soft-delete: flip a ``deleted`` tenant back to ``active``.
+
+    Returns the updated control doc on success, or ``None`` when the tenant does
+    not exist or is not currently soft-deleted (already active/suspended, or
+    already purged), so the caller can surface the right HTTP status.
+    """
+    control_db = get_control_database()
+    existing = await control_db["tenants"].find_one({"tenant_id": tenant_id})
+    if existing is None or str(existing.get("status")) != STATUS_DELETED:
+        return None
+    doc = await set_tenant_status(
+        tenant_id,
+        STATUS_ACTIVE,
+        updated_by=actor,
+        extra={"deleted_at": None, "purge_at": None, "purge_started_at": None},
+    )
+    if doc is not None:
+        _evict_tenant_cache(tenant_id)
+    return doc
+
+
+async def purge_expired_tenants(
+    *,
+    now: datetime | None = None,
+    limit: int = 100,
+) -> int:
+    """Hard-drop soft-deleted tenants whose retention window has elapsed.
+
+    Each due tenant is claimed atomically with ``find_one_and_update`` so two
+    active-active replicas never purge the same tenant twice, then hard-deleted
+    via :func:`deprovision_tenant`. Returns the number of tenants purged.
+    """
+    control_db = get_control_database()
+    cutoff = now or datetime.now(UTC)
+    purged = 0
+    # Tenants whose hard-drop failed this pass. Their claim is released so a
+    # future sweep retries, but they are excluded from re-claiming within *this*
+    # call so one persistently-failing tenant cannot loop or starve the others.
+    failed: list[str] = []
+    for _ in range(max(0, int(limit))):
+        claim_filter: dict[str, Any] = {
+            "status": STATUS_DELETED,
+            "purge_at": {"$lte": cutoff},
+            "purge_started_at": None,
+        }
+        if failed:
+            claim_filter["tenant_id"] = {"$nin": failed}
+        claimed = await control_db["tenants"].find_one_and_update(
+            claim_filter,
+            {"$set": {"purge_started_at": cutoff}},
+            return_document=True,
+        )
+        if claimed is None:
+            break
+        tenant_id = str(claimed.get("tenant_id") or "")
+        if not tenant_id:
+            continue
+        try:
+            await deprovision_tenant(tenant_id)
+            purged += 1
+        except Exception:
+            # Release the claim so a later sweep retries: deprovision is
+            # idempotent (drop DB + delete doc), so a transient failure must not
+            # strand the tenant's data past its retention window forever.
+            logger.error(
+                "Failed to purge expired tenant '%s'; releasing the claim to retry "
+                "on a later sweep.",
+                tenant_id,
+                exc_info=True,
+            )
+            failed.append(tenant_id)
+            try:
+                await control_db["tenants"].update_one(
+                    {"tenant_id": tenant_id, "status": STATUS_DELETED},
+                    {"$set": {"purge_started_at": None}},
+                )
+            except Exception:
+                logger.error(
+                    "Failed to release purge claim for tenant '%s'; it will need "
+                    "manual cleanup.",
+                    tenant_id,
+                    exc_info=True,
+                )
+    return purged
+
+
+async def _reaper_loop(interval_seconds: int) -> None:
+    interval = max(1, int(interval_seconds))
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            purged = await purge_expired_tenants()
+            if purged:
+                logger.info("Tenant purge reaper dropped %d expired tenant(s).", purged)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # never let the reaper die on a transient error
+            logger.warning("Tenant purge reaper iteration failed, will retry: %s", exc)
+
+
+async def start_tenant_purge_reaper() -> None:
+    """Start the background purge reaper when configured (no-op when disabled)."""
+    global _reaper_task
+    settings = get_settings()
+    interval = settings.tenant_purge_sweep_interval_seconds
+    if interval <= 0:
+        return
+    if _reaper_task is None or _reaper_task.done():
+        logger.info("Starting tenant purge reaper (every %ds).", interval)
+        _reaper_task = asyncio.create_task(_reaper_loop(interval))
+
+
+async def stop_tenant_purge_reaper() -> None:
+    """Stop the background purge reaper if it is running."""
+    global _reaper_task
+    if _reaper_task is not None:
+        _reaper_task.cancel()
+        try:
+            await _reaper_task
+        except asyncio.CancelledError:
+            pass
+        _reaper_task = None

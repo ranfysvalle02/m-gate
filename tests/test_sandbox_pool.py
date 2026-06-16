@@ -409,6 +409,119 @@ async def test_submit_unexpected_error_discards_worker_no_leak(monkeypatch):
     await pool.shutdown()
 
 
+# ---- proactive max-age / health sweep --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sweep_retires_over_age_idle_worker(monkeypatch):
+    procs: list = []
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn_factory(procs))
+    pool = WorkerPool(
+        _settings(sandbox_pool_size=1, sandbox_worker_max_age_seconds=10), python_bin="python"
+    )
+    await pool.start()
+    # Age the lone idle worker well past the retirement threshold.
+    worker = next(iter(pool._all))
+    worker.spawned_at = asyncio.get_running_loop().time() - 1000
+
+    await pool._sweep_once()
+
+    assert procs[0].killed is True
+    # The retired worker is replaced via the existing refill path.
+    for _ in range(50):
+        if len(procs) >= 2:
+            break
+        await asyncio.sleep(0.01)
+    assert len(procs) == 2
+    assert pool._free.qsize() == 1
+    await pool.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_sweep_discards_ping_failing_idle_worker(monkeypatch):
+    procs: list = []
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn_factory(procs))
+    pool = WorkerPool(_settings(sandbox_pool_size=1), python_bin="python")
+    await pool.start()
+    # The worker warmed fine at spawn but now stops answering health pings.
+    procs[0].pong = False
+
+    await pool._sweep_once()
+
+    assert procs[0].killed is True
+    for _ in range(50):
+        if len(procs) >= 2:
+            break
+        await asyncio.sleep(0.01)
+    assert len(procs) == 2
+    await pool.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_sweep_discards_dead_idle_worker(monkeypatch):
+    procs: list = []
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn_factory(procs))
+    pool = WorkerPool(_settings(sandbox_pool_size=1), python_bin="python")
+    await pool.start()
+    # The idle worker's process has exited while sitting in the free queue.
+    procs[0]._exit()  # noqa: SLF001 - test-only whitebox helper
+
+    await pool._sweep_once()
+
+    for _ in range(50):
+        if len(procs) >= 2:
+            break
+        await asyncio.sleep(0.01)
+    assert len(procs) == 2
+    await pool.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_sweep_keeps_healthy_worker(monkeypatch):
+    procs: list = []
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn_factory(procs))
+    pool = WorkerPool(
+        _settings(sandbox_pool_size=1, sandbox_worker_max_age_seconds=10_000), python_bin="python"
+    )
+    await pool.start()
+
+    await pool._sweep_once()
+
+    # A young, healthy worker survives the sweep untouched and stays queued.
+    assert procs[0].killed is False
+    assert len(procs) == 1
+    assert pool._free.qsize() == 1
+    await pool.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_sweep_loop_starts_and_stops_on_shutdown(monkeypatch):
+    procs: list = []
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn_factory(procs))
+    pool = WorkerPool(
+        _settings(sandbox_pool_size=1, sandbox_pool_sweep_interval_seconds=60),
+        python_bin="python",
+    )
+    await pool.start()
+    sweep_task = pool._sweep_task
+    assert sweep_task is not None and not sweep_task.done()
+
+    await pool.shutdown()
+
+    assert pool._sweep_task is None
+    assert sweep_task.cancelled() or sweep_task.done()
+
+
+@pytest.mark.asyncio
+async def test_no_sweep_task_when_interval_disabled(monkeypatch):
+    procs: list = []
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn_factory(procs))
+    pool = WorkerPool(_settings(sandbox_pool_size=1), python_bin="python")
+    await pool.start()
+    assert pool._sweep_task is None
+    await pool.shutdown()
+
+
 # ---- PooledWasmExecutor ----------------------------------------------------
 
 

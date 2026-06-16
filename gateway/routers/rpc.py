@@ -25,15 +25,16 @@ from services.metrics import (
     observe_cache_event,
     observe_downstream_error,
     observe_quota_block,
+    observe_quota_preflight_block,
 )
 from services.pending_actions import consume_approved_action, create_pending_action
 from services.proxy_registry import DownstreamTimeout, get_proxy_registry
 from services.registry_watcher import get_catalog_version
 from services.telemetry_logger import TelemetryLogger, get_telemetry_logger
 from services.tenant_provisioner import UnknownTenantError, ensure_tenant_ready
-from services.tenant_status import TenantSuspendedError, assert_tenant_active
+from services.tenant_status import TenantInactiveError, assert_tenant_active
 from services.tracing import set_span_attribute, start_span
-from services.usage_metering import check_quota
+from services.usage_metering import check_quota, check_sandbox_preflight
 
 router = APIRouter(tags=["rpc"])
 
@@ -203,20 +204,20 @@ async def _dispatch(context: RpcContext) -> JsonRpcResponse:
             message=str(exc),
             data={"tenant_id": exc.tenant_id, "reason": "tenant_not_provisioned"},
         )
-    except TenantSuspendedError as exc:
-        observe_downstream_error("tenant_suspended")
+    except TenantInactiveError as exc:
+        observe_downstream_error(exc.status_code)
         _telemetry(
             context,
-            status="tenant_suspended",
+            status=exc.status_code,
             metadata={"tenant_id": exc.tenant_id, "reason": exc.reason},
         )
         return make_error_response(
             request_id=request.id,
             code=JsonRpcErrorCode.FORBIDDEN,
-            message="Tenant access is suspended.",
+            message=exc.message,
             data={
                 "tenant_id": exc.tenant_id,
-                "reason": "tenant_suspended",
+                "reason": exc.status_code,
                 "detail": exc.reason,
             },
         )
@@ -355,6 +356,45 @@ async def _handle_tools_call(context: RpcContext) -> JsonRpcResponse:
                 "reason": "code_execution_not_enabled",
             },
         )
+
+    # Sandbox quota preflight: for code tools, reject up front when the tool's
+    # worst-case wall-clock cost cannot fit the tenant's remaining sandbox-seconds
+    # budget, instead of starting work that gets killed mid-flight. Shared with
+    # /mcp via check_sandbox_preflight so both surfaces enforce it identically.
+    if is_code_tool and context.settings.quota_preflight_enabled:
+        projected_ms = int(
+            tool_metadata.get("wall_timeout_ms") or context.settings.sandbox_wall_timeout_ms
+        )
+        preflight_ok, preflight_reason = check_sandbox_preflight(
+            usage=usage, quota=quota, projected_ms=projected_ms
+        )
+        if not preflight_ok:
+            observe_quota_preflight_block()
+            _telemetry(
+                context,
+                status="sandbox_quota_preflight",
+                metadata={
+                    "server": call_params.server,
+                    "tool": call_params.name,
+                    "reason": preflight_reason,
+                    "projected_ms": projected_ms,
+                    "usage": usage,
+                    "quota": quota,
+                },
+            )
+            return make_error_response(
+                request_id=request.id,
+                code=JsonRpcErrorCode.RATE_LIMITED,
+                message="Projected sandbox cost exceeds the tenant's remaining quota.",
+                data={
+                    "server": call_params.server,
+                    "tool": call_params.name,
+                    "reason": "sandbox_quota_preflight",
+                    "projected_ms": projected_ms,
+                    "usage": usage,
+                    "quota": quota,
+                },
+            )
 
     requires_confirmation = bool(tool_metadata.get("requires_confirmation"))
     action_type = str(tool_metadata.get("action_type", "destructive"))

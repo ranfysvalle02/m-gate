@@ -131,22 +131,52 @@ async def _all_tenant_ids(settings: Settings) -> list[str]:
     return ids
 
 
-async def _reembed_tool_catalog(collection: Any, service: EmbeddingService) -> int:
-    docs = await collection.find({}).to_list(length=100_000)
+async def _flush_catalog_batch(
+    collection: Any,
+    service: EmbeddingService,
+    batch: list[tuple[str, str, str]],
+) -> int:
+    if not batch:
+        return 0
+    vectors = await service.embed_texts([text for _, _, text in batch])
+    now = _now()
+    for (server, name, _text), embedding in zip(batch, vectors, strict=True):
+        await collection.update_one(
+            {"server": server, "name": name},
+            {"$set": {"embedding": embedding, "updated_at": now}},
+        )
+    return len(batch)
+
+
+async def _reembed_tool_catalog(
+    collection: Any,
+    service: EmbeddingService,
+    *,
+    page_size: int,
+) -> int:
+    """Re-embed every catalog doc, streaming by ``_id`` so memory stays O(page).
+
+    Sorting by ``_id`` gives a stable forward scan: rewriting the (large)
+    ``embedding`` field can grow a doc and move it on disk, and only an ordered
+    cursor guarantees each doc is visited exactly once. Texts are accumulated
+    into a window and embedded in a single batched call per flush.
+    """
     count = 0
-    for doc in docs:
+    batch: list[tuple[str, str, str]] = []
+    window = max(1, page_size)
+    cursor = collection.find({}).sort("_id", 1)
+    async for doc in cursor:
         server = str(doc.get("server", ""))
         name = str(doc.get("name", ""))
         if not server or not name:
             continue
         description = str(doc.get("description", "") or "")
         text = f"{server}\n{name}\n{description}".strip()
-        embedding = await service.embed_text(text)
-        await collection.update_one(
-            {"server": server, "name": name},
-            {"$set": {"embedding": embedding, "updated_at": _now()}},
-        )
-        count += 1
+        batch.append((server, name, text))
+        if len(batch) >= window:
+            count += await _flush_catalog_batch(collection, service, batch)
+            batch.clear()
+    count += await _flush_catalog_batch(collection, service, batch)
     return count
 
 
@@ -179,7 +209,8 @@ async def _reprovision_tenant(
 ) -> dict[str, Any]:
     tenant_db = get_tenant_database(tenant_id)
     catalog = tenant_db["tool_catalog"]
-    reembedded = await _reembed_tool_catalog(catalog, service)
+    page_size = max(1, cache_service.settings.cache_migration_fetch_page_size)
+    reembedded = await _reembed_tool_catalog(catalog, service, page_size=page_size)
     await _recreate_vector_index(
         catalog,
         dimensions=dimensions,
@@ -188,7 +219,7 @@ async def _reprovision_tenant(
     cache_summary = await cache_service.migrate(
         tenant_ids=[tenant_id],
         mode="reembed",
-        batch_size=500,
+        batch_size=page_size,
     )
     target_version = embedding_version_for(service)
     return {

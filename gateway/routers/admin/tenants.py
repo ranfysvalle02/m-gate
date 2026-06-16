@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import csv
+import io
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 
 from models.admin import (
     EgressAllowlistResponse,
@@ -17,6 +21,7 @@ from models.admin import (
     TenantCreateRequest,
     TenantDeleteResponse,
     TenantResponse,
+    TenantRestoreResponse,
     TenantStatusUpdateRequest,
     UsageEventsResponse,
     UsageRemaining,
@@ -26,9 +31,15 @@ from models.admin import (
 from services.code_tools import encrypt_raw_code
 from services.egress_policy import EgressNotAllowed, parse_allowlist
 from services.tenant_egress import set_tenant_egress_allowlist
-from services.tenant_provisioner import deprovision_tenant, tenant_db_name
+from services.tenant_provisioner import (
+    deprovision_tenant,
+    soft_delete_tenant,
+    tenant_db_name,
+)
+from services.tenant_provisioner import restore_tenant as restore_tenant_record
 from services.tenant_status import STATUS_ACTIVE, STATUS_SUSPENDED, set_tenant_status
 from services.usage_metering import (
+    USAGE_EVENTS_COLLECTION,
     get_effective_quota,
     get_usage,
     set_quota,
@@ -37,6 +48,7 @@ from services.usage_metering import (
 
 from . import _common as c
 from ._common import (
+    _build_time_range,
     _is_platform_admin,
     _require_platform_admin,
     _require_tenant_admin,
@@ -118,6 +130,8 @@ def _tenant_response(doc: dict[str, Any], *, db_name: str | None = None) -> Tena
         db_name=str(doc.get("db_name") or db_name or ""),
         status=status_value,
         suspended_reason=reason if status_value == STATUS_SUSPENDED else None,
+        deleted_at=doc.get("deleted_at"),
+        purge_at=doc.get("purge_at"),
         created_at=doc.get("created_at"),
         updated_at=doc.get("updated_at"),
     )
@@ -146,21 +160,76 @@ async def list_tenants(request: Request) -> list[TenantResponse]:
 
 
 @router.delete("/tenants/{tenant_id}", response_model=TenantDeleteResponse)
-async def delete_tenant(request: Request, tenant_id: str) -> TenantDeleteResponse:
+async def delete_tenant(
+    request: Request,
+    tenant_id: str,
+    hard: bool = False,
+) -> TenantDeleteResponse:
+    # ``hard=true`` permanently drops the tenant database immediately
+    # (irreversible). The default is a reversible soft-delete with retention.
     _require_platform_admin(request)
-    deleted = await deprovision_tenant(tenant_id)
-    if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
     actor = str(getattr(request.state, "user_id", "admin"))
+
+    if hard:
+        deleted = await deprovision_tenant(tenant_id)
+        if not deleted:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+        c.get_telemetry_logger().log_background(
+            tenant_id=tenant_id,
+            user_id=actor,
+            method="admin/tenants/delete",
+            status="tenant_deprovisioned",
+            metadata={"tenant_id": tenant_id, "actor": actor, "hard": True},
+        )
+        return TenantDeleteResponse(
+            tenant_id=tenant_id,
+            db_name=tenant_db_name(tenant_id),
+            status="purged",
+            deleted=True,
+            purge_at=None,
+        )
+
+    doc = await soft_delete_tenant(tenant_id, actor=actor)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
     c.get_telemetry_logger().log_background(
         tenant_id=tenant_id,
         user_id=actor,
         method="admin/tenants/delete",
-        status="tenant_deprovisioned",
-        metadata={"tenant_id": tenant_id, "actor": actor},
+        status="tenant_soft_deleted",
+        metadata={"tenant_id": tenant_id, "actor": actor, "purge_at": doc.get("purge_at")},
     )
     return TenantDeleteResponse(
-        tenant_id=tenant_id, db_name=tenant_db_name(tenant_id), deleted=True
+        tenant_id=tenant_id,
+        db_name=str(doc.get("db_name") or tenant_db_name(tenant_id)),
+        status="deleted",
+        deleted=True,
+        purge_at=doc.get("purge_at"),
+    )
+
+
+@router.post("/tenants/{tenant_id}/restore", response_model=TenantRestoreResponse)
+async def restore_tenant(request: Request, tenant_id: str) -> TenantRestoreResponse:
+    _require_platform_admin(request)
+    actor = str(getattr(request.state, "user_id", "admin"))
+    doc = await restore_tenant_record(tenant_id, actor=actor)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant not found or not soft-deleted.",
+        )
+    c.get_telemetry_logger().log_background(
+        tenant_id=tenant_id,
+        user_id=actor,
+        method="admin/tenants/restore",
+        status="tenant_restored",
+        metadata={"tenant_id": tenant_id, "actor": actor},
+    )
+    return TenantRestoreResponse(
+        tenant_id=tenant_id,
+        db_name=str(doc.get("db_name") or tenant_db_name(tenant_id)),
+        status="active",
+        restored=True,
     )
 
 
@@ -387,6 +456,76 @@ async def get_tenant_usage_events(
     target_tenant = _resolve_target_tenant(request, tenant_id)
     summary = await summarize_billing_events(target_tenant, period=period, limit=limit)
     return UsageEventsResponse(**summary)
+
+
+_USAGE_EXPORT_COLUMNS = ["ts", "tenant_id", "period", "kind", "amount", "source"]
+
+
+@router.get("/tenants/{tenant_id}/usage/export")
+async def export_tenant_usage(
+    request: Request,
+    tenant_id: str,
+    export_format: str = Query(default="csv", alias="format"),
+    from_: str | None = Query(default=None, alias="from"),
+    to: str | None = Query(default=None),
+) -> StreamingResponse:
+    """Stream a tenant's raw ``usage_events`` as CSV over a date range.
+
+    The events are iterated straight off a ``find()`` cursor (``async for``) and
+    written one CSV row at a time, so an arbitrarily large billing history never
+    materializes in memory. The ``(tenant_id, ts)`` index backs the range scan.
+    """
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    if export_format != "csv":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Only format=csv is supported for usage export.",
+        )
+
+    query: dict[str, Any] = {"tenant_id": target_tenant}
+    ts_range = _build_time_range(from_, to)
+    if ts_range is not None:
+        query["ts"] = ts_range
+
+    cursor = c.get_control_database()[USAGE_EVENTS_COLLECTION].find(query).sort("ts", 1)
+
+    async def _stream() -> AsyncIterator[str]:
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        def _drain() -> str:
+            chunk = buffer.getvalue()
+            buffer.seek(0)
+            buffer.truncate(0)
+            return chunk
+
+        writer.writerow(_USAGE_EXPORT_COLUMNS)
+        yield _drain()
+        async for doc in cursor:
+            ts = doc.get("ts")
+            metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+            writer.writerow(
+                [
+                    ts.isoformat() if isinstance(ts, datetime) else "",
+                    target_tenant,
+                    str(doc.get("period", "")),
+                    str(doc.get("kind", "")),
+                    int(doc.get("amount", 0) or 0),
+                    str(metadata.get("source", "")),
+                ]
+            )
+            yield _drain()
+
+    filename = f"usage-{target_tenant}.csv"
+    return StreamingResponse(
+        _stream(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.put("/tenants/{tenant_id}/quota", response_model=QuotaResponse)

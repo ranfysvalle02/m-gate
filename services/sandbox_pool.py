@@ -51,12 +51,14 @@ def _subprocess_env() -> dict[str, str]:
 
 
 class _PooledWorker:
-    __slots__ = ("process", "jobs", "alive")
+    __slots__ = ("process", "jobs", "alive", "spawned_at")
 
-    def __init__(self, process: Any) -> None:
+    def __init__(self, process: Any, *, spawned_at: float = 0.0) -> None:
         self.process = process
         self.jobs = 0
         self.alive = True
+        # Monotonic loop time the worker was spawned; drives age-based retirement.
+        self.spawned_at = spawned_at
 
 
 class WorkerPool:
@@ -77,9 +79,17 @@ class WorkerPool:
         self.python_bin = python_bin or sys.executable
         self.size = max(0, self.settings.sandbox_pool_size)
         self.max_jobs = max(0, self.settings.sandbox_worker_max_jobs)
+        # Proactive sweep: retire idle workers older than max_age or that fail a
+        # health ping, on a fixed cadence. Both default off (0).
+        self.max_age = max(0, self.settings.sandbox_worker_max_age_seconds)
+        self.sweep_interval = max(0, self.settings.sandbox_pool_sweep_interval_seconds)
         self._free: asyncio.Queue[_PooledWorker] = asyncio.Queue()
         self._all: set[_PooledWorker] = set()
         self._bg_tasks: set[asyncio.Task[Any]] = set()
+        # The sweep task is long-lived (one per pool), so it is tracked separately
+        # from the ephemeral _bg_tasks refill set and cancelled explicitly on
+        # shutdown rather than being garbage-collected after a single run.
+        self._sweep_task: asyncio.Task[Any] | None = None
         self._lock = asyncio.Lock()
         self._started = False
         self._closed = False
@@ -96,6 +106,8 @@ class WorkerPool:
                     self._all.add(worker)
                     self._free.put_nowait(worker)
             set_sandbox_pool_workers(len(self._all))
+            if self.sweep_interval > 0 and self._sweep_task is None:
+                self._sweep_task = asyncio.create_task(self._sweep_loop())
 
     async def submit(
         self,
@@ -158,6 +170,15 @@ class WorkerPool:
 
     async def shutdown(self) -> None:
         self._closed = True
+        # Stop the proactive sweep first so it cannot resurrect/ping a worker
+        # while we are tearing the pool down.
+        if self._sweep_task is not None:
+            self._sweep_task.cancel()
+            try:
+                await self._sweep_task
+            except asyncio.CancelledError:
+                pass
+            self._sweep_task = None
         workers = list(self._all)
         self._all.clear()
         # Drain the free queue so a concurrent acquire cannot resurrect a worker.
@@ -172,6 +193,58 @@ class WorkerPool:
             task.cancel()
         self._bg_tasks.clear()
         set_sandbox_pool_workers(0)
+
+    async def _sweep_loop(self) -> None:
+        """Periodically retire over-age / unhealthy idle workers.
+
+        Runs on its own cadence (``sweep_interval``) and survives transient
+        errors so a single bad pass never tears the sweep down. Cancelled
+        explicitly by :meth:`shutdown`.
+        """
+        while True:
+            try:
+                await asyncio.sleep(self.sweep_interval)
+                await self._sweep_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # never let the sweep die on a transient hiccup
+                logger.warning("Sandbox pool sweep iteration failed.", exc_info=True)
+
+    async def _sweep_once(self) -> None:
+        """One sweep pass over the currently-idle (queued) workers.
+
+        Leased workers are untouched (they are checked on return as today); only
+        workers sitting in the free queue are examined. A worker is discarded —
+        and replaced via the existing ``_reap_and_refill`` path — when its process
+        has exited, when it has outlived ``max_age``, or when a fresh ping fails.
+        Healthy workers are requeued.
+        """
+        if self._closed:
+            return
+        drained: list[_PooledWorker] = []
+        while True:
+            try:
+                drained.append(self._free.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        now = asyncio.get_running_loop().time()
+        for worker in drained:
+            if self._closed:
+                self._free.put_nowait(worker)
+                continue
+            if getattr(worker.process, "returncode", None) is not None:
+                observe_sandbox_pool_event("health_sweep_dead")
+                self._discard(worker)
+                continue
+            if self.max_age and (now - worker.spawned_at) >= self.max_age:
+                observe_sandbox_pool_event("max_age_retired")
+                self._discard(worker)
+                continue
+            if not await self._ping(worker):
+                observe_sandbox_pool_event("health_sweep_ping_failed")
+                self._discard(worker)
+                continue
+            self._free.put_nowait(worker)
 
     def _command(self) -> list[str]:
         command = [
@@ -209,7 +282,7 @@ class WorkerPool:
             observe_sandbox_pool_event("spawn_failed")
             logger.warning("Sandbox worker subprocess spawn failed.", exc_info=True)
             return None
-        worker = _PooledWorker(process)
+        worker = _PooledWorker(process, spawned_at=asyncio.get_running_loop().time())
         if not await self._ping(worker):
             await self._terminate(worker)
             observe_sandbox_pool_event("spawn_failed")

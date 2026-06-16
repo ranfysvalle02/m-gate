@@ -49,6 +49,10 @@ def _matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
                     actual_values = actual if isinstance(actual, list) else [actual]
                     if not set(actual_values).intersection(set(operand)):
                         return False
+                elif op == "$nin":
+                    actual_values = actual if isinstance(actual, list) else [actual]
+                    if set(actual_values).intersection(set(operand)):
+                        return False
                 elif op == "$eq":
                     if actual != operand:
                         return False
@@ -57,6 +61,19 @@ def _matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
                         return False
                 elif op == "$gt":
                     if actual is None or actual <= operand:
+                        return False
+                elif op == "$gte":
+                    if actual is None or actual < operand:
+                        return False
+                elif op == "$lt":
+                    if actual is None or actual >= operand:
+                        return False
+                elif op == "$lte":
+                    if actual is None or actual > operand:
+                        return False
+                elif op == "$exists":
+                    present = _resolve_path(doc, key) is not None
+                    if bool(operand) != present:
                         return False
                 else:  # pragma: no cover - unsupported operator guard
                     raise NotImplementedError(f"FakeCollection: unsupported operator {op}")
@@ -69,15 +86,52 @@ def _matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
 class _FakeCursor:
     def __init__(self, docs: list[dict[str, Any]]) -> None:
         self._docs = docs
+        self._skip = 0
+        self._limit: int | None = None
+
+    def skip(self, count: int) -> _FakeCursor:
+        self._skip = max(0, int(count or 0))
+        return self
+
+    def limit(self, count: int | None) -> _FakeCursor:
+        self._limit = int(count) if count and int(count) > 0 else None
+        return self
+
+    def batch_size(self, _count: int) -> _FakeCursor:
+        # Server-side streaming hint; a no-op for the in-memory fake.
+        return self
+
+    def sort(self, key_or_list: Any, direction: int | None = None) -> _FakeCursor:
+        if isinstance(key_or_list, str):
+            keys = [(key_or_list, 1 if direction is None else direction)]
+        else:
+            keys = [(field, dirn) for field, dirn in key_or_list]
+        # Apply least-significant key first so the primary key wins (stable sort).
+        for field, dirn in reversed(keys):
+            self._docs = sorted(
+                self._docs,
+                key=lambda d, f=field: (d.get(f) is None, d.get(f)),
+                reverse=dirn < 0,
+            )
+        return self
+
+    def _window(self) -> list[dict[str, Any]]:
+        docs = self._docs[self._skip :]
+        if self._limit is not None:
+            docs = docs[: self._limit]
+        return docs
 
     async def to_list(self, length: int | None = None) -> list[dict[str, Any]]:
+        docs = self._window()
         if length is None:
-            return list(self._docs)
-        return list(self._docs[:length])
+            return list(docs)
+        return list(docs[:length])
 
-    def __aiter__(self):  # pragma: no cover - change-stream style iteration unused here
+    def __aiter__(self):
+        docs = self._window()
+
         async def _gen():
-            for doc in self._docs:
+            for doc in docs:
                 yield doc
 
         return _gen()

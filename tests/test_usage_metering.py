@@ -115,6 +115,49 @@ async def test_check_quota_blocks_when_sandbox_limit_exceeded(patch_mongo):
     assert quota["sandbox_seconds_limit"] == 1
 
 
+def test_check_sandbox_preflight_unlimited_always_admits():
+    # No sandbox-seconds limit (0 => unlimited) admits any projected cost.
+    ok, reason = usage_metering.check_sandbox_preflight(
+        usage={"sandbox_ms": 10_000_000},
+        quota={"sandbox_seconds_limit": 0},
+        projected_ms=999_999_999,
+    )
+    assert ok is True
+    assert reason is None
+
+
+def test_check_sandbox_preflight_admits_when_within_remaining_budget():
+    # Limit 10s = 10_000ms; used 4_000ms => 6_000ms remaining; projected 5_000ms fits.
+    ok, reason = usage_metering.check_sandbox_preflight(
+        usage={"sandbox_ms": 4_000},
+        quota={"sandbox_seconds_limit": 10},
+        projected_ms=5_000,
+    )
+    assert ok is True
+    assert reason is None
+
+
+def test_check_sandbox_preflight_admits_at_exact_boundary():
+    # projected == remaining is allowed (rejection is strictly greater-than).
+    ok, reason = usage_metering.check_sandbox_preflight(
+        usage={"sandbox_ms": 4_000},
+        quota={"sandbox_seconds_limit": 10},
+        projected_ms=6_000,
+    )
+    assert ok is True
+    assert reason is None
+
+
+def test_check_sandbox_preflight_rejects_when_projection_exceeds_remaining():
+    ok, reason = usage_metering.check_sandbox_preflight(
+        usage={"sandbox_ms": 8_000},
+        quota={"sandbox_seconds_limit": 10},
+        projected_ms=5_000,
+    )
+    assert ok is False
+    assert reason == "sandbox_quota_preflight"
+
+
 @pytest.mark.asyncio
 async def test_summarize_billing_events_rolls_up_by_kind_and_sorts_latest_first(patch_mongo):
     await usage_metering.emit_billing_event(

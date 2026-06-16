@@ -36,6 +36,7 @@ GUARDRAIL_EVENTS: Any = None
 AUTH_FAILURES: Any = None
 USAGE_EVENTS: Any = None
 QUOTA_BLOCKS: Any = None
+QUOTA_PREFLIGHT_BLOCKS: Any = None
 EGRESS_BLOCKS: Any = None
 SANDBOX_POOL_EVENTS: Any = None
 SANDBOX_POOL_WORKERS: Any = None
@@ -79,6 +80,11 @@ if _PROMETHEUS_AVAILABLE:
     QUOTA_BLOCKS = Counter(
         "gateway_quota_blocks_total",
         "Tenant requests blocked due to configured usage quotas.",
+    )
+    QUOTA_PREFLIGHT_BLOCKS = Counter(
+        "gateway_quota_preflight_blocks_total",
+        "Code-tool calls rejected up front because their projected sandbox cost "
+        "could not fit the tenant's remaining sandbox-seconds quota.",
     )
     EGRESS_BLOCKS = Counter(
         "gateway_egress_blocks_total",
@@ -141,6 +147,12 @@ def observe_quota_block() -> None:
     if QUOTA_BLOCKS is None:
         return
     QUOTA_BLOCKS.inc()
+
+
+def observe_quota_preflight_block() -> None:
+    if QUOTA_PREFLIGHT_BLOCKS is None:
+        return
+    QUOTA_PREFLIGHT_BLOCKS.inc()
 
 
 def observe_egress_block(stage: str) -> None:

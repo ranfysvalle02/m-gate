@@ -159,6 +159,28 @@ async def check_quota(
     return True, None, usage, quota
 
 
+def check_sandbox_preflight(
+    *,
+    usage: dict[str, Any],
+    quota: dict[str, int],
+    projected_ms: int,
+) -> tuple[bool, str | None]:
+    """Reject a code-tool run whose worst-case cost cannot fit remaining quota.
+
+    This is the shared gate both ``/rpc`` and ``/mcp`` consult so the two surfaces
+    enforce identical preflight behavior. It reuses the ``usage``/``quota`` already
+    fetched by :func:`check_quota` (no extra Mongo round trip). When no
+    sandbox-seconds limit is configured (``0`` => unlimited) it always admits.
+    """
+    limit_seconds = _non_negative_int(quota.get("sandbox_seconds_limit"))
+    if limit_seconds <= 0:
+        return True, None
+    remaining_ms = limit_seconds * 1000 - _non_negative_int(usage.get("sandbox_ms"))
+    if _non_negative_int(projected_ms) > remaining_ms:
+        return False, "sandbox_quota_preflight"
+    return True, None
+
+
 async def emit_billing_event(
     tenant_id: str,
     *,

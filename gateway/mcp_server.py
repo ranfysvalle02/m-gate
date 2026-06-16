@@ -11,12 +11,12 @@ from services.authorization import get_authorization_service
 from services.credential_broker import CallerIdentity
 from services.data_plane import record_billable_call
 from services.hybrid_search import HybridSearchService
-from services.metrics import observe_quota_block
+from services.metrics import observe_quota_block, observe_quota_preflight_block
 from services.proxy_registry import get_proxy_registry
 from services.registry_watcher import get_catalog_version
 from services.telemetry_logger import get_telemetry_logger
-from services.tenant_status import TenantSuspendedError, assert_tenant_active
-from services.usage_metering import check_quota
+from services.tenant_status import TenantInactiveError, assert_tenant_active
+from services.usage_metering import check_quota, check_sandbox_preflight
 
 try:
     from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -238,10 +238,10 @@ def _register_tools(mcp: FastMCP) -> None:
         identity = _resolve_identity(tenant_id)
         try:
             await assert_tenant_active(identity.tenant_id)
-        except TenantSuspendedError as exc:
+        except TenantInactiveError as exc:
             _audit(
                 identity,
-                status="tenant_suspended",
+                status=exc.status_code,
                 started=started,
                 metadata={"server": server, "tool": name, "reason": exc.reason},
             )
@@ -292,6 +292,37 @@ def _register_tools(mcp: FastMCP) -> None:
                 },
             )
             raise ToolError(f"quota_exceeded: {quota_reason}")
+
+        # Sandbox quota preflight: identical gate to the /rpc data plane so a code
+        # tool whose worst-case sandbox cost cannot fit the remaining quota is
+        # rejected before any work starts, rather than killed mid-flight.
+        tool_metadata = (authz.tool or {}).get("metadata", {})
+        is_code_tool = tool_metadata.get("transport") == "code"
+        if is_code_tool and settings.quota_preflight_enabled:
+            projected_ms = int(
+                tool_metadata.get("wall_timeout_ms") or settings.sandbox_wall_timeout_ms
+            )
+            preflight_ok, preflight_reason = check_sandbox_preflight(
+                usage=usage, quota=quota, projected_ms=projected_ms
+            )
+            if not preflight_ok:
+                observe_quota_preflight_block()
+                _audit(
+                    identity,
+                    status="sandbox_quota_preflight",
+                    started=started,
+                    metadata={
+                        "server": server,
+                        "tool": name,
+                        "reason": preflight_reason,
+                        "projected_ms": projected_ms,
+                        "usage": usage,
+                        "quota": quota,
+                    },
+                )
+                raise ToolError(
+                    "sandbox_quota_preflight: projected sandbox cost exceeds remaining quota"
+                )
 
         caller = CallerIdentity(
             user_id=identity.user_id,
