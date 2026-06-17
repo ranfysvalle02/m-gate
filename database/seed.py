@@ -16,10 +16,22 @@ from services.code_tools import (
 
 logger = logging.getLogger(__name__)
 
-# Local-only demo account so the admin console's "Generate token" flow has an
-# immediate target out of the box. Never seeded in production (see _seed_demo_user).
+# Local-only demo accounts so the console + MCP surface have immediate targets out
+# of the box. Never seeded in production (see _seed_demo_user / _seed_viewer_user).
+# Together they form three purposeful personas for a showcase:
+#   * demo@demo.com   (env ADMIN_EMAIL/PASSWORD) -> platform-admin: full control.
+#   * agent@demo.com  -> can-invoke power user: discovers AND runs tools.
+#   * viewer@demo.com -> read-only showcase: browses the console + discovers tools
+#                        over MCP, but every mutation/invocation is refused.
 _DEMO_USER_EMAIL = "agent@demo.com"
 _DEMO_USER_PASSWORD = "agent-demo"  # noqa: S105 - local-dev convenience credential only
+
+# The read-only twin: same discovery surface (so search shows everything), but the
+# viewer + tool:read roles make the console read-only and the MCP token
+# discover-only (tools/call is refused). The safe persona to hand to an audience.
+_VIEWER_USER_EMAIL = "viewer@demo.com"
+_VIEWER_USER_PASSWORD = "viewer-demo"  # noqa: S105 - local-dev convenience credential only
+
 _DEMO_USER_SCOPES = [
     "gateway_demo",
     "weather",
@@ -884,6 +896,34 @@ async def _seed_demo_user(tenant_id: str) -> None:
     logger.info("Seeded demo user '%s' in tenant '%s'.", _DEMO_USER_EMAIL, tenant_id)
 
 
+async def _seed_viewer_user(tenant_id: str) -> None:
+    """Seed a read-only showcase account (local/dev only).
+
+    The data-plane + console twin of the demo user: ``viewer`` makes the admin
+    console read-only and ``tool:read`` makes the MCP token discover-only, so a
+    minted bearer can ``tools/list`` / ``tools/search`` the full curated catalog
+    but ``tools/call`` is refused. Skipped in production so a known credential
+    never ships there.
+    """
+    settings = get_settings()
+    if settings.environment.lower() in {"prod", "production"}:
+        return
+    try:
+        user = await users_service.create_user(
+            email=_VIEWER_USER_EMAIL,
+            password=_VIEWER_USER_PASSWORD,
+            tenant_id=tenant_id,
+            roles=list(users_service.VIEWER_USER_ROLES),
+            scopes=_DEMO_USER_SCOPES,
+            status="active",
+            created_by="bootstrap",
+        )
+    except users_service.UserAlreadyExists:
+        return
+    await users_service.sync_session_context(user)
+    logger.info("Seeded viewer user '%s' in tenant '%s'.", _VIEWER_USER_EMAIL, tenant_id)
+
+
 async def seed_bootstrap_data() -> None:
     settings = get_settings()
     tenant_id = settings.default_tenant_id
@@ -926,3 +966,4 @@ async def seed_bootstrap_data() -> None:
     )
 
     await _seed_demo_user(tenant_id)
+    await _seed_viewer_user(tenant_id)

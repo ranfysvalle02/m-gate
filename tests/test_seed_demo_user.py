@@ -11,7 +11,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from database.seed import _DEMO_USER_EMAIL, _DEMO_USER_PASSWORD, _seed_demo_user
+from database.seed import (
+    _DEMO_USER_EMAIL,
+    _DEMO_USER_PASSWORD,
+    _VIEWER_USER_EMAIL,
+    _VIEWER_USER_PASSWORD,
+    _seed_demo_user,
+    _seed_viewer_user,
+)
 from services import users as users_service
 
 
@@ -59,3 +66,46 @@ async def test_seed_demo_user_skipped_in_production(reset_settings, patch_mongo,
     await _seed_demo_user("local-dev")
 
     assert await users_service.find_user_by_email(_DEMO_USER_EMAIL) is None
+
+
+@pytest.mark.asyncio
+async def test_seeds_viewer_user_read_only(reset_settings, patch_mongo):
+    await _seed_viewer_user("local-dev")
+
+    doc = await users_service.find_user_by_email(_VIEWER_USER_EMAIL)
+    assert doc is not None
+    assert doc["tenant_id"] == "local-dev"
+    # The viewer is the read-only showcase: viewer (console read-only) + tool:read
+    # (discover-only MCP), never tool:invoke.
+    assert set(doc["roles"]) == {"user", "viewer", "tool:read"}
+    assert "tool:invoke" not in doc["roles"]
+    assert doc["scopes"]  # full discovery surface
+    assert doc["status"] == "active"
+
+    principal = await users_service.authenticate(_VIEWER_USER_EMAIL, _VIEWER_USER_PASSWORD)
+    assert principal is not None
+
+
+@pytest.mark.asyncio
+async def test_seed_viewer_user_is_idempotent(reset_settings, patch_mongo):
+    await _seed_viewer_user("local-dev")
+    await _seed_viewer_user("local-dev")
+
+    users = await users_service.list_users(tenant_id="local-dev")
+    matching = [u for u in users if u["email"] == _VIEWER_USER_EMAIL]
+    assert len(matching) == 1
+
+
+@pytest.mark.asyncio
+async def test_seed_viewer_user_skipped_in_production(reset_settings, patch_mongo, monkeypatch):
+    import database.seed as seed_module
+
+    monkeypatch.setattr(
+        seed_module,
+        "get_settings",
+        lambda: SimpleNamespace(environment="production"),
+    )
+
+    await _seed_viewer_user("local-dev")
+
+    assert await users_service.find_user_by_email(_VIEWER_USER_EMAIL) is None

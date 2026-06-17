@@ -68,6 +68,18 @@ Go to **http://localhost:8000/ui** and sign in with the local bootstrap admin:
 > strong `ADMIN_EMAIL` / `ADMIN_PASSWORD` for any real deployment (the gateway refuses
 > to boot in `ENVIRONMENT=production` with weak ones).
 
+`docker compose up` seeds **three purposeful personas** so you can demo every access
+tier instantly (local/dev only — never seeded in production):
+
+| Persona | Login | What it shows |
+| --- | --- | --- |
+| **Platform admin** | `demo@demo.com` / `demo` | Full control: manage tenants, users, servers, embeddings. |
+| **Power user** (can invoke) | `agent@demo.com` / `agent-demo` | Discovers **and** runs tools — `tools/list`, `tools/search`, `tools/call`. |
+| **Viewer** (read-only) | `viewer@demo.com` / `viewer-demo` | Read-only console + **discover-only** MCP — browses everything, mutates/invokes nothing (see [`READONLY.md`](READONLY.md)). |
+
+Each persona works on both surfaces: log into the console with it, or mint its bearer
+(**Users → Generate token**, or `POST /auth/token`) for an MCP client.
+
 Once you're in, the dashboard greets you with a **Connect Now** hero — the fastest
 path from zero to a connected client:
 

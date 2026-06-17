@@ -165,7 +165,11 @@ services:
       # bootstrap job). The admin console at http://localhost:8000/ui logs in with
       # the ADMIN_EMAIL/ADMIN_PASSWORD below (local-dev defaults only — never ship
       # these to production), and you mint per-user client tokens from there
-      # (Users -> Generate token).
+      # (Users -> Generate token). Bootstrap also seeds three local-only personas
+      # so every access tier is demoable out of the box (skipped in production):
+      #   demo@demo.com   / demo        -> platform admin (full control)
+      #   agent@demo.com  / agent-demo  -> can-invoke power user (discovers + runs)
+      #   viewer@demo.com / viewer-demo -> read-only showcase (browse + discover only)
       AUTH_MODE: "hs256"
       JWT_SECRET_FILE: /gateway-secrets/jwt_secret
       ADMIN_UI_ENABLED: "true"

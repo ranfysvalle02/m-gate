@@ -46,6 +46,12 @@
 - **Docs:** new [`READONLY.md`](READONLY.md) — a screenshot-driven walkthrough
   (freeze → curate → viewer login) with an enforcement diagram, API table, and
   troubleshooting; cross-linked from the README, QUICKSTART, AUTH, and API docs.
+- **Seeded read-only persona.** `docker compose up` now bootstraps a stable
+  `viewer@demo.com` / `viewer-demo` account alongside the existing
+  `agent@demo.com`, giving three purposeful, reproducible demo tiers out of the
+  box — platform admin (`demo@demo.com`), can-invoke power user (`agent@demo.com`),
+  and read-only showcase (`viewer@demo.com`). Local/dev only; skipped in
+  production, idempotent, and documented in QUICKSTART + `docker-compose.yml`.
 
 ### Fix: `POST /auth/token` (password grant) now works for non-admin users on `/rpc`/`/mcp`
 - Under `hs256`, `POST /auth/token` minted an **admin-session** token, which
