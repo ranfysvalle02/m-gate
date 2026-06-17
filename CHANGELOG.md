@@ -47,6 +47,20 @@
   (freeze → curate → viewer login) with an enforcement diagram, API table, and
   troubleshooting; cross-linked from the README, QUICKSTART, AUTH, and API docs.
 
+### Fix: `POST /auth/token` (password grant) now works for non-admin users on `/rpc`/`/mcp`
+- Under `hs256`, `POST /auth/token` minted an **admin-session** token, which
+  `AuthMiddleware` only accepts on the MCP surface for console principals
+  (`admin`/`viewer`). A plain tool user (e.g. the documented `agent@demo.com`
+  with `tool:invoke`) got `401 "Invalid bearer token"` because the session token
+  fell through to the data-plane decode and failed signature verification — the
+  exact terminal flow shown in QUICKSTART and the connect modal.
+- The endpoint is now `auth_mode`-aware, mirroring the console's **Generate
+  token**: `hs256` mints a real *scoped* data-plane bearer (roles **and** scopes,
+  signed with `JWT_SECRET`) accepted for any role; `jwks` keeps the roles-only
+  admin-session fallback (issue scoped tokens from your IdP). `resolve_login_principal`
+  now also returns the principal's `scopes` so the minted bearer clears per-call
+  authorization.
+
 ### Breaking: security is always enforced — `AUTH_MODE=disabled` removed
 - **`AUTH_MODE=disabled` is gone.** The `AUTH_MODE` setting now accepts only
   `hs256` (default) or `jwks`; loading with `disabled` fails validation. Every

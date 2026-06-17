@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 
+import jwt
 import pytest
 from starlette.requests import Request
 
@@ -75,10 +76,26 @@ class _Sink:
 # POST /auth/token (OAuth2 password grant)
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
-async def test_token_endpoint_returns_bearer_for_valid_credentials(reset_settings, monkeypatch):
+async def test_token_endpoint_mints_scoped_dataplane_bearer_under_hs256(
+    reset_settings, monkeypatch
+):
+    """hs256: /auth/token returns a real scoped data-plane bearer, not a session token.
+
+    Regression guard: a non-admin tool user's token must carry roles AND scopes and
+    be verifiable against ``jwt_secret`` (the bearer path), so the documented
+    password-grant -> /rpc flow works for tool users instead of 401ing.
+    """
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
+
     async def fake_resolve(email, password):
         assert (email, password) == ("svc@x.com", "pw")
-        return {"email": "svc@x.com", "tenant_id": "tenant-b", "roles": ["tool:invoke"]}
+        return {
+            "email": "svc@x.com",
+            "tenant_id": "tenant-b",
+            "roles": ["tool:invoke"],
+            "scopes": ["server:weather"],
+        }
 
     monkeypatch.setattr(auth_router, "resolve_login_principal", fake_resolve)
     request = _request(
@@ -92,11 +109,92 @@ async def test_token_endpoint_returns_bearer_for_valid_credentials(reset_setting
     data = _body(response)
     assert data["token_type"] == "bearer"
     assert data["expires_in"] > 0
-    claims = verify_session(data["access_token"])
-    assert claims is not None
+    # It is NOT an admin-session token anymore.
+    assert verify_session(data["access_token"]) is None
+    claims = jwt.decode(data["access_token"], "super-secret-for-tests", algorithms=["HS256"])
+    assert "kind" not in claims
     assert claims["sub"] == "svc@x.com"
     assert claims["tenant_id"] == "tenant-b"
     assert claims["roles"] == ["tool:invoke"]
+    # Both claim names are stamped so any downstream scope check finds them.
+    assert claims["scopes"] == ["server:weather"]
+    assert claims["groups"] == ["server:weather"]
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_falls_back_to_session_under_jwks(reset_settings, monkeypatch):
+    """jwks: the gateway can't forge a verifiable bearer, so it mints a session token."""
+    monkeypatch.setenv("AUTH_MODE", "jwks")
+
+    async def fake_resolve(email, password):
+        return {
+            "email": "svc@x.com",
+            "tenant_id": "tenant-b",
+            "roles": ["admin"],
+            "scopes": [],
+        }
+
+    monkeypatch.setattr(auth_router, "resolve_login_principal", fake_resolve)
+    request = _request(
+        "POST",
+        "/auth/token",
+        body=b"grant_type=password&username=svc@x.com&password=pw",
+        headers=[(b"content-type", b"application/x-www-form-urlencoded")],
+    )
+    response = await issue_token(request)
+    assert response.status_code == 200
+    claims = verify_session(_body(response)["access_token"])
+    assert claims is not None
+    assert claims["roles"] == ["admin"]
+
+
+@pytest.mark.asyncio
+async def test_hs256_password_grant_token_authorizes_nonadmin_on_rpc(reset_settings, monkeypatch):
+    """End-to-end: the hs256 /auth/token bearer for a NON-admin clears AuthMiddleware on /rpc.
+
+    Reproduces the bug where a tool user's password-grant token was rejected with
+    "Invalid bearer token" because it was an admin-session token that fell through
+    to the data-plane decode. The fix mints a real bearer, so /rpc now returns 200
+    with roles + scopes hydrated and is_admin_principal False.
+    """
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
+
+    async def fake_resolve(email, password):
+        return {
+            "email": "svc@x.com",
+            "tenant_id": "tenant-b",
+            "roles": ["tool:invoke"],
+            "scopes": ["server:weather"],
+        }
+
+    monkeypatch.setattr(auth_router, "resolve_login_principal", fake_resolve)
+    token = _body(
+        await issue_token(
+            _request(
+                "POST",
+                "/auth/token",
+                body=b"grant_type=password&username=svc@x.com&password=pw",
+                headers=[(b"content-type", b"application/x-www-form-urlencoded")],
+            )
+        )
+    )["access_token"]
+
+    captured = {}
+
+    async def ok_app(scope, receive, send):
+        captured["state"] = scope.get("state", {})
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    middleware = AuthMiddleware(ok_app)
+    scope = _scope("/rpc", "POST", headers=[(b"authorization", f"Bearer {token}".encode())])
+    sink = _Sink()
+    await middleware(scope, sink.receive, sink.send)
+    assert sink.status == 200
+    assert captured["state"]["roles"] == ["tool:invoke"]
+    assert captured["state"]["scopes"] == ["server:weather"]
+    assert captured["state"]["is_admin_principal"] is False
 
 
 @pytest.mark.asyncio

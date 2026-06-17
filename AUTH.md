@@ -61,8 +61,9 @@ It then tries, in order:
    Verified by `services/admin_session.verify_session` (HS256 over
    `ADMIN_SESSION_SECRET`, falling back to `JWT_SECRET`). The token embeds
    `tenant_id` + `roles`; only `admin`/`platform-admin` roles make the caller an
-   admin principal. This is the token issued by both the admin UI login **and**
-   `POST /auth/token`.
+   admin principal. This is the token issued by the admin UI login (and by
+   `POST /auth/token` **only under `auth_mode=jwks`** — under `hs256` that
+   endpoint mints a real scoped bearer that travels path 3 below).
 2. **Optional HTTP Basic on the MCP surface** (`/rpc`, `/mcp`), gated by
    `MCP_BASIC_AUTH_ENABLED` (default off).
    Credentials are decoded and resolved per request via
@@ -119,9 +120,16 @@ without an external IdP.
 ### 2.1 `POST /auth/token` — username/password → bearer
 
 OAuth2 **Resource Owner Password Credentials** grant. Accepts form-encoded or
-JSON. Exchanges credentials for the same signed session token the admin UI
-issues — which `AuthMiddleware` already accepts on `/rpc` and `/mcp` in every
-`AUTH_MODE`.
+JSON. The token shape is `auth_mode`-aware (mirroring the console's **Generate
+token**):
+
+- **`hs256`** — a real *scoped* data-plane bearer signed with `JWT_SECRET`
+  (roles **and** scopes). `AuthMiddleware` accepts it on `/rpc` and `/mcp` for
+  **any** role, so a plain tool user (`tool:invoke`) can use the password grant
+  end-to-end — not just `admin`/`viewer` console principals.
+- **`jwks`** — the gateway cannot forge a token its IdP-backed verifier trusts,
+  so it falls back to a roles-only admin-session token (accepted on `/rpc` +
+  `/mcp` for console principals). Issue scoped tokens from your IdP in this mode.
 
 ```bash
 curl -X POST http://localhost:8000/auth/token \

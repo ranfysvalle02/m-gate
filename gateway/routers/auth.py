@@ -6,9 +6,17 @@ discover the OAuth issuer when the gateway runs as an OAuth2/OIDC resource
 server (``auth_mode=jwks``).
 
 - ``POST /auth/token`` - OAuth2 Resource Owner Password Credentials grant.
-  Exchanges username + password for a short-lived bearer (the same signed
-  session token the admin UI issues), which ``AuthMiddleware`` already accepts
-  on ``/rpc`` and ``/mcp`` in every ``auth_mode``.
+  Exchanges username + password for a short-lived bearer. The token shape is
+  ``auth_mode`` aware (mirroring the admin console's "Generate token"):
+
+  * ``hs256`` -- a real *scoped* data-plane bearer signed with ``jwt_secret``.
+    ``AuthMiddleware`` accepts it on ``/rpc`` and ``/mcp`` for **any** role
+    (not just console admins) and hydrates ``request.state.scopes``, so the
+    documented password-grant -> ``/rpc`` flow works for tool users too.
+  * ``jwks`` -- the gateway cannot forge a token its IdP-backed verifier
+    trusts, so it falls back to a roles-only admin-session token (accepted on
+    ``/rpc`` + ``/mcp`` for console principals). Issue scoped tokens from your
+    IdP in this mode.
 - ``GET /.well-known/oauth-protected-resource`` - RFC 9728 Protected Resource
   Metadata describing the configured authorization server. The gateway does not
   itself implement an OAuth authorization server: full OAuth is "bring your own
@@ -25,7 +33,7 @@ from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 
 from config.settings import get_settings
-from services.admin_session import mint_session
+from services.admin_session import mint_bearer_jwt, mint_session
 from services.users import resolve_login_principal
 
 router = APIRouter(tags=["auth"])
@@ -90,16 +98,33 @@ async def issue_token(request: Request) -> JSONResponse:
                 "error_description": "Invalid username or password.",
             },
         )
-    token = mint_session(
-        principal["email"],
-        tenant_id=principal["tenant_id"],
-        roles=principal["roles"],
-    )
+    roles = list(principal.get("roles") or [])
+    scopes = list(principal.get("scopes") or [])
+    expires_in = settings.admin_session_ttl_seconds
+    if settings.auth_mode == "jwks":
+        # The gateway cannot mint a token its IdP-backed verifier would trust, so
+        # fall back to a roles-only admin-session token. It authenticates on /rpc +
+        # /mcp for console principals; scoped data-plane tokens come from the IdP.
+        token = mint_session(
+            principal["email"],
+            tenant_id=principal["tenant_id"],
+            roles=roles,
+        )
+    else:  # hs256 -- a real, scoped data-plane bearer (verified against jwt_secret)
+        # so the password grant produces a credential that clears the /rpc + /mcp
+        # gate and per-call authorization for ANY role, not just console admins.
+        token = mint_bearer_jwt(
+            principal["email"],
+            tenant_id=principal["tenant_id"],
+            roles=roles,
+            scopes=scopes,
+            ttl_seconds=expires_in,
+        )
     return JSONResponse(
         content={
             "access_token": token,
             "token_type": "bearer",
-            "expires_in": settings.admin_session_ttl_seconds,
+            "expires_in": expires_in,
         }
     )
 

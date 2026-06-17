@@ -111,8 +111,10 @@ All references point at the code that implements the control.
   gateway's own surface (`/rpc`, `/mcp`) can authenticate with username/password:
   - `POST /auth/token` — OAuth2 Resource Owner Password Credentials grant. Exchanges
     username + password (resolved by the same `resolve_login_principal` used by the admin
-    login) for a short-lived bearer (the signed session token), returned as
-    `{access_token, token_type, expires_in}`. Works in every `AUTH_MODE`.
+    login) for a short-lived bearer, returned as `{access_token, token_type, expires_in}`.
+    Under `hs256` it mints a real *scoped* data-plane bearer (roles + scopes) accepted on
+    `/rpc`/`/mcp` for any role; under `jwks` it falls back to a roles-only admin-session
+    token (issue scoped tokens from your IdP).
   - Optional HTTP Basic directly on `/rpc`/`/mcp` behind `MCP_BASIC_AUTH_ENABLED` (default
     off): credentials are decoded and resolved per request; failures return `401` with a
     `WWW-Authenticate: Basic` challenge.

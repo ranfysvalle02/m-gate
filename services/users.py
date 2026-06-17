@@ -213,7 +213,7 @@ async def authenticate(email: str, password: str) -> dict[str, Any] | None:
 
 
 async def resolve_login_principal(email: str, password: str) -> dict[str, Any] | None:
-    """Resolve credentials to a login principal ``{email, tenant_id, roles}``.
+    """Resolve credentials to a login principal ``{email, tenant_id, roles, scopes}``.
 
     Single source of truth shared by the admin UI login and the ``/auth/token``
     endpoint. Managed users (control-DB ``users`` collection) take precedence;
@@ -221,6 +221,11 @@ async def resolve_login_principal(email: str, password: str) -> dict[str, Any] |
     superuser. The DB lookup is best-effort: before the control plane is
     provisioned (or in unit tests without a database) it is skipped so the
     bootstrap admin can still sign in.
+
+    ``scopes`` carries the managed user's fine-grained grants so a caller minting
+    a data-plane bearer (``/auth/token`` under ``hs256``) produces a token that
+    actually clears per-call authorization. The bootstrap admin gets ``[]``: it
+    relies on the admin role bypass, not scopes.
     """
     settings = get_settings()
     try:
@@ -233,12 +238,14 @@ async def resolve_login_principal(email: str, password: str) -> dict[str, Any] |
             "email": user["email"],
             "tenant_id": user["tenant_id"],
             "roles": user["roles"],
+            "scopes": user["scopes"],
         }
     if verify_credentials(email, password):
         return {
             "email": normalize_email(email),
             "tenant_id": settings.default_tenant_id,
             "roles": [settings.platform_admin_role, "admin"],
+            "scopes": [],
         }
     return None
 
