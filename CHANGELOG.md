@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Bug Fixes
+- **Severe Server Deadlock (MCP streaming).** Fixed a catastrophic deadlock that froze the entire `uvicorn` event loop and pegged the CPU at 100% when an MCP client connected via Server-Sent Events (SSE). The deadlock occurred because `GuardrailsMiddleware` wrapped the ASGI `receive` channel with an immediate-return payload, causing `sse-starlette`'s disconnect-monitoring loop to spin infinitely without yielding to the async loop. Streaming `/mcp` endpoints now bypass the body-buffering guardrails entirely.
+- **MongoDB QE Timeout in Rate Limiter.** Rate limit clock synchronization via `mongo_server_now()` now correctly leverages the QE-bypass client. This prevents timeout errors (`ServerSelectionTimeoutError`) when Queryable Encryption's query analysis attempts to parse the `hostInfo` command.
+
 ### Feature: read-only tenants, viewer principals, and per-tenant tool curation
 - **Read-only tenants.** A tenant can be frozen with a new `read_only` flag
   (orthogonal to `status`): it stays `active` and fully discoverable, but
