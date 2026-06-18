@@ -24,4 +24,4 @@ class RequestContextMiddleware:
                 message["headers"] = headers
             await send(message)
 
-        await self.app(scope, request.receive, send_with_request_id)
+        await self.app(scope, receive, send_with_request_id)

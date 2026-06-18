@@ -148,7 +148,7 @@ def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings()
     mcp = get_mcp_server()
-    mcp_app = mcp.http_app(path="/")
+    mcp_app = mcp.http_app(path="/", transport="sse")
 
     app = FastAPI(
         title=settings.app_name,
@@ -165,7 +165,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(RequestContextMiddleware)
+    # app.add_middleware(RequestContextMiddleware)
     if settings.enable_metrics:
         app.add_middleware(MetricsMiddleware)
     app.add_middleware(GuardrailsMiddleware)

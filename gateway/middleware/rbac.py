@@ -32,7 +32,7 @@ class RbacMiddleware:
                     )
                 else:
                     response = RedirectResponse(url=self._ui_login_path(), status_code=303)
-                return await response(scope, request.receive, send)
+                return await response(scope, receive, send)
             # Read-only console principals (the `viewer` role) reach the admin UI
             # but may not change anything. One choke point here covers every
             # mutating /admin endpoint, so individual handlers don't each need a
@@ -48,12 +48,12 @@ class RbacMiddleware:
                     status_code=403,
                     content={"detail": "Read-only access: mutations are disabled."},
                 )
-                return await response(scope, request.receive, send)
+                return await response(scope, receive, send)
             if self._requires_csrf(request):
                 response = JSONResponse(
                     status_code=403, content={"detail": "CSRF validation failed."}
                 )
-                return await response(scope, request.receive, send)
+                return await response(scope, receive, send)
 
         if self._is_data_plane(path):
             roles = set(getattr(request.state, "roles", []))
@@ -71,7 +71,7 @@ class RbacMiddleware:
                     status_code=403,
                     content={"detail": "Account suspended."},
                 )
-                return await response(scope, request.receive, send)
+                return await response(scope, receive, send)
             if session and isinstance(session.get("roles"), list):
                 roles.update(session["roles"])
             request.state.roles = sorted(roles)
@@ -85,9 +85,9 @@ class RbacMiddleware:
                 response = JSONResponse(
                     status_code=403, content={"detail": "Insufficient permissions."}
                 )
-                return await response(scope, request.receive, send)
+                return await response(scope, receive, send)
 
-        await self.app(scope, request.receive, send)
+        await self.app(scope, receive, send)
 
     def _is_data_plane(self, path: str) -> bool:
         """Both tool-invocation surfaces enforce the same coarse RBAC.

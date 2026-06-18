@@ -96,7 +96,8 @@ async def mongo_server_now() -> datetime:
     Reads ``hostInfo.system.currentTime`` (falling back to ``localTime``); raises
     if neither is present so callers can degrade to the local clock explicitly.
     """
-    host_info = await get_client().admin.command("hostInfo")
+    client = get_qe_bypass_client() if get_settings().qe_enabled else get_client()
+    host_info = await client.admin.command("hostInfo")
     if not isinstance(host_info, dict):
         raise RuntimeError("MongoDB hostInfo did not return a document.")
 

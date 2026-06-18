@@ -27,8 +27,9 @@ class GuardrailsMiddleware:
             return await self.app(scope, receive, send)
 
         request = Request(scope, receive=receive)
-        # Guard both custom JSON-RPC and mounted MCP transport surfaces.
-        if not (request.url.path.startswith("/rpc") or request.url.path.startswith("/mcp")):
+        # Guard only the custom JSON-RPC transport surface. FastMCP endpoints (/mcp)
+        # handle streaming and chunking natively, so we cannot safely buffer them.
+        if not request.url.path.startswith("/rpc"):
             return await self.app(scope, receive, send)
 
         # Reject on the declared Content-Length before buffering the body, so an
@@ -44,7 +45,7 @@ class GuardrailsMiddleware:
         if len(body) > self.settings.request_max_bytes:
             observe_guardrail_event("request_size", "blocked")
             response = JSONResponse(status_code=413, content={"detail": "Request body too large."})
-            return await response(scope, request.receive, send)
+            return await response(scope, receive, send)
 
         body_text = body.decode("utf-8", errors="ignore")
         check = await self.guardrails.check_inbound(self.span_extractor.extract(body_text))
@@ -54,7 +55,7 @@ class GuardrailsMiddleware:
                 status_code=400,
                 content={"detail": "Input rejected by guardrails.", "reasons": check.reasons},
             )
-            return await response(scope, request.receive, send)
+            return await response(scope, receive, send)
         observe_guardrail_event("inbound", "allowed")
 
         async def receive_with_cached_body():

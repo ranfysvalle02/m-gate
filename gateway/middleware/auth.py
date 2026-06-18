@@ -219,7 +219,7 @@ class AuthMiddleware:
                 or self._is_auth_public_path(path)
                 or self._is_ui_path(path)
             ):
-                await self.app(scope, request.receive, send)
+                await self.app(scope, receive, send)
                 return
 
             token = self._bearer_token(request)
@@ -247,7 +247,7 @@ class AuthMiddleware:
                 response = self._auth_failure_response(exc, request)
                 return await response(scope, receive, send)
 
-        await self.app(scope, request.receive, send)
+        await self.app(scope, receive, send)
 
     @staticmethod
     def _bearer_token(request: Request) -> str | None:

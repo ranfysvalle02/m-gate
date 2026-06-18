@@ -72,7 +72,7 @@ class RateLimitMiddleware:
         # consume a tenant's request budget.
         path = request.url.path
         if path.startswith("/health") or path == "/metrics":
-            return await self.app(scope, request.receive, send)
+                return await self.app(scope, receive, send)
 
         await self._maybe_refresh_clock_offset()
         now = self._now()
@@ -137,7 +137,7 @@ class RateLimitMiddleware:
                 content={"detail": "Rate limit exceeded."},
                 headers=headers,
             )
-            return await response(scope, request.receive, send)
+            return await response(scope, receive, send)
 
         async def send_with_rate_headers(message):
             if message["type"] == "http.response.start":
@@ -152,4 +152,4 @@ class RateLimitMiddleware:
                 message["headers"] = raw_headers
             await send(message)
 
-        await self.app(scope, request.receive, send_with_rate_headers)
+        await self.app(scope, receive, send_with_rate_headers)
