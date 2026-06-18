@@ -200,6 +200,15 @@ window.adminConsole = function adminConsole(config) {
       };
       if (body !== null) {
         headers["Content-Type"] = "application/json";
+      }
+      // The CSRF token must accompany every state-changing request, not only
+      // those carrying a JSON body: a bodyless DELETE (e.g. deleting a user)
+      // still mutates state and is rejected by the server's CSRF check if the
+      // header is missing.
+      const unsafeMethod = ["POST", "PUT", "PATCH", "DELETE"].includes(
+        method.toUpperCase(),
+      );
+      if (unsafeMethod) {
         const csrfToken = this.readCookie(config.csrfCookieName);
         if (csrfToken) {
           headers["X-CSRF-Token"] = csrfToken;
