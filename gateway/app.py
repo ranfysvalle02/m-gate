@@ -180,6 +180,7 @@ def create_app() -> FastAPI:
     if settings.admin_ui_enabled:
         app.mount("/static", StaticFiles(directory="gateway/static"), name="static")
         app.include_router(ui_router, prefix=settings.admin_ui_path)
+    app.mount("/mcp/sse", mcp_app)
     app.mount("/mcp", mcp_app)
     configure_tracing(app)
     return app
