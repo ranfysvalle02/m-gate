@@ -634,91 +634,165 @@
       x-text="state.userNotice"
     ></div>
   </template>
-  <form class="grid gap-3 md:grid-cols-3" @submit.prevent="createUser()">
-    <div>
-      <label class="field-label">Email</label
-      ><input
-        type="email"
-        class="field-input"
-        x-model="forms.user.email"
-        required
-      />
+  <!-- One-click personas: the easy, obvious path to a shareable credential. -->
+  <div x-show="canMutate()" class="space-y-3">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <h3 class="text-lg font-semibold">Create a user to share</h3>
+      <button type="button" class="btn-secondary" @click="loadUsers()">Refresh</button>
     </div>
-    <div>
-      <label class="field-label">Password</label
-      ><input
-        type="password"
-        class="field-input"
-        x-model="forms.user.password"
-        autocomplete="new-password"
-        required
-      />
-    </div>
-    <div>
-      <label class="field-label">Role</label>
-      <select
-        class="field-input"
-        x-model="forms.user.role"
-        @change="onUserRoleChange()"
-      >
-        <template x-for="opt in roleOptions" :key="opt.value">
-          <option :value="opt.value" x-text="opt.label"></option>
-        </template>
-      </select>
-    </div>
-    <div class="md:col-span-2">
-      <label class="field-label">Scopes (comma-separated)</label
-      ><input
-        class="field-input"
-        x-model="forms.user.scopes"
-        placeholder="orders:read, weather"
-      />
-    </div>
-    <div>
-      <label class="field-label">Status</label>
-      <select class="field-input" x-model="forms.user.status">
-        <option value="active">active</option>
-        <option value="disabled">disabled</option>
-      </select>
-    </div>
-    <div class="flex items-end gap-2 md:col-span-3 flex-wrap">
-      <button type="submit" class="btn-primary" x-show="canMutate()">Create User</button>
-      <button
-        type="button"
-        class="btn-primary"
-        x-show="canMutate()"
-        @click="createDemoUser()"
-        :disabled="state.demoCreating"
-        title="Create a ready-to-use, tool-invoking demo account and get a token + mcp.json"
-      >
-        <span x-text="state.demoCreating ? 'Creating…' : '✨ Create demo user'"></span>
-      </button>
-      <button
-        type="button"
-        class="btn-secondary"
-        x-show="canMutate()"
-        @click="createViewerUser()"
-        :disabled="state.viewerCreating"
-        title="Create a read-only viewer account (viewer + tool:read): a read-only console login AND a discover-only MCP token — it can browse and list/search tools but cannot mutate or call them"
-      >
-        <span x-text="state.viewerCreating ? 'Creating…' : '👁 Create viewer user'"></span>
-      </button>
-      <button type="button" class="btn-secondary" @click="resetUserForm()">
-        Reset
-      </button>
-      <button type="button" class="btn-secondary" @click="loadUsers()">
-        Refresh
-      </button>
-    </div>
-    <p class="text-xs text-slate-500 md:col-span-3">
-      <strong>Create demo user</strong> mints a scoped, tool-invoking account with a
-      generated password and catalog-derived scopes — then hands you a bearer token
-      and a ready-to-paste Cursor <code>mcp.json</code>. <strong>Create viewer user</strong>
-      mints the complete read-only identity (<code>viewer</code> + <code>tool:read</code>):
-      a read-only console login <em>and</em> a discover-only MCP token that can search and
-      list the curated catalog but never <code>tools/call</code> — ideal for a safe showcase.
+    <p class="text-sm text-slate-600 max-w-3xl">
+      Pick a persona — we mint the account, generate a password, and hand you a
+      bearer token plus a ready-to-paste Cursor <code>mcp.json</code>. No fields to fill in.
     </p>
-  </form>
+    <div class="grid gap-4 md:grid-cols-3">
+      <!-- Team member: safe-to-share, read-only invoke (the "hello world"). -->
+      <div
+        class="card flex flex-col gap-3"
+        style="border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent)"
+      >
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="text-2xl" aria-hidden="true">🤝</span>
+            <span
+              class="inline-flex items-center rounded-full bg-emerald-100 text-emerald-700 text-xs font-semibold px-2 py-0.5"
+              >Recommended</span
+            >
+          </div>
+          <h4 class="text-base font-semibold mt-2">Team member</h4>
+          <p class="text-sm text-slate-600 mt-1">
+            Safe to share. Can <strong>run read-only tools</strong> — say hello with
+            <code>gateway_hello</code>, check the weather, look things up — but
+            <strong>cannot change or delete anything</strong>.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="btn-primary mt-auto"
+          @click="createTeamUser()"
+          :disabled="state.teamCreating"
+          title="Create a non-destructive, tool-invoking team account and get a token + mcp.json"
+          x-text="state.teamCreating ? 'Creating…' : '🤝 Create team user'"
+        ></button>
+      </div>
+
+      <!-- Demo: full invoke, including writes — for your own testing. -->
+      <div class="card flex flex-col gap-3">
+        <div>
+          <span class="text-2xl" aria-hidden="true">✨</span>
+          <h4 class="text-base font-semibold mt-2">Demo</h4>
+          <p class="text-sm text-slate-600 mt-1">
+            Full power. Can invoke <strong>every</strong> tool, including ones that
+            <strong>write or delete</strong>. Best for your own end-to-end testing.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="btn-primary mt-auto"
+          @click="createDemoUser()"
+          :disabled="state.demoCreating"
+          title="Create a ready-to-use, tool-invoking demo account and get a token + mcp.json"
+          x-text="state.demoCreating ? 'Creating…' : '✨ Create demo user'"
+        ></button>
+      </div>
+
+      <!-- Viewer: look but don't touch — discover-only, mutates nothing. -->
+      <div class="card flex flex-col gap-3">
+        <div>
+          <span class="text-2xl" aria-hidden="true">👁</span>
+          <h4 class="text-base font-semibold mt-2">Viewer</h4>
+          <p class="text-sm text-slate-600 mt-1">
+            Look, don't touch. Browses the console and can
+            <strong>list &amp; search</strong> the catalog, but
+            <strong>cannot run any tool</strong>. Ideal for a safe showcase.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="btn-secondary mt-auto"
+          @click="createViewerUser()"
+          :disabled="state.viewerCreating"
+          title="Create a read-only viewer account (viewer + tool:read): a read-only console login AND a discover-only MCP token — it can browse and list/search tools but cannot mutate or call them"
+          x-text="state.viewerCreating ? 'Creating…' : '👁 Create viewer user'"
+        ></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Advanced: explicit email/password/role/scopes for power users. -->
+  <div class="pt-1" x-show="canMutate()">
+    <button
+      type="button"
+      class="link-btn"
+      @click="state.userAdvancedOpen = !state.userAdvancedOpen"
+      :aria-expanded="state.userAdvancedOpen"
+      x-text="(state.userAdvancedOpen ? '▾' : '▸') + ' Advanced: custom user (set your own email, password, role & scopes)'"
+    ></button>
+    <form
+      x-show="state.userAdvancedOpen"
+      x-cloak
+      class="grid gap-3 md:grid-cols-3 mt-3"
+      @submit.prevent="createUser()"
+    >
+      <div>
+        <label class="field-label">Email</label
+        ><input
+          type="email"
+          class="field-input"
+          x-model="forms.user.email"
+          required
+        />
+      </div>
+      <div>
+        <label class="field-label">Password</label
+        ><input
+          type="password"
+          class="field-input"
+          x-model="forms.user.password"
+          autocomplete="new-password"
+          required
+        />
+      </div>
+      <div>
+        <label class="field-label">Role</label>
+        <select
+          class="field-input"
+          x-model="forms.user.role"
+          @change="onUserRoleChange()"
+        >
+          <template x-for="opt in roleOptions" :key="opt.value">
+            <option :value="opt.value" x-text="opt.label"></option>
+          </template>
+        </select>
+      </div>
+      <div class="md:col-span-2">
+        <label class="field-label">Scopes (comma-separated)</label
+        ><input
+          class="field-input"
+          x-model="forms.user.scopes"
+          placeholder="orders:read, weather"
+        />
+      </div>
+      <div>
+        <label class="field-label">Status</label>
+        <select class="field-input" x-model="forms.user.status">
+          <option value="active">active</option>
+          <option value="disabled">disabled</option>
+        </select>
+      </div>
+      <div class="flex items-end gap-2 md:col-span-3 flex-wrap">
+        <button type="submit" class="btn-primary" x-show="canMutate()">Create User</button>
+        <button type="button" class="btn-secondary" @click="resetUserForm()">
+          Reset
+        </button>
+      </div>
+      <p class="text-xs text-slate-500 md:col-span-3">
+        Full control over roles and scopes. Tip: pick <strong>Team member</strong> or
+        <strong>Demo</strong> as the Role to auto-fill a working scope set, or type your
+        own (e.g. <code>orders:read, weather</code>). Leaving scopes empty on an
+        invoke role means discovery and <code>tools/call</code> silently match nothing.
+      </p>
+    </form>
+  </div>
   <div class="table-wrap">
     <table class="table">
       <thead>
@@ -743,7 +817,7 @@
           <tr>
             <td x-text="user.email"></td>
             <td x-text="user.tenant_id"></td>
-            <td x-text="roleLabel(user.roles)"></td>
+            <td x-text="personaLabel(user)"></td>
             <td x-text="(user.scopes || []).join(', ') || '-'"></td>
             <td x-text="user.status"></td>
             <td class="space-x-2">

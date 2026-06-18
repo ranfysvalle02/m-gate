@@ -137,6 +137,10 @@ window.adminConsole = function adminConsole(config) {
       userTokenNewPassword: "",
       demoCreating: false,
       viewerCreating: false,
+      teamCreating: false,
+      // Advanced/custom user form lives behind a disclosure so the one-click
+      // persona cards are the obvious default path.
+      userAdvancedOpen: false,
       // Per-tenant tool policy editor (allowlist + max-tools + disabled overlay).
       toolPolicyOpen: false,
       toolPolicyTenant: "",
@@ -361,6 +365,27 @@ window.adminConsole = function adminConsole(config) {
         this.setError(error);
       } finally {
         this.state.demoCreating = false;
+      }
+    },
+
+    async createTeamUser() {
+      this.clearError();
+      this.state.userNotice = "";
+      this.state.teamCreating = true;
+      try {
+        const result = await this.apiRequest("/admin/users/team", {
+          method: "POST",
+          body: { tenant_id: this.state.tenantId },
+        });
+        await this.loadUsers();
+        this.notify(`Team user '${result.user.email}' created.`);
+        // Same hand-off as the demo button: open the token modal with a working
+        // bearer + one-time password, ready to paste into a teammate's mcp.json.
+        await this.generateUserToken(result.user, { password: result.password });
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.teamCreating = false;
       }
     },
 
@@ -949,7 +974,8 @@ window.adminConsole = function adminConsole(config) {
 
     roleOptions: [
       { value: "user", label: "User" },
-      { value: "demo", label: "Demo (can invoke tools)" },
+      { value: "team", label: "Team member (read-only invoke)" },
+      { value: "demo", label: "Demo (full invoke)" },
       { value: "viewer", label: "Viewer (read-only)" },
       { value: "tenant-admin", label: "Tenant admin" },
       { value: "platform-admin", label: "Platform admin" },
@@ -961,6 +987,9 @@ window.adminConsole = function adminConsole(config) {
       // A demo account can authenticate AND reach the /rpc + /mcp data plane
       // (rbac requires 'admin' or 'tool:invoke'), without any admin console access.
       if (selection === "demo") return ["user", "tool:invoke"];
+      // A team member is a demo on the role axis (it can invoke) — the safety
+      // comes from its scopes (read-only tools only), prefilled in onUserRoleChange.
+      if (selection === "team") return ["user", "tool:invoke"];
       // A viewer is the complete read-only identity (matches the one-click "Create
       // viewer user" button): `viewer` reaches the admin console read-only (every
       // mutation 403s) and `tool:read` discovers tools over MCP without invoking.
@@ -969,13 +998,21 @@ window.adminConsole = function adminConsole(config) {
     },
 
     async onUserRoleChange() {
-      // Picking "Demo" should produce a user that can actually call tools. Empty
-      // scopes silently fail discovery + invocation, so prefill the catalog-derived
-      // demo scopes (only when the operator hasn't typed their own).
-      if (this.forms.user.role !== "demo" || this.forms.user.scopes.trim()) return;
+      // Picking an invoke persona should produce a user that can actually call
+      // tools. Empty scopes silently fail discovery + invocation, so prefill the
+      // catalog-derived scope set (only when the operator hasn't typed their own).
+      // Demo gets every scope; team gets only the read-only (non-destructive) set.
+      const role = this.forms.user.role;
+      const endpoint =
+        role === "demo"
+          ? "demo-scopes"
+          : role === "team"
+            ? "safe-scopes"
+            : null;
+      if (!endpoint || this.forms.user.scopes.trim()) return;
       try {
         const payload = await this.apiRequest(
-          `/admin/users/demo-scopes?tenant_id=${encodeURIComponent(this.state.tenantId)}`,
+          `/admin/users/${endpoint}?tenant_id=${encodeURIComponent(this.state.tenantId)}`,
         );
         this.forms.user.scopes = (payload.scopes || []).join(", ");
       } catch (error) {
@@ -983,12 +1020,31 @@ window.adminConsole = function adminConsole(config) {
       }
     },
 
+    // Persona label for the users table. Demo and team share the `tool:invoke`
+    // role, so they are told apart by scopes: a team user's read-only scope set
+    // carries no write/destructive scope (heuristically, none ending in ":write").
+    personaLabel(user) {
+      const roles = new Set(user?.roles || []);
+      if (roles.has("platform-admin")) return "Platform admin";
+      if (roles.has("admin")) return "Tenant admin";
+      if (roles.has("viewer")) return "Viewer (read-only)";
+      if (roles.has("tool:invoke")) {
+        const scopes = user?.scopes || [];
+        const hasWriteScope = scopes.some(
+          (s) => typeof s === "string" && s.includes(":write"),
+        );
+        return hasWriteScope ? "Demo (full invoke)" : "Team (read-only invoke)";
+      }
+      if (roles.has("tool:read")) return "Viewer (discover-only)";
+      return (user?.roles || []).join(", ") || "user";
+    },
+
     roleLabel(roles) {
       const set = new Set(roles || []);
       if (set.has("platform-admin")) return "Platform admin";
       if (set.has("admin")) return "Tenant admin";
       if (set.has("viewer")) return "Viewer (read-only)";
-      if (set.has("tool:invoke")) return "Demo (can invoke tools)";
+      if (set.has("tool:invoke")) return "Can invoke tools";
       if (set.has("tool:read")) return "Viewer (discover-only)";
       return (roles || []).join(", ") || "user";
     },

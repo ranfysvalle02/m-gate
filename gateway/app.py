@@ -18,7 +18,6 @@ from gateway.middleware.guardrails import GuardrailsMiddleware
 from gateway.middleware.metrics import MetricsMiddleware
 from gateway.middleware.ratelimit import RateLimitMiddleware
 from gateway.middleware.rbac import RbacMiddleware
-from gateway.middleware.request_context import RequestContextMiddleware
 from gateway.routers.admin import router as admin_router
 from gateway.routers.auth import router as auth_router
 from gateway.routers.health import router as health_router
@@ -165,7 +164,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    # app.add_middleware(RequestContextMiddleware)
+    # RequestContextMiddleware (request-id propagation) is intentionally left
+    # unregistered: it was disabled during the SSE deadlock investigation (see
+    # things-to-lookout-for.md §1) and is not currently needed. Re-import and
+    # re-add it here if/when request-id propagation is reinstated.
     if settings.enable_metrics:
         app.add_middleware(MetricsMiddleware)
     app.add_middleware(GuardrailsMiddleware)

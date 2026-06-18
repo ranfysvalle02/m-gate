@@ -188,6 +188,127 @@ async def test_create_viewer_user_cross_tenant_forbidden(reset_settings, patch_m
 
 
 # --------------------------------------------------------------------------- #
+# derive_safe_scopes / POST /admin/users/team: non-destructive (read-only invoke)
+# --------------------------------------------------------------------------- #
+async def _seed_mixed_catalog(db) -> None:
+    """A catalog exercising every _is_readonly_tool branch.
+
+    - read tools (explicit action_type=read) carrying `readonly`
+    - a destructive tool and a write tool (the writer SHARES `analytics` with a
+      read tool, so that shared scope must be dropped from the safe set)
+    - a proxied read tool with NO action_type but the `readonly` marker
+    - an unknown tool (no action_type, no `readonly`) -> treated as unsafe
+    """
+    cat = db["tool_catalog"]
+    await cat.insert_one(
+        {
+            "server": "weather",
+            "name": "get",
+            "scopes": ["weather", "readonly"],
+            "metadata": {"action_type": "read"},
+        }
+    )
+    await cat.insert_one(
+        {
+            "server": "orders",
+            "name": "find",
+            "scopes": ["orders", "readonly"],
+            "metadata": {"action_type": "read"},
+        }
+    )
+    await cat.insert_one(
+        {
+            "server": "orders",
+            "name": "update",
+            "scopes": ["orders:write"],
+            "metadata": {"action_type": "destructive"},
+        }
+    )
+    await cat.insert_one(
+        {
+            "server": "analytics",
+            "name": "stats",
+            "scopes": ["analytics", "server:analytics", "readonly"],
+            "metadata": {"action_type": "read"},
+        }
+    )
+    await cat.insert_one(
+        {
+            "server": "analytics",
+            "name": "track",
+            "scopes": ["analytics", "server:analytics"],
+            "metadata": {"action_type": "write"},
+        }
+    )
+    # Proxied (non-code) read tool: no action_type, but the readonly marker.
+    await cat.insert_one({"server": "deepwiki", "name": "ask", "scopes": ["deepwiki", "readonly"]})
+    # Unknown tool: neither action_type nor readonly -> fail-closed (excluded).
+    await cat.insert_one({"server": "mystery", "name": "x", "scopes": ["mystery"]})
+
+
+@pytest.mark.asyncio
+async def test_derive_safe_scopes_excludes_writers(reset_settings, patch_mongo):
+    await _seed_mixed_catalog(patch_mongo)
+    scopes = await users_service.derive_safe_scopes("local-dev")
+    assert scopes[0] == "server:*"
+    # Only read-only scopes survive; writer/destructive/unknown/shared scopes drop.
+    assert set(scopes) == {"server:*", "weather", "orders", "readonly", "deepwiki"}
+    assert "orders:write" not in scopes  # destructive tool's scope
+    assert "analytics" not in scopes  # shared with a writer -> dropped
+    assert "mystery" not in scopes  # unclassifiable -> fail-closed
+
+
+@pytest.mark.asyncio
+async def test_derive_safe_scopes_empty_catalog(reset_settings, patch_mongo):
+    scopes = await users_service.derive_safe_scopes("local-dev")
+    assert scopes == ["server:*"]
+
+
+@pytest.mark.asyncio
+async def test_create_team_user_is_readonly_invoke(reset_settings, patch_mongo):
+    await _seed_mixed_catalog(patch_mongo)
+    req = _Req(roles=["platform-admin"], tenant_id="local-dev")
+
+    res = await users_router.create_team_user(req, None)
+
+    assert res.created is True
+    assert res.password
+    assert res.user.email.startswith("team-") and res.user.email.endswith("@demo.local")
+    # Same role axis as a demo (it CAN invoke) — safety is in the scopes.
+    assert set(res.user.roles) == {"user", "tool:invoke"}
+    assert "server:*" in res.user.scopes and "readonly" in res.user.scopes
+    assert "orders:write" not in res.user.scopes
+    assert "analytics" not in res.user.scopes
+
+    principal = await users_service.authenticate(res.user.email, res.password)
+    assert principal is not None
+
+    # A team token clears the data-plane invoke gate (unlike a viewer).
+    token_res = await users_router.mint_user_token(
+        _Req(roles=["platform-admin"], tenant_id="local-dev"), res.user.id, None
+    )
+    assert token_res.data_plane_ok is True
+
+
+@pytest.mark.asyncio
+async def test_create_team_user_cross_tenant_forbidden(reset_settings, patch_mongo):
+    req = _Req(roles=["admin"], tenant_id="tenant-a")
+    with pytest.raises(HTTPException) as exc:
+        await users_router.create_team_user(req, DemoUserCreateRequest(tenant_id="tenant-b"))
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_safe_scopes_endpoint(reset_settings, patch_mongo):
+    await _seed_mixed_catalog(patch_mongo)
+    req = _Req(roles=["platform-admin"], tenant_id="local-dev")
+    res = await users_router.get_safe_scopes(req, None)
+    assert res.tenant_id == "local-dev"
+    assert set(res.roles) == {"user", "tool:invoke"}
+    assert "readonly" in res.scopes and "orders:write" not in res.scopes
+
+
+# --------------------------------------------------------------------------- #
 # GET /admin/whoami: surface read-only principal + tenant read-only state
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio

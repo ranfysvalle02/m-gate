@@ -25,7 +25,13 @@ from services import users as users_service
 from services.admin_session import mint_bearer_jwt, mint_session
 from services.passwords import verify_password
 from services.tenant_status import get_tenant_read_only
-from services.users import DEMO_USER_ROLES, VIEWER_USER_ROLES, derive_demo_scopes
+from services.users import (
+    DEMO_USER_ROLES,
+    TEAM_USER_ROLES,
+    VIEWER_USER_ROLES,
+    derive_demo_scopes,
+    derive_safe_scopes,
+)
 
 from ._common import (
     _assert_can_assign_roles,
@@ -119,6 +125,22 @@ async def get_demo_scopes(
     return DemoScopesResponse(tenant_id=target_tenant, roles=list(DEMO_USER_ROLES), scopes=scopes)
 
 
+@router.get("/users/safe-scopes", response_model=DemoScopesResponse)
+async def get_safe_scopes(
+    request: Request,
+    tenant_id: str | None = Query(default=None),
+) -> DemoScopesResponse:
+    """Recommended roles/scopes for a non-destructive "team" user.
+
+    Powers the console's "Team member" role preset: a tool-invoking account
+    scoped to read-only tools only (see :func:`derive_safe_scopes`). Declared
+    before ``GET /users/{user_id}`` so the literal path wins over the wildcard.
+    """
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    scopes = await derive_safe_scopes(target_tenant)
+    return DemoScopesResponse(tenant_id=target_tenant, roles=list(TEAM_USER_ROLES), scopes=scopes)
+
+
 @router.post(
     "/users/demo", response_model=DemoUserCreateResponse, status_code=status.HTTP_201_CREATED
 )
@@ -198,6 +220,50 @@ async def create_viewer_user(
 
     logger.info(
         "Viewer user created: actor=%s target=%s tenant=%s scopes=%s",
+        created_by or "unknown",
+        user["email"],
+        target_tenant,
+        scopes,
+    )
+    return DemoUserCreateResponse(user=UserResponse(**user), password=password, created=True)
+
+
+@router.post(
+    "/users/team", response_model=DemoUserCreateResponse, status_code=status.HTTP_201_CREATED
+)
+async def create_team_user(
+    request: Request,
+    payload: DemoUserCreateRequest | None = None,
+) -> DemoUserCreateResponse:
+    """One-click: create a safe-to-share, read-only-invoking "team" account.
+
+    The non-destructive middle ground between the demo and viewer buttons: it
+    carries ``tool:invoke`` so it can actually *run* tools (a real "hello world"
+    over MCP), but its scopes are limited to read-only tools (see
+    :func:`derive_safe_scopes`) so per-call authorization refuses anything that
+    writes or deletes. Returns a credential + ``mcp.json`` to hand a teammate.
+    Same tenant-scoping RBAC as the rest of the user surface.
+    """
+    payload = payload or DemoUserCreateRequest()
+    target_tenant = _resolve_target_tenant(request, payload.tenant_id)
+    await _require_tenant_writable(request, target_tenant)
+    scopes = await derive_safe_scopes(target_tenant)
+    password = secrets.token_urlsafe(12)
+    created_by = str(getattr(request.state, "user_id", "")) or None
+
+    user = await _create_preset_user_record(
+        email=payload.email,
+        tenant_id=target_tenant,
+        scopes=scopes,
+        password=password,
+        created_by=created_by,
+        roles=list(TEAM_USER_ROLES),
+        email_prefix="team",
+    )
+    await users_service.sync_session_context(user)
+
+    logger.info(
+        "Team user created: actor=%s target=%s tenant=%s scopes=%s",
         created_by or "unknown",
         user["email"],
         target_tenant,

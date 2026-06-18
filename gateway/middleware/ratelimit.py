@@ -72,7 +72,7 @@ class RateLimitMiddleware:
         # consume a tenant's request budget.
         path = request.url.path
         if path.startswith("/health") or path == "/metrics":
-                return await self.app(scope, receive, send)
+            return await self.app(scope, receive, send)
 
         await self._maybe_refresh_clock_offset()
         now = self._now()

@@ -38,6 +38,60 @@ DEMO_USER_ROLES = ["user", "tool:invoke"]
 # can mutate nothing and invoke nothing.
 VIEWER_USER_ROLES = ["user", "viewer", "tool:read"]
 
+# A "team" user is the safe-to-share middle ground between demo and viewer: it
+# CAN invoke tools (carries `tool:invoke`) but only the non-destructive ones, so
+# it is the natural "hello world" credential to hand a teammate. Roles match a
+# demo; the difference is the scope set (see derive_safe_scopes), which omits
+# every write/destructive tool's scopes so per-call authorization refuses them.
+TEAM_USER_ROLES = ["user", "tool:invoke"]
+
+
+def _is_readonly_tool(doc: dict[str, Any]) -> bool:
+    """Classify a catalog tool as non-destructive (safe to expose to a team user).
+
+    A tool is read-only if its ``action_type`` is explicitly ``read``, OR — for
+    tools that carry no ``action_type`` at all (e.g. proxied/non-code MCP servers
+    like deepwiki) — if it carries the ``readonly`` scope marker the platform uses
+    by convention. Anything explicitly ``write``/``destructive``, and anything we
+    cannot classify, is treated as unsafe (fail-closed).
+    """
+    action = str((doc.get("metadata") or {}).get("action_type", "")).strip().lower()
+    if action in {"write", "destructive"}:
+        return False
+    if action == "read":
+        return True
+    return any(scope == "readonly" for scope in (doc.get("scopes") or []) if isinstance(scope, str))
+
+
+async def derive_safe_scopes(tenant_id: str) -> list[str]:
+    """Compute scopes that let a user invoke only NON-destructive (read) tools.
+
+    Safety-first twin of :func:`derive_demo_scopes`. It grants exactly the tool
+    scopes that appear on read-only tools (see :func:`_is_readonly_tool`) and on
+    *no* write/destructive tool, so the holder can run every read-only tool in the
+    tenant yet is refused anything that mutates state — even when a read tool
+    shares a base scope with a writer (that shared scope is dropped; the read tool
+    stays reachable via its other scopes, typically ``readonly``). ``server:*``
+    grants cross-server visibility; the per-tool scope intersection in
+    ``services/authorization.py`` does the actual gating.
+    """
+    collection = get_tenant_database(tenant_id)["tool_catalog"]
+    docs = await collection.find({}, {"scopes": 1, "metadata": 1, "_id": 0}).to_list(length=10_000)
+
+    def _tool_scopes(doc: dict[str, Any]) -> set[str]:
+        return {
+            scope
+            for scope in (doc.get("scopes") or [])
+            if isinstance(scope, str) and scope and not scope.startswith("server:")
+        }
+
+    safe_scopes: set[str] = set()
+    unsafe_scopes: set[str] = set()
+    for doc in docs:
+        bucket = safe_scopes if _is_readonly_tool(doc) else unsafe_scopes
+        bucket |= _tool_scopes(doc)
+    return ["server:*", *sorted(safe_scopes - unsafe_scopes)]
+
 
 async def derive_demo_scopes(tenant_id: str) -> list[str]:
     """Compute scopes that let a demo user see and call *everything* in a tenant.

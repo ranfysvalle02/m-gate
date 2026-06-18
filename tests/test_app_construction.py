@@ -31,12 +31,14 @@ def test_create_app_registers_middleware_stack(reset_settings):
 
     app = create_app()
     middleware_classes = {m.cls.__name__ for m in app.user_middleware}
+    # RequestContextMiddleware is intentionally not registered (disabled during
+    # the SSE deadlock investigation — see things-to-lookout-for.md §1 and the
+    # note in gateway/app.create_app), so it is not asserted here.
     for name in [
         "AuthMiddleware",
         "RateLimitMiddleware",
         "RbacMiddleware",
         "GuardrailsMiddleware",
-        "RequestContextMiddleware",
     ]:
         assert name in middleware_classes
 
