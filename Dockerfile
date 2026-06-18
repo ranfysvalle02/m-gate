@@ -45,6 +45,20 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"
 USER appuser
 
+# Ensure the pinned CPython-on-WASI runtime is present in the image. It is
+# gitignored (vendor/python-*.wasm), so git-based builders (e.g. Render) never
+# receive it in the build context and would otherwise ship no sandbox runtime --
+# making CODE_TOOL_EXECUTION_ENABLED=true fail at call time. Fetch+verify it here
+# when missing; local docker builds that already vendor the file skip the
+# download. URL/SHA256 stay pinned in scripts/fetch_python_wasm.py (override via
+# PYTHON_WASM_URL / PYTHON_WASM_SHA256 build env if ever needed).
+RUN if [ ! -f vendor/python-3.12.0.wasm ]; then \
+      echo "Fetching pinned CPython-on-WASI runtime (vendor/python-3.12.0.wasm)..." && \
+      python scripts/fetch_python_wasm.py; \
+    else \
+      echo "vendor/python-3.12.0.wasm already present; skipping download."; \
+    fi
+
 # Precompile the CPython-on-WASI module into the cache at build time so every
 # container start (including a recreate) deserializes an already-compiled
 # artifact instead of running wasmtime's parallel (rayon) Cranelift compile on
@@ -52,15 +66,11 @@ USER appuser
 # (EAGAIN) / CPU-limit failures under host load. The cache key is derived from
 # the wasm file's resolved path + size + mtime + wasmtime version, all identical
 # between this build layer and runtime, so the baked artifact is a guaranteed
-# hit. Best-effort: if the wasm is absent (run `make fetch-wasm`) or a compile
-# hiccups, the worker simply falls back to compiling at startup -- no regression.
-RUN if [ -f vendor/python-3.12.0.wasm ]; then \
-      echo "Precompiling CPython-on-WASI sandbox module cache..." && \
-      python -c "from pathlib import Path; from services.sandbox_worker import _build_engine, _load_module; _load_module(_build_engine(), Path('vendor/python-3.12.0.wasm').resolve(), 'vendor/.wasm-cache'); print('Sandbox module cache ready at vendor/.wasm-cache')" || \
-      echo "WARNING: sandbox module precompile failed; worker will compile at startup."; \
-    else \
-      echo "WARNING: vendor/python-3.12.0.wasm not found; skipping sandbox module precompile (run 'make fetch-wasm')."; \
-    fi
+# hit. Best-effort: if a compile hiccups, the worker falls back to compiling at
+# startup -- no regression.
+RUN echo "Precompiling CPython-on-WASI sandbox module cache..." && \
+    python -c "from pathlib import Path; from services.sandbox_worker import _build_engine, _load_module; _load_module(_build_engine(), Path('vendor/python-3.12.0.wasm').resolve(), 'vendor/.wasm-cache'); print('Sandbox module cache ready at vendor/.wasm-cache')" || \
+    echo "WARNING: sandbox module precompile failed; worker will compile at startup."
 
 # --proxy-headers makes uvicorn honor X-Forwarded-Proto/For, but ONLY from peers in
 # FORWARDED_ALLOW_IPS (uvicorn reads that env var; defaults to 127.0.0.1). Set it to
