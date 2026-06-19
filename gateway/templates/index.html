@@ -985,7 +985,16 @@
           <template x-for="user in agentCredentials()" :key="user.id">
             <tr>
               <td>
-                <span class="font-medium" x-text="credentialName(user)"></span>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="font-medium" x-text="credentialName(user)"></span>
+                  <template x-if="credentialClientLabel(user)">
+                    <span
+                      class="badge"
+                      :title="`Minted for ${credentialClientLabel(user)}`"
+                      x-text="credentialClientLabel(user)"
+                    ></span>
+                  </template>
+                </div>
                 <template x-if="user.label">
                   <span class="block text-xs text-slate-500" x-text="user.email"></span>
                 </template>

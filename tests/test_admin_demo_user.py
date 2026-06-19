@@ -108,6 +108,57 @@ async def test_create_demo_user_honors_supplied_email(reset_settings, patch_mong
 
 
 @pytest.mark.asyncio
+async def test_create_demo_user_carries_label_and_client(reset_settings, patch_mongo):
+    # The cosmetic name/client an operator picks in the console must round-trip
+    # through the one-click endpoint and onto the stored record.
+    req = _Req(roles=["platform-admin"], tenant_id="local-dev")
+    res = await users_router.create_demo_user(
+        req, DemoUserCreateRequest(label="Cursor — Laptop", client="cursor")
+    )
+    assert res.user.label == "Cursor — Laptop"
+    assert res.user.client == "cursor"
+    # They are recognition-only and never affect the granted capability.
+    assert set(res.user.roles) == {"user", "tool:invoke"}
+
+
+@pytest.mark.asyncio
+async def test_create_team_and_viewer_users_carry_label_and_client(reset_settings, patch_mongo):
+    req = _Req(roles=["platform-admin"], tenant_id="local-dev")
+
+    team = await users_router.create_team_user(
+        req, DemoUserCreateRequest(label="Read-only bot", client="vscode")
+    )
+    assert team.user.label == "Read-only bot"
+    assert team.user.client == "vscode"
+
+    viewer = await users_router.create_viewer_user(
+        req, DemoUserCreateRequest(label="Showcase", client="claude")
+    )
+    assert viewer.user.label == "Showcase"
+    assert viewer.user.client == "claude"
+
+
+@pytest.mark.asyncio
+async def test_create_user_endpoint_passes_label_and_client(reset_settings, patch_mongo):
+    from models.admin import UserCreateRequest
+
+    req = _Req(roles=["platform-admin"], tenant_id="local-dev")
+    res = await users_router.create_user(
+        req,
+        UserCreateRequest(
+            email="custom@demo.local",
+            password="pw123456",
+            roles=["user", "tool:invoke"],
+            scopes=["server:*"],
+            label="Custom cred",
+            client="cursor",
+        ),
+    )
+    assert res.label == "Custom cred"
+    assert res.client == "cursor"
+
+
+@pytest.mark.asyncio
 async def test_create_demo_user_existing_email_conflict(reset_settings, patch_mongo):
     await users_service.create_user(
         email="taken@demo.local", password="pw", tenant_id="local-dev", roles=["user"]

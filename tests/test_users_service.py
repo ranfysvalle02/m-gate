@@ -129,3 +129,75 @@ async def test_sync_mirrors_disabled_status(patch_mongo):
 @pytest.mark.asyncio
 async def test_delete_missing_user_returns_false(patch_mongo):
     assert await users_service.delete_user("nope") is False
+
+
+# --------------------------------------------------------------------------- #
+# Cosmetic credential metadata (label + client): stored and surfaced, never
+# consulted for authorization.
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_create_user_stores_and_returns_label_and_client(patch_mongo):
+    user = await users_service.create_user(
+        email="named@x.com",
+        password="pw123456",
+        tenant_id="t1",
+        roles=["user", "tool:invoke"],
+        label="Cursor — MacBook Pro",
+        client="cursor",
+    )
+    assert user["label"] == "Cursor — MacBook Pro"
+    assert user["client"] == "cursor"
+    # Persisted, not just echoed.
+    raw = await users_service.get_user_raw(user["id"])
+    assert raw is not None
+    assert raw["label"] == "Cursor — MacBook Pro"
+    assert raw["client"] == "cursor"
+    # Cosmetic only: never leaks into roles/scopes.
+    assert "label" not in user["roles"] and "client" not in user["scopes"]
+
+
+@pytest.mark.asyncio
+async def test_create_user_blank_label_and_client_normalize_to_none(patch_mongo):
+    user = await users_service.create_user(
+        email="blank@x.com",
+        password="pw123456",
+        tenant_id="t1",
+        roles=["user"],
+        label="   ",
+        client="",
+    )
+    assert user["label"] is None
+    assert user["client"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_user_trims_label_and_client(patch_mongo):
+    user = await users_service.create_user(
+        email="trim@x.com",
+        password="pw123456",
+        tenant_id="t1",
+        roles=["user"],
+        label="  My Agent  ",
+        client="  vscode  ",
+    )
+    assert user["label"] == "My Agent"
+    assert user["client"] == "vscode"
+
+
+@pytest.mark.asyncio
+async def test_create_user_defaults_label_and_client_to_none(patch_mongo):
+    user = await users_service.create_user(
+        email="default@x.com", password="pw123456", tenant_id="t1", roles=["user"]
+    )
+    assert user["label"] is None
+    assert user["client"] is None
+
+
+def test_public_user_legacy_doc_without_label_client_returns_none():
+    # A record minted before label/client existed must project cleanly to None
+    # rather than KeyError-ing or surfacing a missing key.
+    projected = users_service.public_user(
+        {"_id": "abc", "tenant_id": "t1", "email": "legacy@x.com", "roles": ["user"]}
+    )
+    assert projected["label"] is None
+    assert projected["client"] is None

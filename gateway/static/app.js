@@ -395,8 +395,13 @@ window.adminConsole = function adminConsole(config) {
       this.clearError();
       this.state.userTokenGenerating = true;
       // Carry a one-time password only when the caller (createDemoUser) just
-      // minted the account; a plain "Generate token" never exposes a password.
+      // minted the account; a plain "Get config" never exposes a password.
       this.state.userTokenNewPassword = options.password || "";
+      // Default the connect modal to the client this credential was minted for,
+      // so reopening "Get config" lands on the right config without re-picking.
+      if (this.connectClients.some((c) => c.key === user?.client)) {
+        this.state.connectClient = user.client;
+      }
       try {
         const result = await this.apiRequest(
           `/admin/users/${encodeURIComponent(user.id)}/token`,
@@ -536,15 +541,6 @@ window.adminConsole = function adminConsole(config) {
         "  }",
         "}",
       ].join("\n");
-    },
-
-    // Backward-compatible alias: the Cursor-shaped snippet (other callers/tests).
-    userMcpSnippet() {
-      const prior = this.state.connectClient;
-      this.state.connectClient = "cursor";
-      const snippet = this.clientConfigSnippet();
-      this.state.connectClient = prior;
-      return snippet;
     },
 
     userCurlSample() {
@@ -1203,18 +1199,17 @@ window.adminConsole = function adminConsole(config) {
     // Friendly display name for a credential: the operator-supplied label when
     // present, otherwise the generated email it falls back to.
     credentialName(user) {
-      const label = (user?.label || "").trim?.() ?? "";
+      const label = typeof user?.label === "string" ? user.label.trim() : "";
       return label || user?.email || "credential";
     },
 
-    roleLabel(roles) {
-      const set = new Set(roles || []);
-      if (set.has("platform-admin")) return "Platform admin";
-      if (set.has("admin")) return "Tenant admin";
-      if (set.has("viewer")) return "Viewer (read-only)";
-      if (set.has("tool:invoke")) return "Can invoke tools";
-      if (set.has("tool:read")) return "Viewer (discover-only)";
-      return (roles || []).join(", ") || "user";
+    // Display label for the MCP client a credential was minted for, resolved from
+    // the stored `client` key. Returns "" for an unknown/absent value so the
+    // template can hide the badge entirely.
+    credentialClientLabel(user) {
+      const key = typeof user?.client === "string" ? user.client : "";
+      const match = this.connectClients.find((c) => c.key === key);
+      return match ? match.label : "";
     },
 
     parseScopes(raw) {
