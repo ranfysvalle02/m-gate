@@ -1900,6 +1900,112 @@ textarea.field-input {
   margin-left: 0.2rem;
 }
 
+/* --------------------------------------------------------------------------- */
+/*  Credential builder: one card to mint an MCP credential                     */
+/* --------------------------------------------------------------------------- */
+.credential-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+}
+
+.credential-builder-actions {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  flex-wrap: wrap;
+}
+
+/* Access-level picker: three selectable tiles. Full access is preselected;
+   the active tile gets an accent ring so the choice reads at a glance. */
+.tier-grid {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 0.15rem;
+}
+
+@media (max-width: 640px) {
+  .tier-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tier-option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  text-align: left;
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.tier-option:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1.5px);
+}
+
+.tier-option-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.tier-option-active:hover {
+  transform: translateY(-1.5px);
+  border-color: var(--accent);
+}
+
+.tier-option-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tier-option-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.tier-option-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.tier-option-badge {
+  margin-left: auto;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  color: color-mix(in srgb, var(--accent) 92%, var(--text-primary));
+}
+
+.tier-option-tagline {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.tier-desc {
+  margin-top: 0.6rem;
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+  min-height: 2.4em;
+}
+
 /* --- Servers: builder head + manifest ------------------------------------ */
 .builder-head {
   display: flex;

@@ -762,133 +762,91 @@
       x-text="state.userNotice"
     ></div>
   </template>
-  <!-- One-click capability tiers: the easy, obvious path to a shareable credential. -->
+  <!-- The streamlined mint flow: pick a name/client, an access level (Full
+       access by default), and hit Create. The granular path is one link away. -->
   <div x-show="canMutate()" class="space-y-3">
     <div class="flex items-center justify-between flex-wrap gap-2">
       <h3 class="text-lg font-semibold">Create a credential</h3>
       <button type="button" class="btn-secondary" @click="loadUsers()">Refresh</button>
     </div>
-    <!-- Optional name + default client: cosmetic only, but it makes a credential
-         recognizable in the table and pre-selects the right config in the modal. -->
-    <div class="grid gap-3 md:grid-cols-2 max-w-3xl">
-      <div>
-        <label class="field-label">Name <span class="text-slate-400">(optional)</span></label>
-        <input
-          class="field-input"
-          x-model="state.credName"
-          placeholder="e.g. Cursor — MacBook Pro"
-          maxlength="80"
-        />
+    <!-- One streamlined card: a name + client (cosmetic, so the credential is
+         recognizable and the modal pre-selects the right config), an access level
+         that defaults to Full access, and a single Create button. Power users
+         expand "Advanced" for explicit email/password/role/scopes. -->
+    <div class="card credential-builder max-w-3xl">
+      <div class="grid gap-3 md:grid-cols-2">
+        <div>
+          <label class="field-label">Name <span class="text-slate-400">(optional)</span></label>
+          <input
+            class="field-input"
+            x-model="state.credName"
+            placeholder="e.g. Cursor — MacBook Pro"
+            maxlength="80"
+          />
+        </div>
+        <div>
+          <label class="field-label">Client</label>
+          <div class="segment-ctrl" role="group" aria-label="MCP client">
+            <template x-for="c in connectClients" :key="c.key">
+              <button
+                type="button"
+                class="segment-btn"
+                :class="state.connectClient === c.key ? 'segment-btn-active' : ''"
+                @click="state.connectClient = c.key"
+                x-text="c.label"
+              ></button>
+            </template>
+          </div>
+        </div>
       </div>
+
       <div>
-        <label class="field-label">Client</label>
-        <div class="segment-ctrl" role="group" aria-label="MCP client">
-          <template x-for="c in connectClients" :key="c.key">
+        <label class="field-label">Access level</label>
+        <div class="tier-grid" role="radiogroup" aria-label="Access level">
+          <template x-for="tier in credTiers" :key="tier.key">
             <button
               type="button"
-              class="segment-btn"
-              :class="state.connectClient === c.key ? 'segment-btn-active' : ''"
-              @click="state.connectClient = c.key"
-              x-text="c.label"
-            ></button>
+              class="tier-option"
+              :class="state.credTier === tier.key ? 'tier-option-active' : ''"
+              role="radio"
+              :aria-checked="state.credTier === tier.key ? 'true' : 'false'"
+              @click="state.credTier = tier.key"
+            >
+              <span class="tier-option-head">
+                <span class="tier-option-icon" aria-hidden="true" x-text="tier.icon"></span>
+                <span class="tier-option-name" x-text="tier.label"></span>
+                <template x-if="tier.badge">
+                  <span class="tier-option-badge" x-text="tier.badge"></span>
+                </template>
+              </span>
+              <span class="tier-option-tagline" x-text="tier.tagline"></span>
+            </button>
           </template>
         </div>
-      </div>
-    </div>
-    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-      <!-- Read-only: safe-to-share, non-destructive invoke (the "hello world"). -->
-      <div
-        class="card flex flex-col gap-3"
-        style="border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent)"
-      >
-        <div>
-          <div class="flex items-center gap-2">
-            <span class="text-2xl" aria-hidden="true">🛡️</span>
-            <span
-              class="inline-flex items-center rounded-full bg-emerald-100 text-emerald-700 text-xs font-semibold px-2 py-0.5"
-              >Recommended</span
-            >
-          </div>
-          <h4 class="text-base font-semibold mt-2">Read-only</h4>
-          <p class="text-sm text-slate-600 mt-1">
-            Safe to share. Can <strong>run read-only tools</strong> — say hello with
-            <code>gateway_hello</code>, check the weather, look things up — but
-            <strong>cannot write or delete anything</strong>.
-          </p>
-        </div>
-        <button
-          type="button"
-          class="btn-primary mt-auto"
-          @click="createTeamUser()"
-          :disabled="state.teamCreating"
-          title="Mint a non-destructive, tool-invoking credential and get a token + client config"
-          x-text="state.teamCreating ? 'Creating…' : '🛡️ Create read-only'"
-        ></button>
+        <p class="tier-desc" x-text="currentCredTier().desc"></p>
       </div>
 
-      <!-- Full access: every tool, including writes — for trusted/own use. -->
-      <div class="card flex flex-col gap-3">
-        <div>
-          <span class="text-2xl" aria-hidden="true">⚡</span>
-          <h4 class="text-base font-semibold mt-2">Full access</h4>
-          <p class="text-sm text-slate-600 mt-1">
-            Full power. Can invoke <strong>every</strong> tool, including ones that
-            <strong>write or delete</strong>. Best for your own end-to-end testing.
-          </p>
-        </div>
+      <div class="credential-builder-actions">
         <button
           type="button"
-          class="btn-primary mt-auto"
-          @click="createDemoUser()"
-          :disabled="state.demoCreating"
-          title="Mint a ready-to-use, tool-invoking credential (read + write) and get a token + client config"
-          x-text="state.demoCreating ? 'Creating…' : '⚡ Create full access'"
+          class="btn-primary"
+          @click="createCredential()"
+          :disabled="credCreating()"
+          :title="`Mint a ${currentCredTier().label.toLowerCase()} credential and get a token + client config`"
+          x-text="credCreating() ? 'Creating…' : `${currentCredTier().icon}  Create credential`"
         ></button>
-      </div>
-
-      <!-- Explore: discover-only — list/search but never run a tool. -->
-      <div class="card flex flex-col gap-3">
-        <div>
-          <span class="text-2xl" aria-hidden="true">🔍</span>
-          <h4 class="text-base font-semibold mt-2">Explore</h4>
-          <p class="text-sm text-slate-600 mt-1">
-            Look, don't touch. Can <strong>list &amp; search</strong> the catalog
-            (and browse this console read-only), but
-            <strong>cannot run any tool</strong>. Ideal for a safe showcase.
-          </p>
-        </div>
         <button
           type="button"
-          class="btn-secondary mt-auto"
-          @click="createViewerUser()"
-          :disabled="state.viewerCreating"
-          title="Mint a discover-only credential (viewer + tool:read): browses the console read-only and can list/search tools over MCP, but cannot mutate or call them"
-          x-text="state.viewerCreating ? 'Creating…' : '🔍 Create explore'"
-        ></button>
-      </div>
-
-      <!-- Custom: explicit email/password/role/scopes for power users. -->
-      <div class="card flex flex-col gap-3">
-        <div>
-          <span class="text-2xl" aria-hidden="true">🎛️</span>
-          <h4 class="text-base font-semibold mt-2">Custom</h4>
-          <p class="text-sm text-slate-600 mt-1">
-            Granular control. Set your own <strong>email, password, role &amp;
-            scopes</strong> — pick exactly what this credential can reach.
-          </p>
-        </div>
-        <button
-          type="button"
-          class="btn-secondary mt-auto"
+          class="link-btn"
           @click="state.userAdvancedOpen = !state.userAdvancedOpen"
           :aria-expanded="state.userAdvancedOpen"
-          x-text="state.userAdvancedOpen ? '🎛️ Hide custom form' : '🎛️ Custom credential'"
+          x-text="state.userAdvancedOpen ? 'Hide advanced' : 'Advanced: set your own scopes →'"
         ></button>
       </div>
     </div>
   </div>
 
-  <!-- Custom credential form: revealed by the Custom card. -->
+  <!-- Custom credential form: revealed by the "Advanced" link in the builder. -->
   <div class="pt-1" x-show="canMutate() && state.userAdvancedOpen" x-cloak>
     <form
       class="grid gap-3 md:grid-cols-3 mt-1 card"

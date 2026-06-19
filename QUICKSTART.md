@@ -87,19 +87,24 @@ path from zero to a connected client:
 
 ## 4. Get a working credential (no terminal needed)
 
-Open the **Credentials** tab and pick how much the credential is allowed to do —
-optionally name it and choose your client (Cursor / Claude / VS Code) first:
+Open the **Credentials** tab. There's one builder: optionally name the credential
+and choose your client (Cursor / Claude / VS Code), pick an **Access level**, then
+hit **Create credential**:
 
-- **⚡ Create full access** — generates a fresh credential with a strong password and
-  *catalog-derived* scopes (so it can both discover **and** invoke every tool in the
-  tenant), then immediately pops a modal with the one-time password, a bearer token,
-  and a ready-to-paste client config. This is the fastest path.
-- **🛡️ Create read-only** — the safe-to-share twin: it can run read-only tools but
+- **⚡ Full access** *(default)* — *catalog-derived* scopes so the credential can
+  both discover **and** invoke every tool in the tenant. This is the fastest path
+  and the right default — a credential exists to run tools.
+- **🛡️ Read-only** — the safe-to-share step-down: it can run read-only tools but
   cannot write or delete anything.
-- **🔍 Create explore** — discover-only: it can `tools/list` / `tools/search` but
-  never `tools/call`.
-- **Get config** on the seeded **`agent@demo.com`** credential — it already carries
-  the `tool:invoke` role, so its tokens clear the data-plane gate.
+- **🔍 Explore** — discover-only: it can `tools/list` / `tools/search` but never
+  `tools/call`.
+
+Whichever level you pick, **Create credential** mints a fresh account with a strong
+password and immediately pops a modal with the one-time password, a bearer token,
+and a ready-to-paste client config. (Need exact roles/scopes? Click **Advanced** to
+set your own.) You can also hit **Get config** on the seeded **`agent@demo.com`**
+credential — it already carries the `tool:invoke` role, so its tokens clear the
+data-plane gate.
 
 Any of these mints a *real* scoped bearer JWT signed with the gateway's
 `jwt_secret`, embedding the account's `tenant_id`, `roles`, and `scopes`. Every
@@ -175,9 +180,10 @@ them run arbitrary tools? As a **platform-admin**, from the console:
 2. **Freeze the tenant** — Tenants → **Make read-only**. The tenant stays active
    and browsable, but `tools/call` and tenant config edits now return `403`. A
    sticky banner appears in the console.
-3. **Hand out a least-privilege login** — Credentials → **🔍 Create explore**. It
-   gives you both a read-only **console** login (browse the UI + tool source; every
-   mutation is `403`) and an MCP token whose role is `tool:read`: it can
+3. **Hand out a least-privilege login** — Credentials → Access level **🔍 Explore**
+   → **Create credential**. It gives you both a read-only **console** login (browse
+   the UI + tool source; every mutation is `403`) and an MCP token whose role is
+   `tool:read`: it can
    `tools/list` / `tools/search` the curated catalog, but `tools/call` is rejected
    (`invoke_not_permitted`).
 

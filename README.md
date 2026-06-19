@@ -748,10 +748,11 @@ full walkthrough with screenshots**; the auth model lives in
   it stays `active` and discoverable, but `tools/call` and tenant config edits
   return `403` (`tenant_read_only`). Platform-admin always bypasses.
 - **`viewer` role** — a read-only **console** login: browse the UI + tool source,
-  every mutation `403`. One click via **Credentials → 🔍 Create explore**.
+  every mutation `403`. Mint via **Credentials → Access level 🔍 Explore → Create
+  credential**.
 - **`tool:read` role** — a discover-only **MCP** token: `tools/list` /
   `tools/search` work, `tools/call` is refused (`invoke_not_permitted`). Minted by
-  the same **Create explore** tier.
+  the same **Explore** access level.
 - **Per-tenant tool curation** — an `allowlist` (`server/name` / `server/*`) and a
   `max_tools` cap (`GET`/`PUT /admin/tenants/{id}/tool-policy`), plus per-server
   enable/disable and a per-tool kill-switch (`disabled_tools`) that blocks a tool

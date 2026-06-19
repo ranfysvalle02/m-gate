@@ -165,11 +165,15 @@ window.adminConsole = function adminConsole(config) {
       // the MCP client whose config we show (drives the connect-flow snippet).
       credName: "",
       connectClient: "cursor",
+      // Selected access level for the next credential. Defaults to "full" because
+      // a credential's whole point is to run tools — read-only/explore are the
+      // deliberate step-downs, not the starting point.
+      credTier: "full",
       demoCreating: false,
       viewerCreating: false,
       teamCreating: false,
-      // Advanced/custom user form lives behind a disclosure so the one-click
-      // persona cards are the obvious default path.
+      // Advanced/custom user form lives behind a disclosure so the streamlined
+      // one-click flow is the obvious default path.
       userAdvancedOpen: false,
       // Per-tenant tool policy editor (allowlist + max-tools + disabled overlay).
       toolPolicyOpen: false,
@@ -418,9 +422,63 @@ window.adminConsole = function adminConsole(config) {
       }
     },
 
-    // Body shared by every one-click tier: the active tenant plus the optional
-    // cosmetic label/client the operator picked above the cards. Empty values are
-    // omitted so the request stays clean.
+    // The three access levels, ordered from most-capable to least. "full" is the
+    // default and the only one that carries a Recommended badge: a credential is
+    // built to run tools, so read-only/explore are deliberate step-downs. Each
+    // tier maps to a preset endpoint (see createCredential()).
+    credTiers: [
+      {
+        key: "full",
+        icon: "⚡",
+        label: "Full access",
+        tagline: "Run every tool",
+        badge: "Recommended",
+        desc: "Invoke any tool in the catalog, including ones that write or delete. The fastest way to start building and the right default for most credentials.",
+      },
+      {
+        key: "readonly",
+        icon: "🛡️",
+        label: "Read-only",
+        tagline: "Run safe tools only",
+        desc: "Invoke non-destructive tools — read, look up, say hello — but never write or delete. Safe to share with people you don't fully trust.",
+      },
+      {
+        key: "explore",
+        icon: "🔍",
+        label: "Explore",
+        tagline: "Discover, don't run",
+        desc: "List and search the catalog (and browse this console read-only) but can't run any tool. Ideal for a safe showcase or a curious onlooker.",
+      },
+    ],
+
+    // The currently selected tier object (falls back to the first / "full").
+    currentCredTier() {
+      const key = this.state.credTier || "full";
+      return this.credTiers.find((t) => t.key === key) || this.credTiers[0];
+    },
+
+    // True while any one-click mint is in flight; drives the single Create button.
+    credCreating() {
+      return (
+        this.state.demoCreating ||
+        this.state.teamCreating ||
+        this.state.viewerCreating
+      );
+    },
+
+    // Single entry point behind the "Create credential" button: route the chosen
+    // access level to its preset endpoint. The underlying methods still own their
+    // own in-flight flag, notice copy, and the immediate token hand-off.
+    async createCredential() {
+      const tier = this.state.credTier || "full";
+      if (tier === "readonly") return this.createTeamUser();
+      if (tier === "explore") return this.createViewerUser();
+      return this.createDemoUser();
+    },
+
+    // Body shared by every preset tier: the active tenant plus the optional
+    // cosmetic label/client the operator picked above the selector. Empty values
+    // are omitted so the request stays clean.
     _credCreateBody() {
       const body = { tenant_id: this.state.tenantId };
       const label = (this.state.credName || "").trim();

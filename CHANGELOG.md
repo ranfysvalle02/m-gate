@@ -10,14 +10,20 @@
 ### Feature: the admin console "Users" page is now a "Credentials" experience
 - **Reframed around the outcome, not the persona.** The console's **Users** tab is
   now **Credentials** (🔑). The unit you create is framed as *the scoped bearer
-  token an MCP client pastes in to reach your tools*, not a "user." The three
-  one-click personas are recast as capability tiers — **Explore** (discover-only,
-  `viewer` + `tool:read`), **Read-only** (safe invoke, `tool:invoke` +
-  `derive_safe_scopes`), and **Full access** (read + write, `tool:invoke` +
-  `derive_demo_scopes`) — plus a first-class **Custom** card for explicit
-  email/password/role/scopes. Roles, scopes, and the `POST /admin/users/{demo,team,viewer}`
-  endpoints are **unchanged**: this is a terminology + UX reframe, fully backward
-  compatible (the nav key stays `users`, so deep links and routing are untouched).
+  token an MCP client pastes in to reach your tools*, not a "user."
+- **One streamlined builder, with a default that just works.** The old four-card
+  grid (read-only/full/explore/custom) collapses into a single **Create a
+  credential** card: optional name, client picker, an **Access level** selector,
+  and one **Create credential** button. Access level defaults to **⚡ Full access**
+  (the only tier with a *Recommended* badge) because a credential exists to run
+  tools — **🛡️ Read-only** (`tool:invoke` + `derive_safe_scopes`) and **🔍 Explore**
+  (`viewer` + `tool:read`, discover-only) are deliberate step-downs, not the
+  starting point. An **Advanced** disclosure still exposes explicit
+  email/password/role/scopes for power users. Roles, scopes, and the
+  `POST /admin/users/{demo,team,viewer}` endpoints are **unchanged** — the three
+  tiers just route to the existing presets — so this is a UX reframe, fully
+  backward compatible (the nav key stays `users`, so deep links and routing are
+  untouched).
 - **Client-aware connect flow.** The credential modal now generates ready-to-paste
   config for **Cursor**, **Claude Desktop**, and **VS Code** via a segmented
   switcher that renders the right schema per client (`mcpServers` url/headers for
