@@ -38,7 +38,7 @@ That's the reassuring half. The next section is the urgent half — why the disc
 
 ## 2. The clock just sped up: why getting this right early wins
 
-There's a temptation to file all of this under *good hygiene* — nice to have, worth doing once you get around to it. That framing was defensible when an agent called a tool the way a human clicks a button: occasionally, deliberately, one at a time. That era is already over, and the teams who haven't noticed are about to learn it from their token bills.
+There's a temptation to file all of this under *good hygiene* — nice to have, worth doing once you get around to it. That framing was defensible when an agent called a tool the way a human clicks a button: occasionally, deliberately, one at a time. While tool calling today is often still sequential by default, that era is already ending, and the teams who haven't noticed are about to learn it from their token bills.
 
 Watch a modern coding agent work — Cursor, Claude Code, the others — and you're watching the next decade in miniature. It doesn't read one file and wait. It reads ten at once. It runs a search, a test, and a type-check in parallel, fans the results into the next edit, and chains a dozen tool calls into one autonomous stretch without pausing for a human. The agent isn't a careful clicker anymore. It's a *scheduler* — issuing calls at machine speed, in parallel, down branching trees of possibility. That's not a research demo. It's shipping software, today.
 
@@ -52,6 +52,8 @@ Here is the part that turns hygiene into leverage. **Every property of a tool ge
 - A missing scope check isn't one quiet leak — it's a leak a tireless agent will find faster than any human pen-tester, because it's probing thousands of paths while you sleep.
 
 The cost of a poorly designed tool used to be paid once, slowly, by one caller. It is now paid *per call* — and calls are heading up by orders of magnitude. Bad design no longer stays bad-but-bounded. It scales at exactly the rate the agent does.
+
+Furthermore, **the client is no longer human.** We are entering an era where systems increasingly interact directly with AI instead of people. This shift is already visible in search and retrieval: when an LLM needs supporting documents or context, the queries it issues to a vector database or search engine are fundamentally different from what a human would type. They are distributed differently, they are highly structured, and they don't contain spelling mistakes. Designing a tool today means designing for a machine that interacts with your system in ways a human never would.
 
 Now the good news, and it's the whole reason to be optimistic: **we have built systems for machine-paced, massively parallel, deeply chained calls before.** That is precisely what the move from hand-wired APIs to microservice meshes *was*. The disciplines that made that survivable — stable contracts, idempotency, backpressure, honest error semantics, thin gateways, real observability — aren't open research questions. They're a settled body of engineering knowledge, and they map onto agent tools almost line for line. You are not the first engineer to face thousands of concurrent callers hammering one interface. You're just the first to have an LLM holding the phone.
 
@@ -172,7 +174,7 @@ It's also where the loudest complaint about MCP turns out to be misdirected. Tea
 That changes how you write. The catalog isn't documentation that describes the tool; it's the *retrieval surface* the agent searches. And good gateways search it with **hybrid retrieval** — a lexical (BM25) arm that matches exact tokens fused with a semantic (vector) arm that matches intent (the reference gateway does it in a single fused query). Design every entry to feed *both* arms:
 
 - **Name for the lexical arm.** Put the exact, identifier-shaped tokens here — `find_order`, `get_current_weather`. This is what a query like "call `find_order`" or "look up order A-417" latches onto. Names should be specific and literal, not clever.
-- **Describe for the semantic arm.** Write the description in the *user's* language of intent — the words someone would use when they don't know your tool exists. `find_order` should describe itself as "look up a customer purchase by its order ID," because that's what the agent's query will sound like, and that's what the embedding matches against.
+- **Describe for the semantic arm.** Write the description in the *user's* language of intent — the words someone would use when they don't know your tool exists. `find_order` should describe itself as "look up a customer purchase by its order ID," because that's what the agent's query will sound like, and that's what the embedding matches against. Keep in mind that **agent-generated queries differ from human queries**: they are often more precise, lack spelling mistakes, and are structured around the context they are trying to retrieve. Your descriptions should be rich enough to match this machine-level precision.
 
 > **The description is the API.** Write it for the search, not for the spec sheet.
 
