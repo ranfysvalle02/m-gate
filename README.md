@@ -216,6 +216,8 @@ This repository now includes a working end-to-end MCP Gateway with:
   generated `context.db[...]` snippets directly into function source
 - **Tenant soft-delete + retention**: `DELETE /admin/tenants/{id}` is a reversible soft-delete by default (`POST /admin/tenants/{id}/restore` undoes it within the retention window); a background reaper drops the physical DB before removing the control doc, and `?hard=true` keeps the immediate hard delete
 - **Streaming usage/billing export**: `GET /admin/tenants/{id}/usage/export` (CSV) and `GET /admin/telemetry/export` (JSONL) stream over a cursor with `from`/`to` range filters — no load-all ceiling
+- **Self-service beta registration**: opt-in public sign-up (`POST /auth/register` + `/ui/register`) provisions an isolated tenant per registrant, capped to an `unconfirmed`, code-tools-only tier (1 server / 1 tool, small quota, no external transports) with per-IP throttling and a global beta cap; a platform-admin confirms accounts to lift the caps — see [AUTH.md](AUTH.md)
+- **Admin analytics dashboard**: scalable `$group` aggregation endpoints (`/admin/analytics/*`) power scope-aware Dashboard/Telemetry charts (usage trend, top tools/servers, success-vs-error + latency, quota utilization) over a self-hosted Chart.js — no full-collection scans
 - **Sandbox quota preflight**: code tools whose worst-case sandbox cost can't fit the remaining `sandbox_seconds` quota are rejected before execution (one shared check enforced identically on `/rpc` and `/mcp`), with a `gateway_quota_preflight_blocks_total` metric
 - **Sandbox pool max-age + health sweep**: idle warm workers are proactively retired by age and ping-health, complementing the reactive `max_jobs` recycle
 - **Observability**: request IDs, JSON logs, Prometheus `/metrics`, prebuilt Prometheus alert rules, a provisioned Grafana dashboard (`http://localhost:3000`), OpenTelemetry tracing (`ENABLE_TRACING=true`) with spans around RPC handling and downstream hops, and health split (`/health/live`, `/health/ready`)
@@ -438,11 +440,28 @@ tools, or connect servers you already run — all from the **MCP Servers** studi
 
 ![MCP Servers studio listing virtual code servers and connected servers](docs/images/servers-studio.png)
 
+- The **Dashboard** and **Telemetry** tabs render live analytics from scalable
+  `$group` aggregation endpoints (`/admin/analytics/*`) with a self-hosted
+  Chart.js: usage trends, top tools/servers, request-vs-error + latency lines, and
+  quota-utilization bars. Scope follows your role — platform-admins see
+  cross-tenant rollups (and can filter to one tenant), tenant-admins see their own.
+- The **Usage & Quota** tab shows current usage against quota with utilization
+  meters, a platform-admin quota editor, and a recent-events table with CSV export.
+- Tabs are deep-linkable via the URL hash (e.g. `…/ui#telemetry`).
 - In `docker-compose.yml`, demo credentials are preconfigured:
   - `ADMIN_EMAIL=demo@demo.com`
   - `ADMIN_PASSWORD=demo`
 - Login is required for the admin surface (`/ui` and `/admin/*`) in **all** `AUTH_MODE`s.
 - Browser sessions are cookie-based (HttpOnly); mutating admin API calls require a CSRF header.
+
+**Self-service beta sign-up & confirmation tiers.** With
+`SELF_REGISTRATION_ENABLED=true`, the login screen gains a **Create an account**
+link to a public sign-up page at `/ui/register`. New accounts start
+**`unconfirmed`** — a tightly-capped, code-tools-only tier (1 server / 1 tool,
+small quota, no external transports) that's safe to open to the public — and a
+platform-admin promotes them to **`confirmed`** from the **Tenants** tab
+(confirmation pill + Confirm/Unconfirm buttons + an "Unconfirmed queue" filter).
+See [AUTH.md](AUTH.md) §2.3 and §3.3 for the full security model.
 
 You can still use the admin CLI under strict admin auth:
 

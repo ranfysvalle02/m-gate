@@ -8,6 +8,8 @@ window.adminConsole = function adminConsole(config) {
       { key: "users", label: "Users", icon: "👥" },
       { key: "approvals", label: "Approvals", icon: "✅" },
       { key: "servers", label: "MCP Servers", icon: "🧰" },
+      { key: "catalog", label: "Catalog", icon: "🗂️" },
+      { key: "usage", label: "Usage & Quota", icon: "📒" },
       { key: "telemetry", label: "Telemetry", icon: "📈" },
       { key: "embeddings", label: "Embeddings", icon: "🧠" },
       { key: "account", label: "Account", icon: "🧑" },
@@ -106,6 +108,28 @@ window.adminConsole = function adminConsole(config) {
       catalog: { items: [] },
       catalogExpanded: {},
       telemetry: { items: [] },
+      // Server-side analytics rollups (gateway/routers/admin/analytics.py). Scope
+      // is derived by the server from the caller's role; the console requests
+      // platform scope for a platform-admin and tenant scope otherwise.
+      analytics: {
+        overview: null,
+        usageTrend: null,
+        topTools: null,
+        telemetryTrend: null,
+        quota: null,
+      },
+      analyticsLoading: false,
+      // Smoothly-tweened mirror of the headline KPIs so the numbers "count up"
+      // when a section loads / the tenant switches (purely cosmetic).
+      displayMetrics: { calls: 0, sandbox: 0 },
+      // Tenants table client-side filter: "all" or "unconfirmed" (the beta queue).
+      tenantFilter: "all",
+      // Usage & quota management view.
+      usage: null,
+      usageEvents: { events: [], totals_by_kind: {}, total_amount: 0 },
+      usageLoading: false,
+      quotaForm: { calls_limit: 0, sandbox_seconds_limit: 0 },
+      quotaSaving: false,
       searchResults: [],
       embeddingScope: "platform",
       embedding: null,
@@ -120,6 +144,8 @@ window.adminConsole = function adminConsole(config) {
       toasts: [],
       helpOpen: false,
       helpTab: "mcp",
+      // "Legal & data" summary modal (links out to the full Terms / Privacy pages).
+      legalOpen: false,
       contextHelpOpen: false,
       contextHelpTab: "overview",
       toolTestResults: {},
@@ -175,6 +201,13 @@ window.adminConsole = function adminConsole(config) {
     _toastSeq: 0,
     _toolSeq: 1,
     _codeEditors: {},
+    // Live Chart.js instances keyed by canvas id, so every render destroys the
+    // prior chart before recreating it (Chart.js leaks/overlays otherwise on a
+    // refresh or tenant switch).
+    _charts: {},
+    // requestAnimationFrame handles for the KPI count-up tweens, keyed by metric
+    // so a new tween (e.g. on tenant switch) cancels the one in flight.
+    _metricTweens: {},
     _validateTimers: {},
     // Soft, advisory-only cap: pinning many tools spends the agent's context
     // budget on every call. Not enforced server-side -- the admin decides.
@@ -182,12 +215,41 @@ window.adminConsole = function adminConsole(config) {
 
     async init() {
       this.initTheme();
+      this._initHashRouting();
       try {
         await this.loadWhoAmI();
-        await Promise.all([this.loadStats(), this.loadTenants()]);
+        // The tenant picker needs the tenant list regardless of the landing
+        // section, so always load it; then hydrate whatever section the URL
+        // hash (deep link) or default resolves to.
+        await this.loadTenants();
+        await this.refreshActiveSection();
       } catch (_) {
         // requests already set error/redirect when needed
       }
+    },
+
+    // ---- Hash-based deep linking ------------------------------------------- //
+    // The active tab is mirrored into location.hash (#tenants, #telemetry, ...)
+    // so a section is bookmarkable / shareable and survives a reload, and the
+    // browser back/forward buttons move between tabs.
+    _sectionFromHash() {
+      const raw = String(window.location.hash || "")
+        .replace(/^#/, "")
+        .trim();
+      if (!raw) return null;
+      return this.navItems.some((item) => item.key === raw) ? raw : null;
+    },
+
+    _initHashRouting() {
+      const fromHash = this._sectionFromHash();
+      if (fromHash) this.activeSection = fromHash;
+      window.addEventListener("hashchange", () => {
+        const section = this._sectionFromHash();
+        if (section && section !== this.activeSection) {
+          this.activeSection = section;
+          this.refreshActiveSection();
+        }
+      });
     },
 
     async apiRequest(path, options = {}) {
@@ -665,6 +727,11 @@ window.adminConsole = function adminConsole(config) {
 
     switchSection(section) {
       this.activeSection = section;
+      // Mirror into the URL hash (guarded so we don't loop with the hashchange
+      // listener, which only reacts when the hash names a *different* section).
+      if (this._sectionFromHash() !== section) {
+        window.location.hash = section;
+      }
       this.refreshActiveSection();
     },
 
@@ -678,9 +745,14 @@ window.adminConsole = function adminConsole(config) {
         this.state.exploreCollections = [];
       }
       try {
-        if (this.activeSection === "dashboard") await this.loadStats();
+        if (this.activeSection === "dashboard") {
+          await this.loadStats();
+          await this.loadAnalytics();
+        }
         if (this.activeSection === "tenants") await this.loadTenants();
         if (this.activeSection === "users") await this.loadUsers();
+        if (this.activeSection === "catalog") await this.loadCatalog();
+        if (this.activeSection === "usage") await this.loadUsageView();
         if (this.activeSection === "approvals") await this.loadPendingActions();
         if (this.activeSection === "servers") {
           await this.loadServers();
@@ -2990,6 +3062,13 @@ window.adminConsole = function adminConsole(config) {
       this.clearError();
       try {
         this.state.telemetry = await this.apiRequest("/admin/telemetry");
+        // The time-bucketed trend that backs the volume/latency charts. Scoped
+        // by role on the server (platform-admin = cross-tenant merge).
+        this.state.analytics.telemetryTrend = await this.apiRequest(
+          "/admin/analytics/telemetry-trend?hours=24",
+          { includeTenant: !this.isPlatformAdmin() },
+        );
+        this.$nextTick(() => this.renderTelemetryCharts());
       } catch (error) {
         this.setError(error);
       }
@@ -3362,6 +3441,467 @@ window.adminConsole = function adminConsole(config) {
           await this.loadTenantEmbedding();
         }
       }, 3000);
+    },
+
+    // ====================================================================== //
+    //  Analytics (charts + KPIs)                                             //
+    // ====================================================================== //
+    // Platform-admins get the cross-tenant (platform) scope; everyone else is
+    // confined to their own tenant. A tenant-scoped call carries tenant_id (via
+    // includeTenant); the platform scope omits it so the server rolls up all.
+    _analyticsOpts() {
+      return { includeTenant: !this.isPlatformAdmin() };
+    },
+
+    async loadAnalytics() {
+      this.state.analyticsLoading = true;
+      try {
+        const opts = this._analyticsOpts();
+        const [overview, usageTrend, topTools, quota] = await Promise.all([
+          this.apiRequest("/admin/analytics/overview", opts),
+          this.apiRequest("/admin/analytics/usage-trend?months=6", opts),
+          this.apiRequest("/admin/analytics/top-tools?limit=8", opts),
+          this.apiRequest("/admin/analytics/quota-utilization", opts),
+        ]);
+        this.state.analytics.overview = overview;
+        this.state.analytics.usageTrend = usageTrend;
+        this.state.analytics.topTools = topTools;
+        this.state.analytics.quota = quota;
+        this._tweenMetric("calls", Number(overview?.calls || 0));
+        this._tweenMetric(
+          "sandbox",
+          Math.round(Number(overview?.sandbox_ms || 0) / 1000),
+        );
+        this.$nextTick(() => this.renderDashboardCharts());
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.analyticsLoading = false;
+      }
+    },
+
+    // Count-up tween: ease state.displayMetrics[key] from its current value to
+    // `to` over ~700ms. Cancels any in-flight tween for the same key, and snaps
+    // instantly when the user prefers reduced motion.
+    _tweenMetric(key, to) {
+      const target = Number.isFinite(to) ? to : 0;
+      if (this._metricTweens[key]) {
+        cancelAnimationFrame(this._metricTweens[key]);
+        delete this._metricTweens[key];
+      }
+      const reduce =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const from = Number(this.state.displayMetrics[key] || 0);
+      if (reduce || from === target) {
+        this.state.displayMetrics[key] = target;
+        return;
+      }
+      const duration = 700;
+      const start = performance.now();
+      const step = (now) => {
+        const t = Math.min(1, (now - start) / duration);
+        // easeOutCubic — fast then settling, matching --ease-out's feel.
+        const eased = 1 - Math.pow(1 - t, 3);
+        this.state.displayMetrics[key] = from + (target - from) * eased;
+        if (t < 1) {
+          this._metricTweens[key] = requestAnimationFrame(step);
+        } else {
+          this.state.displayMetrics[key] = target;
+          delete this._metricTweens[key];
+        }
+      };
+      this._metricTweens[key] = requestAnimationFrame(step);
+    },
+
+    // ---- Beta-headroom / confirmation KPIs (derived from overview) --------- //
+    betaHeadroom() {
+      const o = this.state.analytics.overview || {};
+      const max = Number(o.self_registration_max_tenants || 0);
+      const used = Number(o.self_registered_count || 0);
+      const remaining = max > 0 ? Math.max(0, max - used) : null;
+      const pct = max > 0 ? Math.round((used / max) * 100) : null;
+      return { max, used, remaining, pct };
+    },
+
+    awaitingConfirmationCount() {
+      return Number(this.state.analytics.overview?.unconfirmed_count || 0);
+    },
+
+    // ---- Chart.js plumbing ------------------------------------------------- //
+    _chartColors() {
+      // Tuned to read on both the dark and light themes (mid-tone text/grid).
+      return {
+        text: "#94a3b8",
+        grid: "rgba(148, 163, 184, 0.16)",
+        accent: "#34d399",
+        accentFill: "rgba(52, 211, 153, 0.18)",
+        blue: "#60a5fa",
+        blueFill: "rgba(96, 165, 250, 0.18)",
+        amber: "#fbbf24",
+        rose: "#fb7185",
+        roseFill: "rgba(251, 113, 133, 0.20)",
+        violet: "#a78bfa",
+      };
+    },
+
+    // Destroy-before-recreate: Chart.js keeps a registry per <canvas>, so re-
+    // rendering without disposing the old instance overlays charts and leaks.
+    _mountChart(canvasId, config) {
+      if (typeof window.Chart === "undefined") return;
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      if (this._charts[canvasId]) {
+        this._charts[canvasId].destroy();
+        delete this._charts[canvasId];
+      }
+      this._charts[canvasId] = new window.Chart(canvas.getContext("2d"), config);
+    },
+
+    _axisOptions() {
+      const c = this._chartColors();
+      return {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: {
+            labels: { color: c.text, boxWidth: 12, font: { size: 11 } },
+          },
+        },
+        scales: {
+          x: { ticks: { color: c.text, font: { size: 10 } }, grid: { color: c.grid } },
+          y: {
+            beginAtZero: true,
+            ticks: { color: c.text, font: { size: 10 } },
+            grid: { color: c.grid },
+          },
+        },
+      };
+    },
+
+    renderDashboardCharts() {
+      if (typeof window.Chart === "undefined") return;
+      const c = this._chartColors();
+
+      // Usage trend (calls + sandbox seconds per period).
+      const trend = this.state.analytics.usageTrend?.points || [];
+      this._mountChart("chart-usage-trend", {
+        type: "line",
+        data: {
+          labels: trend.map((p) => p.period),
+          datasets: [
+            {
+              label: "Calls",
+              data: trend.map((p) => p.calls),
+              borderColor: c.accent,
+              backgroundColor: c.accentFill,
+              fill: true,
+              tension: 0.3,
+              yAxisID: "y",
+            },
+            {
+              label: "Sandbox (s)",
+              data: trend.map((p) => Math.round((p.sandbox_ms || 0) / 1000)),
+              borderColor: c.blue,
+              backgroundColor: c.blueFill,
+              fill: true,
+              tension: 0.3,
+              yAxisID: "y1",
+            },
+          ],
+        },
+        options: {
+          ...this._axisOptions(),
+          scales: {
+            ...this._axisOptions().scales,
+            y1: {
+              beginAtZero: true,
+              position: "right",
+              ticks: { color: c.text, font: { size: 10 } },
+              grid: { drawOnChartArea: false },
+            },
+          },
+        },
+      });
+
+      // Calls sparkline (KPI card): minimal line, no axes/legend.
+      this._mountChart("spark-calls", {
+        type: "line",
+        data: {
+          labels: trend.map((p) => p.period),
+          datasets: [
+            {
+              data: trend.map((p) => p.calls),
+              borderColor: c.accent,
+              backgroundColor: c.accentFill,
+              fill: true,
+              tension: 0.4,
+              pointRadius: 0,
+              borderWidth: 2,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          scales: { x: { display: false }, y: { display: false } },
+        },
+      });
+
+      // Top tools (horizontal bar).
+      const tools = this.state.analytics.topTools?.tools || [];
+      this._mountChart("chart-top-tools", {
+        type: "bar",
+        data: {
+          labels: tools.map((t) => `${t.server}/${t.tool}`),
+          datasets: [
+            {
+              label: "Calls",
+              data: tools.map((t) => t.calls),
+              backgroundColor: c.violet,
+              borderRadius: 4,
+            },
+          ],
+        },
+        options: { ...this._axisOptions(), indexAxis: "y" },
+      });
+
+      // Top servers (bar).
+      const servers = this.state.analytics.topTools?.servers || [];
+      this._mountChart("chart-top-servers", {
+        type: "bar",
+        data: {
+          labels: servers.map((s) => s.server),
+          datasets: [
+            {
+              label: "Calls",
+              data: servers.map((s) => s.calls),
+              backgroundColor: c.blue,
+              borderRadius: 4,
+            },
+          ],
+        },
+        options: { ...this._axisOptions() },
+      });
+
+      // Quota utilization (platform-admin cross-tenant; bar of calls %).
+      const quota = this.state.analytics.quota?.tenants || [];
+      this._mountChart("chart-quota", {
+        type: "bar",
+        data: {
+          labels: quota.map((q) => q.tenant_id),
+          datasets: [
+            {
+              label: "Calls used %",
+              data: quota.map((q) => q.calls_utilization_pct ?? 0),
+              backgroundColor: quota.map((q) =>
+                (q.calls_utilization_pct ?? 0) >= 80 ? c.rose : c.accent,
+              ),
+              borderRadius: 4,
+            },
+          ],
+        },
+        options: { ...this._axisOptions() },
+      });
+    },
+
+    renderTelemetryCharts() {
+      if (typeof window.Chart === "undefined") return;
+      const c = this._chartColors();
+      const points = this.state.analytics.telemetryTrend?.points || [];
+      const labels = points.map((p) =>
+        new Date(p.bucket).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      );
+
+      this._mountChart("chart-telemetry-volume", {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: "Total",
+              data: points.map((p) => p.total),
+              borderColor: c.blue,
+              backgroundColor: c.blueFill,
+              fill: true,
+              tension: 0.3,
+            },
+            {
+              label: "Errors",
+              data: points.map((p) => p.errors),
+              borderColor: c.rose,
+              backgroundColor: c.roseFill,
+              fill: true,
+              tension: 0.3,
+            },
+          ],
+        },
+        options: this._axisOptions(),
+      });
+
+      this._mountChart("chart-telemetry-latency", {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: "avg ms",
+              data: points.map((p) =>
+                p.latency_avg_ms == null ? null : Math.round(p.latency_avg_ms),
+              ),
+              borderColor: c.accent,
+              backgroundColor: c.accentFill,
+              tension: 0.3,
+              spanGaps: true,
+            },
+            {
+              label: "p95 ms",
+              data: points.map((p) =>
+                p.latency_p95_ms == null ? null : Math.round(p.latency_p95_ms),
+              ),
+              borderColor: c.amber,
+              tension: 0.3,
+              spanGaps: true,
+            },
+          ],
+        },
+        options: this._axisOptions(),
+      });
+    },
+
+    // ====================================================================== //
+    //  Confirmation tiers (self-service beta accounts)                       //
+    // ====================================================================== //
+    confirmationOf(tenant) {
+      return String(tenant?.confirmation || "confirmed").toLowerCase();
+    },
+
+    isUnconfirmed(tenant) {
+      return this.confirmationOf(tenant) === "unconfirmed";
+    },
+
+    filteredTenants() {
+      const rows = this.state.tenants || [];
+      if (this.state.tenantFilter === "unconfirmed") {
+        return rows.filter((t) => this.isUnconfirmed(t));
+      }
+      return rows;
+    },
+
+    unconfirmedTenantCount() {
+      return (this.state.tenants || []).filter((t) => this.isUnconfirmed(t))
+        .length;
+    },
+
+    async confirmTenant(tenant) {
+      const id = String(tenant?.tenant_id || "").trim();
+      if (!id) return;
+      this.clearError();
+      try {
+        await this.apiRequest(
+          `/admin/tenants/${encodeURIComponent(id)}/confirm`,
+          { method: "POST", includeTenant: false, body: {} },
+        );
+        await this.loadTenants();
+        this.notify(`Tenant '${id}' confirmed — caps lifted.`);
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    async unconfirmTenant(tenant) {
+      const id = String(tenant?.tenant_id || "").trim();
+      if (!id) return;
+      if (
+        !window.confirm(
+          `Move '${id}' back to unconfirmed? It will be re-capped to code-only, ` +
+            "1 server / 1 tool, and a small quota.",
+        )
+      ) {
+        return;
+      }
+      this.clearError();
+      try {
+        await this.apiRequest(
+          `/admin/tenants/${encodeURIComponent(id)}/unconfirm`,
+          { method: "POST", includeTenant: false, body: {} },
+        );
+        await this.loadTenants();
+        this.notify(`Tenant '${id}' moved to unconfirmed.`, "warning");
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    // ====================================================================== //
+    //  Usage & quota view                                                    //
+    // ====================================================================== //
+    async loadUsageView() {
+      this.clearError();
+      this.state.usageLoading = true;
+      const tid = encodeURIComponent(this.state.tenantId);
+      try {
+        const [usage, events] = await Promise.all([
+          this.apiRequest(`/admin/tenants/${tid}/usage`, {
+            includeTenant: false,
+          }),
+          this.apiRequest(`/admin/tenants/${tid}/usage/events?limit=100`, {
+            includeTenant: false,
+          }),
+        ]);
+        this.state.usage = usage;
+        this.state.usageEvents = events;
+        this.state.quotaForm.calls_limit = Number(usage?.quota?.calls_limit || 0);
+        this.state.quotaForm.sandbox_seconds_limit = Number(
+          usage?.quota?.sandbox_seconds_limit || 0,
+        );
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.usageLoading = false;
+      }
+    },
+
+    usagePct(used, limit) {
+      const u = Number(used || 0);
+      const l = Number(limit || 0);
+      if (l <= 0) return null;
+      return Math.min(100, Math.round((u / l) * 100));
+    },
+
+    async saveQuota() {
+      if (!this.isPlatformAdmin()) return;
+      this.clearError();
+      this.state.quotaSaving = true;
+      const tid = encodeURIComponent(this.state.tenantId);
+      try {
+        await this.apiRequest(`/admin/tenants/${tid}/quota`, {
+          method: "PUT",
+          includeTenant: false,
+          body: {
+            calls_limit: Number(this.state.quotaForm.calls_limit || 0),
+            sandbox_seconds_limit: Number(
+              this.state.quotaForm.sandbox_seconds_limit || 0,
+            ),
+          },
+        });
+        await this.loadUsageView();
+        this.notify(`Quota updated for '${this.state.tenantId}'.`);
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.quotaSaving = false;
+      }
+    },
+
+    usageExportUrl() {
+      const tid = encodeURIComponent(this.state.tenantId);
+      return `/admin/tenants/${tid}/usage/export?format=csv`;
     },
   };
 };

@@ -109,6 +109,25 @@ class RbacMiddleware:
     def _ui_logout_path(self) -> str:
         return f"{self._ui_path()}/logout"
 
+    def _ui_register_path(self) -> str:
+        return f"{self._ui_path()}/register"
+
+    def _public_ui_paths(self) -> set[str]:
+        """UI paths reachable without an admin session.
+
+        Login/logout (the session entry points), the flag-gated public sign-up
+        page, and the public legal documents (Terms / Privacy) — the latter must
+        be linkable from the unauthenticated login and sign-up screens.
+        """
+        ui = self._ui_path()
+        return {
+            self._ui_login_path(),
+            self._ui_logout_path(),
+            self._ui_register_path(),
+            f"{ui}/terms",
+            f"{ui}/privacy",
+        }
+
     def _is_ui_path(self, path: str) -> bool:
         ui_path = self._ui_path()
         return path == ui_path or path.startswith(f"{ui_path}/")
@@ -120,7 +139,7 @@ class RbacMiddleware:
             return True
         if not self._is_ui_path(path):
             return False
-        return path not in {self._ui_login_path(), self._ui_logout_path()}
+        return path not in self._public_ui_paths()
 
     @staticmethod
     def _unsafe_method(request: Request) -> bool:

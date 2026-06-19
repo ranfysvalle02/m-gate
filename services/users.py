@@ -45,6 +45,15 @@ VIEWER_USER_ROLES = ["user", "viewer", "tool:read"]
 # every write/destructive tool's scopes so per-call authorization refuses them.
 TEAM_USER_ROLES = ["user", "tool:invoke"]
 
+# A self-service registrant is the tenant-admin of its OWN freshly-provisioned
+# tenant: `admin` lets it configure servers/tools and bypasses per-call scope
+# checks WITHIN its tenant (services/authorization.py admin_override), while
+# tenant-scoping in the admin surface confines it to that single tenant. It is
+# NEVER granted `platform-admin`, so it can never see or touch other tenants or
+# platform-wide configuration. Resource blast radius is bounded by the account's
+# confirmation tier (see services/account_tier.py), not by this role.
+SELF_SERVICE_ROLES = ["user", "admin"]
+
 
 def _is_readonly_tool(doc: dict[str, Any]) -> bool:
     """Classify a catalog tool as non-destructive (safe to expose to a team user).
@@ -146,6 +155,7 @@ def public_user(doc: dict[str, Any]) -> dict[str, Any]:
         "roles": _clean_str_list(doc.get("roles")),
         "scopes": _clean_str_list(doc.get("scopes")),
         "status": str(doc.get("status", "active")),
+        "self_registered": bool(doc.get("self_registered", False)),
         "created_at": doc.get("created_at"),
         "updated_at": doc.get("updated_at"),
         "created_by": doc.get("created_by"),
@@ -183,12 +193,17 @@ async def create_user(
     scopes: Iterable[str] | None = None,
     status: str = "active",
     created_by: str | None = None,
+    self_registered: bool = False,
 ) -> dict[str, Any]:
     """Create a user, enforcing globally-unique email.
 
     Email uniqueness is enforced at the application layer (in addition to the
     unique index) because the login form is keyed by email alone, so an address
     must resolve to exactly one account regardless of tenant.
+
+    ``self_registered`` marks accounts minted by the public sign-up flow so the
+    beta cap can count them (and the console can distinguish them); it never
+    grants any privilege.
     """
     collection = _users_collection()
     normalized = normalize_email(email)
@@ -206,6 +221,7 @@ async def create_user(
         "roles": _clean_str_list(roles),
         "scopes": _clean_str_list(scopes),
         "status": status,
+        "self_registered": bool(self_registered),
         "created_at": now,
         "updated_at": now,
         "created_by": created_by,

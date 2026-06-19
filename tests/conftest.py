@@ -100,6 +100,12 @@ def patch_mongo(monkeypatch, fake_db):
 
     tenant_tool_policy.reset_tenant_tool_policy_cache()
 
+    # The per-tenant confirmation-tier cache mirrors the status cache and is also
+    # process-global; clear it so an unconfirmed state never leaks across tests.
+    import services.account_tier as account_tier
+
+    account_tier.reset_account_tier_cache()
+
     # The per-tenant egress allowlist cache is process-global; clear it too.
     import services.tenant_egress as tenant_egress
 
@@ -132,6 +138,8 @@ def patch_mongo(monkeypatch, fake_db):
         "services.tenant_status",
         "services.tenant_tool_policy",
         "services.tenant_egress",
+        "services.account_tier",
+        "services.registration",
         "gateway.middleware.rbac",
         "gateway.middleware.ratelimit",
         "gateway.routers.health",

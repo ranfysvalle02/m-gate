@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<!--
+  OPERATOR NOTE (not shown to users): This is a customizable template, not legal
+  advice. Before going live, replace every [bracketed] placeholder (legal entity,
+  jurisdiction, contact email) and have counsel review it against the privacy laws
+  that apply to you and your users (e.g. GDPR, CCPA/CPRA).
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Privacy Policy — mdb-mcp-gateway</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css?v={{ asset_version | default('dev') }}" />
+  </head>
+  <body class="theme-dark">
+    <div class="legal-shell theme-dark">
+      <article class="legal-doc card">
+        <header class="legal-head">
+          <a class="legal-back link-btn" href="{{ ui_path }}/login">← Back to sign in</a>
+          <div class="auth-brand">
+            <div class="brand-chip">
+              <svg class="brand-leaf" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 1.6c1.9 3.4 5.6 6.9 5.6 12.1 0 3.3-2.2 5.7-4.8 6.4l-.5 2.3h-.6l-.5-2.3c-2.6-.7-4.8-3.1-4.8-6.4C6.4 8.5 10.1 5 12 1.6z" />
+              </svg>
+            </div>
+            <div>
+              <div class="brand-kicker">mdb-mcp-gateway</div>
+              <h1 class="brand-title">Privacy Policy</h1>
+            </div>
+          </div>
+          <p class="legal-meta">
+            Effective {{ effective_date }} · How we handle data when you use the Service.
+          </p>
+        </header>
+
+        <nav class="legal-toc" aria-label="Table of contents">
+          <a href="#scope">1. Scope</a>
+          <a href="#collect">2. What we collect</a>
+          <a href="#use">3. How we use it</a>
+          <a href="#cookies">4. Cookies</a>
+          <a href="#storage">5. Storage &amp; security</a>
+          <a href="#processors">6. Third parties</a>
+          <a href="#retention">7. Retention</a>
+          <a href="#rights">8. Your rights</a>
+          <a href="#children">9. Children</a>
+          <a href="#international">10. International</a>
+          <a href="#changes">11. Changes</a>
+          <a href="#contact">12. Contact</a>
+        </nav>
+
+        <div class="legal-body">
+          <p>
+            This Privacy Policy explains how <strong>[Legal Entity Name]</strong> (the
+            "<strong>Provider</strong>", "<strong>we</strong>", "<strong>us</strong>") collects,
+            uses, and protects information when you use the mdb-mcp-gateway service (the
+            "<strong>Service</strong>"). It should be read together with our
+            <a href="{{ ui_path }}/terms">Terms of Use</a>.
+          </p>
+
+          <h2 id="scope">1. Scope</h2>
+          <p>
+            This Policy applies to the hosted Service operated by the Provider. It does not apply to
+            third-party services you choose to connect or configure (such as embedding providers or
+            downstream MCP servers), which have their own privacy practices.
+          </p>
+
+          <h2 id="collect">2. Information we collect</h2>
+          <ul>
+            <li>
+              <strong>Account information.</strong> Your email address and a securely hashed
+              password. We do not store your password in plaintext.
+            </li>
+            <li>
+              <strong>Technical &amp; security data.</strong> Your IP address (used for sign-up
+              throttling and abuse prevention), request metadata, request identifiers, and
+              authentication session and CSRF cookies.
+            </li>
+            <li>
+              <strong>Usage &amp; telemetry.</strong> Operational records of your activity, such as
+              the methods/tools invoked, status/outcome, latency, timestamps, and aggregate usage
+              counters (e.g., call counts and sandbox-execution seconds) used for quotas, billing
+              metering, analytics, and troubleshooting.
+            </li>
+            <li>
+              <strong>Content you provide.</strong> Data, code tools, configurations, prompts, and
+              other materials you create or store in your tenant, including documents in your tenant
+              database. Per-server secrets you enter are stored encrypted and are never returned by
+              the admin API after they are written.
+            </li>
+          </ul>
+
+          <h2 id="use">3. How we use information</h2>
+          <ul>
+            <li>to provide, operate, maintain, and secure the Service;</li>
+            <li>to authenticate you and enforce roles, tenant isolation, quotas, and rate limits;</li>
+            <li>to detect, prevent, and investigate abuse, fraud, and security incidents;</li>
+            <li>to monitor performance and improve the Service (including aggregate analytics);</li>
+            <li>to communicate with you about the Service; and</li>
+            <li>to comply with legal obligations and enforce our Terms.</li>
+          </ul>
+          <p>We do not sell your personal information.</p>
+
+          <h2 id="cookies">4. Cookies</h2>
+          <p>
+            We use strictly-necessary cookies to operate the admin console: an
+            <strong>HttpOnly session cookie</strong> to keep you signed in and a
+            <strong>CSRF token cookie</strong> to protect against cross-site request forgery. We do
+            not use third-party advertising or cross-site tracking cookies.
+          </p>
+
+          <h2 id="storage">5. Data storage &amp; security</h2>
+          <p>
+            Data is stored in MongoDB (including MongoDB Atlas), using a physically separate database
+            per tenant for isolation. We apply technical and organizational safeguards such as
+            transport encryption, role-based access control, encryption of stored secrets, and a
+            network-isolated WebAssembly sandbox for code tools. However, no method of transmission
+            or storage is completely secure, and we cannot guarantee absolute security. You are
+            responsible for safeguarding your credentials and for the data you choose to store.
+          </p>
+
+          <h2 id="processors">6. Third-party processors &amp; integrations</h2>
+          <ul>
+            <li>
+              <strong>Hosting / database.</strong> We rely on infrastructure and database providers
+              (such as MongoDB Atlas and our hosting provider) to run the Service.
+            </li>
+            <li>
+              <strong>Embedding providers.</strong> If you or the operator configure an embedding
+              provider (e.g., Ollama, OpenAI, Azure OpenAI, Voyage AI, or Google Gemini), text you
+              submit for indexing or search may be sent to that provider to generate embeddings,
+              subject to that provider's terms and privacy policy.
+            </li>
+            <li>
+              <strong>Downstream servers.</strong> When you connect downstream MCP servers or data
+              sources, data may be transmitted to those endpoints at your direction.
+            </li>
+          </ul>
+
+          <h2 id="retention">7. Data retention</h2>
+          <p>
+            We retain information for as long as your account is active or as needed to provide the
+            Service, then delete or anonymize it within a reasonable period, unless a longer
+            retention is required by law. Some records expire automatically — for example, sign-up
+            attempt records and certain telemetry are subject to time-to-live (TTL) expiry, and
+            deleted tenants may be soft-deleted for a retention window before the underlying database
+            is permanently removed.
+          </p>
+
+          <h2 id="rights">8. Your rights &amp; choices</h2>
+          <p>
+            Depending on where you live, you may have rights to access, correct, export, or delete
+            your personal information, or to object to or restrict certain processing. You can
+            request these by contacting us (see below); we may need to verify your identity. You can
+            also delete content from your tenant or request account deletion. Because the Service is
+            in beta, some controls may be limited.
+          </p>
+
+          <h2 id="children">9. Children's privacy</h2>
+          <p>
+            The Service is not directed to children and is not intended for anyone under 18 (or the
+            applicable age of majority). We do not knowingly collect personal information from
+            children. If you believe a child has provided us information, contact us so we can delete
+            it.
+          </p>
+
+          <h2 id="international">10. International data transfers</h2>
+          <p>
+            We may process and store information in countries other than the one in which you reside.
+            Those countries may have different data-protection laws. Where required, we take steps to
+            provide an appropriate level of protection for international transfers.
+          </p>
+
+          <h2 id="changes">11. Changes to this Policy</h2>
+          <p>
+            We may update this Policy from time to time. We will revise the "Effective" date above
+            and, where practicable, provide notice of material changes. Your continued use of the
+            Service after changes become effective constitutes acceptance of the updated Policy.
+          </p>
+
+          <h2 id="contact">12. Contact</h2>
+          <p>
+            Questions or requests about this Policy or your data? Contact us at
+            <strong>[contact@example.com]</strong>.
+          </p>
+        </div>
+
+        <footer class="legal-foot">
+          <a class="link-btn" href="{{ ui_path }}/terms">Terms of Use</a>
+          <span aria-hidden="true">·</span>
+          <a class="link-btn" href="{{ ui_path }}/register">Create an account</a>
+          <span aria-hidden="true">·</span>
+          <a class="link-btn" href="{{ ui_path }}/login">Sign in</a>
+        </footer>
+      </article>
+    </div>
+  </body>
+</html>

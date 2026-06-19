@@ -43,6 +43,13 @@
       the Alpine core script; otherwise Alpine starts first and every x-data /
       x-init expression fails with "adminConsole is not defined".
     -->
+    <!--
+      Chart.js is vendored (not a CDN) so the console keeps no new runtime external
+      dependency, consistent with the gateway's self-contained data plane. It is
+      loaded BEFORE app.js (deferred scripts run in document order) so the global
+      `Chart` exists by the time renderCharts() runs from the analytics views.
+    -->
+    <script defer src="/static/chart.umd.min.js?v={{ asset_version | default('dev') }}"></script>
     <script defer src="/static/app.js?v={{ asset_version | default('dev') }}"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <link rel="stylesheet" href="/static/styles.css?v={{ asset_version | default('dev') }}" />
@@ -88,8 +95,22 @@
           </template>
         </nav>
         <div class="sidebar-footer">
-          <span class="status-dot"></span>
-          <span>Gateway online</span>
+          <div class="sidebar-status">
+            <span class="status-dot"></span>
+            <span>Gateway online</span>
+          </div>
+          <div class="sidebar-legal">
+            <button
+              type="button"
+              class="sidebar-legal-link"
+              @click="state.legalOpen = true"
+              title="How your data is handled, acceptable use, and the beta disclaimer"
+            >
+              Legal &amp; data
+            </button>
+            <a class="sidebar-legal-link" :href="`${uiPath}/terms`" target="_blank" rel="noopener">Terms</a>
+            <a class="sidebar-legal-link" :href="`${uiPath}/privacy`" target="_blank" rel="noopener">Privacy</a>
+          </div>
         </div>
       </aside>
       <main class="workspace-shell">
@@ -142,6 +163,12 @@
           <div class="readonly-banner" role="status">
             <span class="readonly-banner-icon" aria-hidden="true">🔒</span>
             <span><strong>Tenant is read-only.</strong> Tool calls and tenant-scoped config changes are frozen. A platform admin can lift this from the Tenants tab.</span>
+          </div>
+        </template>
+        <template x-if="state.whoami?.confirmation === 'unconfirmed'">
+          <div class="unconfirmed-banner" role="status">
+            <span class="unconfirmed-banner-icon" aria-hidden="true">⏳</span>
+            <span><strong>Your account is unconfirmed.</strong> While in the beta queue you can register <strong>code tools only</strong> — capped at 1 server / 1 tool with a small quota, and external (HTTP/SSE/stdio) servers are blocked. A platform admin can confirm your account to lift these limits.</span>
           </div>
         </template>
         <section class="content-shell">{% block content %}{% endblock %}</section>
@@ -891,6 +918,86 @@ def latest(user_id: str) -> dict:
                 </p>
               </div>
             </template>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============================ Legal, privacy & data =================== -->
+      <div
+        class="modal-overlay"
+        x-show="state.legalOpen"
+        x-cloak
+        @click.self="state.legalOpen = false"
+        @keydown.escape.window="state.legalOpen = false"
+        x-transition:enter="modal-overlay-enter-active"
+        x-transition:enter-start="modal-overlay-enter-from"
+        x-transition:enter-end="modal-overlay-enter-to"
+        x-transition:leave="modal-overlay-leave-active"
+        x-transition:leave-start="modal-overlay-leave-from"
+        x-transition:leave-end="modal-overlay-leave-to"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="legal-modal-title"
+      >
+        <div
+          class="modal-card"
+          x-show="state.legalOpen"
+          x-transition:enter="modal-card-enter-active"
+          x-transition:enter-start="modal-card-enter-from"
+          x-transition:enter-end="modal-card-enter-to"
+        >
+          <div class="modal-header">
+            <div>
+              <div class="modal-eyebrow">The short version</div>
+              <h2 class="modal-title" id="legal-modal-title">Legal, privacy &amp; your data</h2>
+              <p class="modal-subtitle">
+                A plain-language summary. The full
+                <a class="link-btn" :href="`${uiPath}/terms`" target="_blank" rel="noopener">Terms of Use</a>
+                and
+                <a class="link-btn" :href="`${uiPath}/privacy`" target="_blank" rel="noopener">Privacy Policy</a>
+                always govern.
+              </p>
+            </div>
+            <button type="button" class="modal-close" @click="state.legalOpen = false" title="Close (Esc)" aria-label="Close">✕</button>
+          </div>
+
+          <div class="modal-body">
+            <div class="tldr">
+              <span aria-hidden="true">🧪</span>
+              <span><strong>This is an open beta, provided "as is".</strong> No uptime, SLA, or support guarantees — features and limits can change at any time. Keep your own backups and don't use it for critical workloads.</span>
+            </div>
+
+            <h4>What we store</h4>
+            <ul>
+              <li>Your <strong>email</strong> and a <strong>securely hashed password</strong> — never plaintext.</li>
+              <li>Your <strong>IP</strong> (for sign-up throttling &amp; abuse prevention) and session/CSRF cookies.</li>
+              <li><strong>Usage telemetry</strong> (methods, status, latency, counts) for quotas, analytics, and troubleshooting.</li>
+              <li>Your <strong>tenant data &amp; code tools</strong>, isolated in a per-tenant database. Per-server secrets are stored <strong>encrypted</strong> and never returned after they're written.</li>
+            </ul>
+
+            <h4>What we don't do</h4>
+            <ul>
+              <li>We <strong>don't sell</strong> your data, and we don't use third-party ad/tracking cookies.</li>
+              <li>We only share data with infrastructure providers and any embedding/downstream services <em>you</em> configure.</li>
+            </ul>
+
+            <h4>Using it responsibly</h4>
+            <ul>
+              <li>No illegal, infringing, or abusive content; no probing or escaping the sandbox; no SSRF / unauthorized network access.</li>
+              <li>Respect rate limits, quotas, and beta caps. We may suspend accounts to protect the Service.</li>
+            </ul>
+
+            <h4>Account tiers</h4>
+            <p class="text-sm text-slate-500">
+              Self-service accounts start <strong>unconfirmed</strong> (code-only, 1 server / 1 tool,
+              small quota). A platform admin can promote you to <strong>confirmed</strong> to lift the
+              caps. We're not obligated to confirm any account.
+            </p>
+
+            <div class="flex items-center gap-2" style="margin-top: 1rem">
+              <a class="btn-secondary" :href="`${uiPath}/terms`" target="_blank" rel="noopener">Read full Terms</a>
+              <a class="btn-secondary" :href="`${uiPath}/privacy`" target="_blank" rel="noopener">Read full Privacy Policy</a>
+            </div>
           </div>
         </div>
       </div>

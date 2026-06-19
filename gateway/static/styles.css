@@ -495,10 +495,40 @@ body {
   padding-top: 1rem;
   border-top: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  gap: 0.55rem;
+  flex-direction: column;
+  gap: 0.6rem;
   font-size: 0.74rem;
   color: var(--text-secondary);
+}
+
+.sidebar-status {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.sidebar-legal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.7rem;
+}
+
+.sidebar-legal-link {
+  position: relative;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 0.72rem;
+  font-family: inherit;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.sidebar-legal-link:hover {
+  color: var(--accent);
 }
 
 .status-dot {
@@ -675,6 +705,117 @@ body {
   border-color: color-mix(in srgb, var(--warning, #d9930a) 40%, transparent);
   background: color-mix(in srgb, var(--warning, #d9930a) 16%, var(--surface));
   color: color-mix(in srgb, var(--warning, #d9930a) 85%, var(--text-primary));
+}
+
+/* A self-service registrant whose account is awaiting admin confirmation. */
+.badge-selfreg {
+  border-color: color-mix(in srgb, #a78bfa 45%, transparent);
+  background: color-mix(in srgb, #a78bfa 16%, var(--surface));
+  color: color-mix(in srgb, #a78bfa 85%, var(--text-primary));
+}
+
+/* Unconfirmed (beta-queue) banner — sky-blue to differentiate from the amber
+   read-only warning. Same sticky layout as .readonly-banner. */
+.unconfirmed-banner {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border: 1px solid color-mix(in srgb, #60a5fa 42%, transparent);
+  background: color-mix(in srgb, #60a5fa 13%, var(--surface));
+  color: color-mix(in srgb, #60a5fa 82%, var(--text-primary));
+  border-radius: var(--radius-md);
+  padding: 0.7rem 0.95rem;
+  margin-bottom: 0.9rem;
+  font-size: 0.86rem;
+  box-shadow: var(--shadow-sm);
+  animation: rise var(--dur-med) var(--ease-out) both;
+}
+
+.unconfirmed-banner-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* Confirmation-tier pill shown in the Tenants table. */
+.cpill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  border: 1px solid transparent;
+  vertical-align: middle;
+}
+
+.cpill-confirmed {
+  border-color: color-mix(in srgb, var(--success, #16a34a) 40%, transparent);
+  background: color-mix(in srgb, var(--success, #16a34a) 15%, var(--surface));
+  color: color-mix(in srgb, var(--success, #16a34a) 82%, var(--text-primary));
+}
+
+.cpill-unconfirmed {
+  border-color: color-mix(in srgb, #f59e0b 45%, transparent);
+  background: color-mix(in srgb, #f59e0b 16%, var(--surface));
+  color: color-mix(in srgb, #f59e0b 85%, var(--text-primary));
+}
+
+/* A card that hosts a chart: keeps the label and the canvas box evenly spaced
+   and lets the chart box fill the remaining height in a grid row. */
+.chart-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-card .chart-box,
+.chart-card .chart-box-sm,
+.chart-card .chart-box-tall {
+  margin-top: 0.55rem;
+}
+
+/* Chart.js canvases live in fixed-height boxes so Chart's responsive resize has
+   a definite height to fill (a bare <canvas> in a flex/grid cell collapses). */
+.chart-box {
+  position: relative;
+  width: 100%;
+  height: 240px;
+}
+
+.chart-box-tall {
+  position: relative;
+  width: 100%;
+  height: 300px;
+}
+
+.chart-box-sm {
+  position: relative;
+  width: 100%;
+  height: 56px;
+}
+
+/* Linear usage/quota meter. */
+.meter {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent, #34d399);
+  transition: width var(--dur-med) var(--ease-out);
+}
+
+.meter-fill-hot {
+  background: #fb7185;
 }
 
 /* --------------------------------------------------------------------------- */
@@ -3363,6 +3504,494 @@ textarea.field-input {
   padding: 0.7rem;
   font-size: 0.9rem;
   margin-top: 0.35rem;
+}
+
+/* Self-service sign-up page (register.html). */
+.auth-lede {
+  margin: 0 0 1.3rem;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--text-secondary, #94a3b8);
+}
+
+.auth-alt {
+  margin-top: 1.1rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary, #94a3b8);
+  text-align: center;
+}
+
+/* Required "I agree to the Terms" consent row on the sign-up form. */
+.consent-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+}
+
+.consent-check {
+  margin-top: 0.12rem;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.consent-row a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.consent-row a:hover {
+  border-bottom-color: var(--accent);
+}
+
+/* Small centered legal links beneath the auth forms. */
+.auth-legal {
+  margin-top: 1.2rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  font-size: 0.76rem;
+  color: var(--text-secondary, #94a3b8);
+}
+
+.auth-legal a {
+  color: var(--text-secondary, #94a3b8);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.auth-legal a:hover {
+  color: var(--accent);
+  border-bottom-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.success-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--success, #16a34a) 40%, transparent);
+  background: color-mix(in srgb, var(--success, #16a34a) 14%, var(--surface));
+  color: color-mix(in srgb, var(--success, #16a34a) 85%, var(--text-primary));
+  border-radius: var(--radius-md);
+  padding: 0.7rem 0.95rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+
+.auth-facts {
+  display: flex;
+  gap: 1.5rem;
+  margin: 0 0 1rem;
+}
+
+.auth-facts dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary, #94a3b8);
+}
+
+.auth-facts dd {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+}
+
+/* --------------------------------------------------------------------------- */
+/*  Legal documents (terms.html / privacy.html)                                */
+/* --------------------------------------------------------------------------- */
+.legal-shell {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 2.5rem 1.25rem;
+  isolation: isolate;
+  color: var(--text-primary);
+  background: var(--bg);
+}
+
+.legal-doc {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 52rem;
+  padding: 2.4rem clamp(1.25rem, 4vw, 2.75rem);
+  animation: rise var(--dur-slow) var(--ease-out) both;
+}
+
+.legal-head {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 1.2rem;
+  margin-bottom: 1.4rem;
+}
+
+.legal-back {
+  display: inline-block;
+  margin-bottom: 1.1rem;
+}
+
+.legal-head .auth-brand {
+  margin-bottom: 0.6rem;
+}
+
+.legal-meta {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
+}
+
+/* Sticky jump-nav: a chip row that wraps on small screens. */
+.legal-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1.8rem;
+}
+
+.legal-toc a {
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 0.28rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.legal-toc a:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--accent-soft);
+  transform: translateY(-1px);
+}
+
+.legal-body {
+  font-size: 0.92rem;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
+.legal-body h2 {
+  font-family: var(--font-display);
+  font-size: 1.12rem;
+  letter-spacing: -0.01em;
+  margin: 1.9rem 0 0.6rem;
+  scroll-margin-top: 1.5rem;
+  /* A subtle gradient accent on the section number/title. */
+  color: color-mix(in srgb, var(--accent) 30%, var(--text-primary));
+}
+
+.legal-body p,
+.legal-body ul {
+  margin: 0 0 0.85rem;
+  color: var(--text-secondary);
+}
+
+.legal-body li {
+  margin-bottom: 0.4rem;
+}
+
+.legal-body strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.legal-body a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.legal-body a:hover {
+  border-bottom-color: var(--accent);
+}
+
+/* Capitalized disclaimer / liability blocks: set apart so they read as the
+   "fine print" they are, without shouting. */
+.legal-strong {
+  font-size: 0.82rem !important;
+  letter-spacing: 0.01em;
+  line-height: 1.65;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid color-mix(in srgb, var(--warning) 60%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  color: var(--text-secondary) !important;
+}
+
+.legal-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.8rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+/* --------------------------------------------------------------------------- */
+/*  Finishing touches — flowing micro-animations, gradients, typography polish  */
+/*  Tasteful, on-brand details that make the console feel alive. Everything here */
+/*  is decorative and is fully disabled by the reduced-motion guard below.       */
+/* --------------------------------------------------------------------------- */
+
+/* A gradient that pans sideways — powers living wordmarks, meters, and sheens. */
+@keyframes flow-pan {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+/* A soft, living halo that pulses outward — a calm "look here" without nagging.
+   Uses currentColor so it adapts to whatever element it sits on (green, amber…). */
+@keyframes halo {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 30%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 12px 1px color-mix(in srgb, currentColor 26%, transparent);
+  }
+}
+
+/* Gentle breathing for small accent glyphs (the unconfirmed hourglass, etc.). */
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.78;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+
+/* A quick, satisfying pop used when a freshly-loaded value first lands. */
+@keyframes value-pop {
+  0% {
+    transform: translateY(4px) scale(0.96);
+    opacity: 0;
+  }
+  60% {
+    transform: translateY(0) scale(1.015);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Charts ease in rather than snapping into place. */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---- Typography polish: balanced headings, pretty body wrapping ----------- */
+.workspace-shell h1,
+.workspace-shell h2,
+.studio-h1,
+.modal-title,
+.brand-title,
+.auth-brand .brand-title {
+  text-wrap: balance;
+}
+
+.studio-lede,
+.connect-now-sub,
+.modal-subtitle,
+.auth-lede,
+.brand-copy {
+  text-wrap: pretty;
+}
+
+/* Marquee KPI numbers: a slow animated gradient sheen (opt-in via .metric-flow). */
+.metric-flow {
+  background: linear-gradient(
+    100deg,
+    var(--text-primary) 0%,
+    var(--accent) 42%,
+    color-mix(in srgb, var(--accent) 55%, var(--text-primary)) 52%,
+    var(--text-primary) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: flow-pan 7s linear infinite;
+}
+
+@media (forced-colors: active) {
+  .metric-flow {
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: CanvasText;
+  }
+}
+
+/* First-paint pop, applied transiently by the app when a metric updates. */
+.value-pop {
+  animation: value-pop var(--dur-med) var(--ease-out) both;
+}
+
+/* ---- Flowing usage/quota meter: a live, shimmering fill ------------------- */
+.meter {
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+.meter-fill {
+  position: relative;
+  background: linear-gradient(
+    90deg,
+    var(--accent-2),
+    var(--accent),
+    color-mix(in srgb, var(--accent) 68%, #ffffff)
+  );
+  background-size: 220% 100%;
+  animation: flow-pan 3.6s linear infinite;
+}
+
+/* A travelling sheen stripe over the fill for that "flowing liquid" feel. */
+.meter-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.38) 50%,
+    transparent 100%
+  );
+  background-size: 55% 100%;
+  background-repeat: no-repeat;
+  animation: flow-pan 2.6s linear infinite;
+  opacity: 0.55;
+}
+
+.meter-fill-hot {
+  background: linear-gradient(90deg, #e11d48, #fb7185, #fda4af);
+  background-size: 220% 100%;
+}
+
+/* ---- Confirmation queue: a gentle "needs attention" breathing pill -------- */
+.cpill-unconfirmed {
+  animation: halo 2.9s var(--ease-inout) infinite;
+}
+
+.badge-selfreg {
+  animation: halo 3.6s var(--ease-inout) infinite;
+}
+
+/* The unconfirmed banner's hourglass softly breathes. */
+.unconfirmed-banner-icon {
+  animation: breathe 3s var(--ease-inout) infinite;
+  transform-origin: center;
+}
+
+/* ---- Chart cards: ease the canvas in + a hover top-glow ------------------- */
+.chart-card canvas {
+  animation: fade-in var(--dur-slow) var(--ease-out) both;
+}
+
+.chart-card::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0;
+  transition: opacity var(--dur-med) var(--ease-out);
+}
+
+.chart-card:hover::after {
+  opacity: 0.85;
+}
+
+/* ---- Pills & badges: a tiny lift on hover when scanning tables ------------ */
+.cpill,
+.badge,
+.tpill {
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    filter var(--dur-fast) var(--ease-out);
+}
+
+.cpill:hover,
+.badge:hover,
+.tpill:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+/* ---- Sign-up success: a celebratory pop with a soft, living green glow ---- */
+.success-banner {
+  animation:
+    value-pop var(--dur-med) var(--ease-out) both,
+    halo 3.2s var(--ease-inout) 0.35s infinite;
+}
+
+/* ---- Empty states: the glyph gently breathes so blank views feel alive ---- */
+.empty-cell .empty-emoji {
+  animation: breathe 4.2s var(--ease-inout) infinite;
+  transform-origin: center;
+}
+
+/* ---- Custom scrollbars: a small, designed detail across every surface ----- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent) 38%, transparent) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent) 52%, transparent);
+  background-clip: padding-box;
 }
 
 /* --------------------------------------------------------------------------- */

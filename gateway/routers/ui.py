@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ui"])
 templates = Jinja2Templates(directory="gateway/templates")
 
+# Shown as the "Effective" date on the public Terms of Use / Privacy Policy pages.
+# Bump this whenever the legal documents materially change.
+LEGAL_EFFECTIVE_DATE = "June 19, 2026"
+
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
@@ -98,6 +102,61 @@ async def ui_login(request: Request) -> Response:
             "ui_path": settings.admin_ui_path,
             "error": None,
             "asset_version": _asset_version(),
+            # Drives the flag-gated "Create an account" link to /ui/register.
+            "self_registration_enabled": settings.self_registration_enabled,
+        },
+    )
+
+
+@router.get("/register", response_class=HTMLResponse, name="ui_register")
+async def ui_register(request: Request) -> Response:
+    """Public self-service sign-up page (flag-gated).
+
+    Reachable at ``/ui/register`` without a session — the auth middleware lets all
+    ``/ui/*`` paths through, and the page POSTs to the public ``/auth/register``
+    endpoint. When self-registration is disabled we redirect to the login page so
+    the route never advertises a closed beta.
+    """
+    settings = get_settings()
+    if not settings.self_registration_enabled:
+        return RedirectResponse(url=_ui_login_path(), status_code=303)
+    if _session_claims(request) is not None:
+        return RedirectResponse(url=_ui_home_path(), status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "register.html",
+        {
+            "ui_path": settings.admin_ui_path,
+            "asset_version": _asset_version(),
+            "min_password_length": settings.self_registration_min_password_length,
+        },
+    )
+
+
+@router.get("/terms", response_class=HTMLResponse, name="ui_terms")
+async def ui_terms(request: Request) -> Response:
+    """Public Terms of Use page (no session required)."""
+    return templates.TemplateResponse(
+        request,
+        "terms.html",
+        {
+            "ui_path": get_settings().admin_ui_path,
+            "asset_version": _asset_version(),
+            "effective_date": LEGAL_EFFECTIVE_DATE,
+        },
+    )
+
+
+@router.get("/privacy", response_class=HTMLResponse, name="ui_privacy")
+async def ui_privacy(request: Request) -> Response:
+    """Public Privacy Policy page (no session required)."""
+    return templates.TemplateResponse(
+        request,
+        "privacy.html",
+        {
+            "ui_path": get_settings().admin_ui_path,
+            "asset_version": _asset_version(),
+            "effective_date": LEGAL_EFFECTIVE_DATE,
         },
     )
 
@@ -127,6 +186,8 @@ async def ui_login_post(request: Request) -> Response:
                 "ui_path": _ui_home_path(),
                 "error": "Invalid email or password.",
                 "asset_version": _asset_version(),
+                # Keep the "Create an account" link visible after a failed attempt.
+                "self_registration_enabled": get_settings().self_registration_enabled,
             },
             status_code=401,
         )

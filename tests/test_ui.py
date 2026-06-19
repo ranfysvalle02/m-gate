@@ -135,6 +135,98 @@ def test_ui_home_includes_export_server_affordance(monkeypatch, reset_settings):
     assert "exportServer()" in home.text
 
 
+def test_ui_register_page_served_when_enabled(monkeypatch, reset_settings):
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
+    monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
+    monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
+    monkeypatch.setenv("SELF_REGISTRATION_ENABLED", "true")
+    client = TestClient(_build_ui_app())
+    response = client.get("/ui/register")
+    assert response.status_code == 200
+    assert "Create your beta account" in response.text
+    # The page posts to the public registration endpoint and explains the tier.
+    assert "/auth/register" in response.text
+    assert "unconfirmed" in response.text
+
+
+def test_ui_register_redirects_to_login_when_disabled(monkeypatch, reset_settings):
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
+    monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
+    monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
+    monkeypatch.setenv("SELF_REGISTRATION_ENABLED", "false")
+    client = TestClient(_build_ui_app())
+    response = client.get("/ui/register", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/ui/login")
+
+
+def test_ui_login_shows_register_link_only_when_enabled(monkeypatch, reset_settings):
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
+    monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
+    monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
+    monkeypatch.setenv("SELF_REGISTRATION_ENABLED", "true")
+    client = TestClient(_build_ui_app())
+    response = client.get("/ui/login")
+    assert response.status_code == 200
+    assert "/ui/register" in response.text
+    assert "Create an account" in response.text
+
+
+def test_ui_terms_page_is_public(monkeypatch, reset_settings):
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
+    monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
+    monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
+    client = TestClient(_build_ui_app())
+    # No session — the legal pages must be reachable without authentication.
+    response = client.get("/ui/terms", follow_redirects=False)
+    assert response.status_code == 200
+    assert "Terms of Use" in response.text
+    assert "/ui/privacy" in response.text
+
+
+def test_ui_privacy_page_is_public(monkeypatch, reset_settings):
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
+    monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
+    monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
+    client = TestClient(_build_ui_app())
+    response = client.get("/ui/privacy", follow_redirects=False)
+    assert response.status_code == 200
+    assert "Privacy Policy" in response.text
+    assert "/ui/terms" in response.text
+
+
+def test_ui_login_links_to_legal_pages(monkeypatch, reset_settings):
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
+    monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
+    monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
+    client = TestClient(_build_ui_app())
+    response = client.get("/ui/login")
+    assert response.status_code == 200
+    assert "/ui/terms" in response.text
+    assert "/ui/privacy" in response.text
+
+
+def test_ui_register_requires_consent_and_links_legal(monkeypatch, reset_settings):
+    monkeypatch.setenv("AUTH_MODE", "hs256")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-for-tests")
+    monkeypatch.setenv("ADMIN_EMAIL", "demo@demo.com")
+    monkeypatch.setenv("ADMIN_PASSWORD", "demo-password")
+    monkeypatch.setenv("SELF_REGISTRATION_ENABLED", "true")
+    client = TestClient(_build_ui_app())
+    response = client.get("/ui/register")
+    assert response.status_code == 200
+    # The sign-up form gates on agreeing to the legal docs.
+    assert 'id="agree"' in response.text
+    assert "/ui/terms" in response.text
+    assert "/ui/privacy" in response.text
+
+
 def test_create_app_omits_ui_routes_when_disabled(monkeypatch, reset_settings):
     monkeypatch.setenv("ADMIN_UI_ENABLED", "false")
     from gateway.app import create_app

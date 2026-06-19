@@ -31,6 +31,12 @@ from models.admin import (
     UsageResponse,
     UsageTotals,
 )
+from services.account_tier import (
+    CONFIRMATION_CONFIRMED,
+    CONFIRMATION_UNCONFIRMED,
+    set_tenant_confirmation,
+    tier_caps,
+)
 from services.code_tools import encrypt_raw_code
 from services.egress_policy import EgressNotAllowed, parse_allowlist
 from services.tenant_egress import set_tenant_egress_allowlist
@@ -141,6 +147,9 @@ def _tenant_response(doc: dict[str, Any], *, db_name: str | None = None) -> Tena
     reason = str(doc.get("suspended_reason", "")) or None
     read_only = bool(doc.get("read_only", False))
     read_only_reason = str(doc.get("read_only_reason", "")) or None
+    confirmation = str(doc.get("confirmation") or CONFIRMATION_CONFIRMED)
+    if confirmation not in {CONFIRMATION_CONFIRMED, CONFIRMATION_UNCONFIRMED}:
+        confirmation = CONFIRMATION_CONFIRMED
     return TenantResponse(
         tenant_id=str(doc.get("tenant_id")),
         db_name=str(doc.get("db_name") or db_name or ""),
@@ -150,6 +159,7 @@ def _tenant_response(doc: dict[str, Any], *, db_name: str | None = None) -> Tena
         purge_at=doc.get("purge_at"),
         read_only=read_only,
         read_only_reason=read_only_reason if read_only else None,
+        confirmation=confirmation,
         created_at=doc.get("created_at"),
         updated_at=doc.get("updated_at"),
     )
@@ -300,6 +310,63 @@ async def _set_tenant_status_endpoint(
         method=f"admin/tenants/{target_status}",
         status="tenant_suspended" if target_status == STATUS_SUSPENDED else "tenant_resumed",
         metadata={"tenant_id": tenant_id, "actor": actor, "reason": reason},
+    )
+    return _tenant_response(doc)
+
+
+@router.post("/tenants/{tenant_id}/confirm", response_model=TenantResponse)
+async def confirm_tenant(request: Request, tenant_id: str) -> TenantResponse:
+    """Promote a self-registered tenant from ``unconfirmed`` to ``confirmed``.
+
+    Lifts the unconfirmed tier caps (transport allowlist, server/tool ceilings) and
+    re-stamps the tenant's quota to the confirmed tier. Platform-admin only, since
+    confirmation is the trust decision that unlocks registering external servers.
+    """
+    return await _set_tenant_confirmation_endpoint(
+        request=request,
+        tenant_id=tenant_id,
+        confirmation=CONFIRMATION_CONFIRMED,
+    )
+
+
+@router.post("/tenants/{tenant_id}/unconfirm", response_model=TenantResponse)
+async def unconfirm_tenant(request: Request, tenant_id: str) -> TenantResponse:
+    """Revoke trust: move a tenant back to ``unconfirmed`` and re-apply its caps."""
+    return await _set_tenant_confirmation_endpoint(
+        request=request,
+        tenant_id=tenant_id,
+        confirmation=CONFIRMATION_UNCONFIRMED,
+    )
+
+
+async def _set_tenant_confirmation_endpoint(
+    *,
+    request: Request,
+    tenant_id: str,
+    confirmation: str,
+) -> TenantResponse:
+    # Confirmation gates the high-risk capability (registering external servers),
+    # so it is platform-admin only — a tenant-admin cannot confirm its own tenant.
+    _require_platform_admin(request)
+    actor = str(getattr(request.state, "user_id", "admin"))
+    doc = await set_tenant_confirmation(tenant_id, confirmation, updated_by=actor)
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+    # Re-stamp the per-tenant quota to match the new tier so usage limits track the
+    # tier in lockstep with the cap changes.
+    caps = tier_caps(confirmation, settings=settings)
+    await set_quota(
+        tenant_id,
+        calls_limit=caps.quota_calls_per_period,
+        sandbox_seconds_limit=caps.quota_sandbox_seconds_per_period,
+        updated_by=actor,
+    )
+    c.get_telemetry_logger().log_background(
+        tenant_id=tenant_id,
+        user_id=actor,
+        method=f"admin/tenants/{confirmation}",
+        status=f"tenant_{confirmation}",
+        metadata={"tenant_id": tenant_id, "actor": actor, "confirmation": confirmation},
     )
     return _tenant_response(doc)
 

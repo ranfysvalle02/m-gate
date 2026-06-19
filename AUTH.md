@@ -83,7 +83,8 @@ These bypass bearer enforcement in every mode (see `AuthMiddleware`):
 - **Observability**: `/health`, `/health/*`, `/metrics` (probes/scrapers can't
   carry a token; restrict at the network layer — see
   [`NETWORK-SECURITY.md`](NETWORK-SECURITY.md)).
-- **Inbound auth endpoints**: `/auth/token`,
+- **Inbound auth endpoints**: `/auth/token`, `/auth/register` (only live when
+  `SELF_REGISTRATION_ENABLED=true`; otherwise it `404`s — see §2.3),
   `/.well-known/oauth-protected-resource`.
 - **Admin UI** (when enabled): `<ui>/login`, `<ui>/logout`, `/static/*`. The UI
   itself is then gated by RBAC.
@@ -184,6 +185,75 @@ otherwise returns `404`.
 **OAuth is bring-your-own-IdP.** The gateway is an OAuth2/OIDC *resource server*
 (via `AUTH_MODE=jwks`); it does **not** implement an authorization server. This
 endpoint only points clients at the IdP you already run.
+
+### 2.3 `POST /auth/register` — self-service beta sign-up (`SELF_REGISTRATION_ENABLED`)
+
+Off by default and **dark when off** (returns `404`, not `403`, so the feature is
+unprobeable). When enabled, it lets an anonymous caller create an account without
+an admin in the loop. The public surface accepts **only** an email + password —
+every privilege-bearing field (roles, scopes, tenant id, confirmation tier) is
+pinned server-side in `services/registration.py`, so a registrant can never
+escalate.
+
+```bash
+curl -X POST http://localhost:8000/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"dev@example.com","password":"a-strong-passphrase"}'
+# → 201 {"user":{…,"self_registered":true},"tenant_id":"selfsvc-…",
+#        "confirmation":"unconfirmed","token":"<jwt>","token_type":"bearer","expires_in":…}
+```
+
+What a successful sign-up does:
+
+- **Provisions a fresh tenant** (`selfsvc-<random>`) — one tenant/database per
+  registrant, for full data isolation. The tenant id is never derived from the
+  email.
+- **Creates a tenant-admin of that tenant** (roles `["user","admin"]`, flag
+  `self_registered=true`). It is **never** `platform-admin` and can never see or
+  touch another tenant.
+- **Stamps the account `unconfirmed`** (see §3.3) and returns an immediately-usable
+  bearer.
+
+**Confirmation tiers.** A new account starts **`unconfirmed`**: instantly active
+but tightly capped — it may only register `code` tools (run in the
+network-isolated wasm sandbox), with a default cap of **1 server / 1 tool** and a
+tiny calls + sandbox-seconds quota. A **platform-admin** promotes it to
+**`confirmed`** via `POST /admin/tenants/{id}/confirm` (§3.3), which lifts the caps
+and re-stamps the quota. Unset/admin-created tenants default to `confirmed`, so
+the tier is purely additive and changes nothing pre-existing.
+
+**Why this is safe.** The dangerous capability is registering an *external*
+downstream server (`streamable_http`/`sse`/`stdio`) — the gateway then dials that
+endpoint (an SSRF / egress-abuse vector). Unconfirmed accounts are blocked from
+every transport **except `code`**, which carries no such risk. Layered anti-abuse:
+a per-IP sign-up throttle + a global beta cap (each tenant is a database, so this
+bounds the Atlas-namespace footprint) + the unconfirmed blast-radius caps + the
+existing per-tenant rate limiter + the `status=disabled` kill-switch + tenant
+suspend.
+
+**Error mapping.** Disabled → `404`; invalid email / short password → `422`;
+per-IP throttle exceeded → `429` (+ `Retry-After`); beta cap reached → `403`;
+duplicate email → `409` (the duplicate is rejected *before* provisioning, so no
+tenant is orphaned).
+
+**Public sign-up page.** When the flag is on, the console serves a styled sign-up
+form at **`/ui/register`** (`gateway/templates/register.html`, handler
+`ui_register` in `gateway/routers/ui.py`). It is a public path — the RBAC
+middleware exempts it alongside `/ui/login` and `/ui/logout` — but the handler
+itself redirects to login when `SELF_REGISTRATION_ENABLED` is off, so the page is
+dark whenever the API is. The login screen shows a flag-gated **"Create an
+account"** link to it. The form POSTs email + password + confirm to
+`POST /auth/register`, maps every error code above to an inline message, and on
+`201` renders the new bearer, tenant id, the "your account is unconfirmed" notice,
+and a ready-to-paste `mcp.json` snippet.
+
+**Recommended public-beta posture:** set `SELF_REGISTRATION_ENABLED=true`,
+`AUTO_PROVISION_TENANTS=false` (so the *only* path that creates a tenant is a
+throttled, capped registration — a crafted bearer's `tenant_id` can no longer
+auto-provision), `CODE_TOOL_EXECUTION_ENABLED=true`, and a
+`SANDBOX_MAX_GLOBAL_CONCURRENCY` cap so the code-only tier is runnable but bounded
+on the box. Tune `SELF_REGISTRATION_MAX_TENANTS` / `SELF_REGISTRATION_MAX_PER_IP`
+to taste.
 
 ---
 
@@ -319,6 +389,93 @@ Server-side enforcement is the security boundary; the console additionally hides
 mutating affordances for read-only principals as UX (`canMutate()`), but the
 `403` is the real guard.
 
+### 3.3 Account confirmation tiers (`services/account_tier.py`)
+
+A third per-tenant overlay (alongside status and tool-policy) records an account's
+**trust tier**, used to bound what a self-service sign-up (§2.3) can do until a
+human approves it. It defaults to `confirmed` for any unset/unknown tenant, so it
+never affects tenants that predate the feature.
+
+- **`unconfirmed`** — a fresh sign-up. At server registration
+  (`POST /admin/servers`, `PATCH`), `_enforce_account_tier` applies the tier caps:
+  - **Transport allowlist** — may only register transports in
+    `UNCONFIRMED_ALLOWED_TRANSPORTS` (default `code`). A non-code transport is
+    refused with `403`. This is the key abuse gate: it blocks the SSRF/egress
+    vector of pointing the gateway at an arbitrary external endpoint.
+  - **`UNCONFIRMED_MAX_SERVERS`** (default 1) and **`UNCONFIRMED_MAX_TOOLS`**
+    (default 1) — over-cap registrations are refused with `422`. The tier tool cap
+    composes with the tenant `max_tools` policy; the **most restrictive** wins.
+  - A small calls + sandbox-seconds quota is stamped at sign-up.
+- **`confirmed`** — promoted account (and the default). Caps of `0` mean unlimited;
+  the tenant tool-policy and normal quotas apply as usual.
+- **Platform-admin bypasses tier caps entirely** (they own the trust decision).
+
+**Admin confirm workflow** (platform-admin only — confirmation gates the
+high-risk "register external servers" capability, so a tenant-admin can never
+confirm its own tenant):
+
+- `POST /admin/tenants/{id}/confirm` → sets `confirmation=confirmed` and re-stamps
+  the quota to the confirmed tier (lifting the caps).
+- `POST /admin/tenants/{id}/unconfirm` → reverts to `unconfirmed` and re-applies
+  the capped quota (revoke trust).
+
+The caller's own tier is surfaced on `GET /admin/whoami` (`confirmation`) and per
+tenant on `GET /admin/tenants` (`TenantResponse.confirmation`), so the console can
+show an account's tier and the limits it implies.
+
+**Console surface.** The admin UI renders this workflow end-to-end:
+
+- **Tenants table** — a `confirmation` pill (amber `Unconfirmed` / green
+  `Confirmed`), **Confirm** / **Unconfirm** buttons (only rendered for
+  platform-admins; they call `/admin/tenants/{id}/confirm` | `/unconfirm`), and an
+  **"Unconfirmed queue"** client-side filter to triage the backlog.
+- **Users table** — a `self_registered` badge so self-service accounts are
+  distinguishable from admin-created ones.
+- **Dashboard** — *awaiting-confirmation* and *beta-headroom* cards
+  (`self_registered_count` vs `self_registration_max_tenants`) sourced from the
+  analytics overview (§3.4).
+- **Unconfirmed banner** — mirrors the read-only banner; shown whenever
+  `whoami.confirmation === 'unconfirmed'`, it explains the caps (code-only,
+  1 server / 1 tool, small quota) and that a platform-admin can lift them.
+
+Server-side enforcement remains the boundary; the console only mirrors it.
+
+---
+
+### 3.4 Admin analytics (`gateway/routers/admin/analytics.py`)
+
+Read-only rollups for the console dashboard, all scope-aware via
+`_resolve_target_tenant`: a **platform-admin** sees cross-tenant aggregates (or
+narrows with `?tenant_id=`), a **tenant-admin** is always pinned to their own
+tenant. Every endpoint uses MongoDB `$group` aggregation (no full-collection
+loads), so cost scales with result cardinality, not row count.
+
+- `GET /admin/analytics/overview` — current-period `calls` + `sandbox_ms`
+  (`$group` on `usage_counters`), tenant counts, confirmed vs unconfirmed counts,
+  and `self_registered_count` + `self_registration_max_tenants` for beta headroom.
+- `GET /admin/analytics/usage-trend?months=6` — `usage_counters` time series
+  (`$match period $in [...] → $group _id:period`).
+- `GET /admin/analytics/top-tools?period=&limit=10` — `usage_events`
+  (`$match {kind:"calls"} → $group {server,tool} → $sort → $limit`), plus the same
+  grouped by server. Backed by a `usage_events (tenant_id, period)` index.
+- `GET /admin/analytics/telemetry-trend?hours=24` — per-tenant `audit_telemetry`
+  bucketed by `$dateTrunc` → success/error counts + latency avg & p95
+  (`$percentile`, falling back to avg). Platform-admin merges over the bounded
+  tenant list (time-series can't `$group` across databases).
+- `GET /admin/analytics/quota-utilization` — joins current `usage_counters` with
+  `tenant_quotas`/defaults → utilization %, flagging tenants near their limits.
+
+**Scalability fix.** `admin_stats` (`gateway/routers/admin/catalog.py`) previously
+loaded every tenant's `routing_registry`, `tool_catalog`, and full
+`audit_telemetry` into memory (`O(N × M)`). It now uses `count_documents` for the
+server/tool/enabled counts and a `$group` aggregation for telemetry status counts
+— no full-collection loads.
+
+The console renders these with a self-hosted Chart.js (`gateway/static/chart.umd.min.js`,
+no CDN dependency): KPI cards, a usage-trend line, top-tools/top-servers bars,
+telemetry success-vs-error + latency lines, and quota-utilization bars
+(platform-admin). Charts destroy-before-recreate on refresh / tenant switch.
+
 ---
 
 ## 4. Admin sessions & user store
@@ -403,6 +560,25 @@ Key properties:
 | `ADMIN_UI_ENABLED` / `ADMIN_UI_PATH` | `true` / `/ui` | admin console |
 | `PLATFORM_ADMIN_ROLE` | `platform-admin` | top-tier role name |
 | `PLATFORM_VIEWER_ROLE` | `viewer` | read-only console role name |
+
+### Self-service registration & confirmation tiers
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `SELF_REGISTRATION_ENABLED` | `false` | master switch for `POST /auth/register` (404s when off) |
+| `SELF_REGISTRATION_MAX_TENANTS` | `100` | global beta cap on self-registered tenants (`0` = unlimited) |
+| `SELF_REGISTRATION_WINDOW_SECONDS` | `3600` | per-IP sign-up throttle window |
+| `SELF_REGISTRATION_MAX_PER_IP` | `5` | max sign-ups per IP per window (`0` = no throttle) |
+| `SELF_REGISTRATION_MIN_PASSWORD_LENGTH` | `10` | minimum password length at sign-up |
+| `SELF_REGISTRATION_TENANT_PREFIX` | `selfsvc-` | prefix for the per-registrant tenant id |
+| `UNCONFIRMED_MAX_SERVERS` | `1` | server cap for unconfirmed accounts (`0` = unlimited) |
+| `UNCONFIRMED_MAX_TOOLS` | `1` | tool cap for unconfirmed accounts (`0` = unlimited) |
+| `UNCONFIRMED_ALLOWED_TRANSPORTS` | `code` | transports an unconfirmed account may register |
+| `UNCONFIRMED_QUOTA_CALLS_PER_PERIOD` | `100` | calls quota stamped on sign-up |
+| `UNCONFIRMED_QUOTA_SANDBOX_SECONDS_PER_PERIOD` | `60` | sandbox-seconds quota stamped on sign-up |
+| `CONFIRMED_MAX_SERVERS` / `CONFIRMED_MAX_TOOLS` | `0` | confirmed-tier caps (`0` = unlimited) |
+| `CONFIRMED_ALLOWED_TRANSPORTS` | `streamable_http,sse,stdio,code` | transports a confirmed account may register |
+| `CONFIRMED_QUOTA_CALLS_PER_PERIOD` / `_SANDBOX_SECONDS_PER_PERIOD` | `0` | confirmed-tier quota re-stamped on confirm (`0` = unlimited) |
 
 ### Downstream
 

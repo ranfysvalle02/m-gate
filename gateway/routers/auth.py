@@ -33,6 +33,8 @@ from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 
 from config.settings import get_settings
+from models.admin import SelfRegisterResponse, UserResponse
+from services import registration as registration_service
 from services.admin_session import mint_bearer_jwt, mint_session
 from services.users import resolve_login_principal
 
@@ -126,6 +128,82 @@ async def issue_token(request: Request) -> JSONResponse:
             "token_type": "bearer",
             "expires_in": expires_in,
         }
+    )
+
+
+async def _read_registration(request: Request) -> tuple[str, str]:
+    """Return ``(email, password)`` from a JSON or form body."""
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("application/json"):
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError:
+            return "", ""
+        if not isinstance(payload, dict):
+            return "", ""
+        email = str(payload.get("email") or payload.get("username") or "")
+        password = str(payload.get("password") or "")
+        return email, password
+    body = (await request.body()).decode("utf-8", "replace")
+    parsed = parse_qs(body, keep_blank_values=True)
+    email = (parsed.get("email") or parsed.get("username") or [""])[0]
+    password = parsed.get("password", [""])[0]
+    return email, password
+
+
+@router.post("/auth/register", name="auth_register")
+async def register(request: Request) -> JSONResponse:
+    """Public self-service sign-up (open beta).
+
+    Creates an instantly-active, tightly-capped ``unconfirmed`` tenant-admin in
+    its own freshly-provisioned tenant and returns a ready-to-use bearer. Disabled
+    by default; returns 404 unless ``SELF_REGISTRATION_ENABLED=true`` so the
+    feature stays dark (and unprobeable) when off. All privilege-bearing fields are
+    pinned server-side in :mod:`services.registration`.
+    """
+    settings = get_settings()
+    if not settings.self_registration_enabled:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Not found."},
+        )
+    email, password = await _read_registration(request)
+    client_ip = request.client.host if request.client else "unknown"
+    try:
+        result = await registration_service.register_self_service_user(
+            email=email,
+            password=password,
+            client_ip=client_ip,
+            settings=settings,
+        )
+    except registration_service.RegistrationDisabled:
+        return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "Not found."})
+    except registration_service.RegistrationValidationError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, content={"detail": str(exc)}
+        )
+    except registration_service.RegistrationThrottled as exc:
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={"detail": str(exc)},
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+    except registration_service.BetaFull as exc:
+        return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": str(exc)})
+    except registration_service.users_service.UserAlreadyExists as exc:
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content={"detail": str(exc)})
+    response = SelfRegisterResponse(
+        user=UserResponse(**result.user),
+        tenant_id=result.tenant_id,
+        confirmation=result.confirmation,
+        auth_mode=result.auth_mode,
+        token=result.token,
+        token_type=result.token_type,
+        expires_in=result.expires_in,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=response.model_dump(mode="json"),
     )
 
 

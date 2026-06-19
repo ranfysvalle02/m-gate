@@ -239,6 +239,52 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = 60
     rate_limit_max_requests: int = 120
 
+    # --- Self-service registration (public beta sign-up) ---------------------
+    # Master switch for the public POST /auth/register endpoint. Off by default so
+    # the gateway never exposes self-service sign-up unless explicitly enabled.
+    # When enabled for a public beta, also set AUTO_PROVISION_TENANTS=false so the
+    # ONLY path that creates a tenant database is an explicit, throttled, capped
+    # registration (a crafted bearer token's tenant_id can no longer auto-provision).
+    self_registration_enabled: bool = False
+    # Hard ceiling on the number of self-registered tenants (one tenant per
+    # registrant). 0 => unlimited. Each tenant is a MongoDB database, so this caps
+    # the Atlas-namespace footprint of an open beta.
+    self_registration_max_tenants: int = 100
+    # Per-IP sign-up throttle: at most ``max_per_ip`` registrations per rolling
+    # ``window_seconds`` from one client IP. Bounds sign-up spam on the one public,
+    # pre-tenant endpoint the tenant-scoped rate limiter cannot meaningfully key on.
+    self_registration_window_seconds: int = 3600
+    self_registration_max_per_ip: int = 5
+    # Minimum password length accepted at sign-up (the endpoint is public, so it
+    # enforces a floor the admin-created user path does not).
+    self_registration_min_password_length: int = 10
+    # Prefix for the auto-generated tenant id minted per registrant. Combined with a
+    # random suffix; never derived from the email so the address never leaks into a
+    # database name.
+    self_registration_tenant_prefix: str = "selfsvc-"
+
+    # --- Account confirmation tiers ------------------------------------------
+    # A self-registered tenant starts ``unconfirmed`` (instantly active but tightly
+    # capped) and a platform-admin promotes it to ``confirmed``. Unset/unknown and
+    # admin-created tenants default to ``confirmed`` (uncapped), so nothing
+    # pre-existing is affected. Caps of 0 mean "unlimited".
+    #
+    # Unconfirmed accounts are confined to the network-isolated code sandbox: they
+    # may only register ``code`` servers (never external HTTP/SSE/stdio endpoints),
+    # so an untrusted sign-up cannot turn the gateway into an SSRF/egress proxy. The
+    # tiny sandbox-seconds quota plus SANDBOX_MAX_GLOBAL_CONCURRENCY bound aggregate
+    # compute. ``*_allowed_transports`` is a comma/space separated set.
+    unconfirmed_max_servers: int = 1
+    unconfirmed_max_tools: int = 1
+    unconfirmed_allowed_transports: str = "code"
+    unconfirmed_quota_calls_per_period: int = 100
+    unconfirmed_quota_sandbox_seconds_per_period: int = 60
+    confirmed_max_servers: int = 0
+    confirmed_max_tools: int = 0
+    confirmed_allowed_transports: str = "streamable_http,sse,stdio,code"
+    confirmed_quota_calls_per_period: int = 0
+    confirmed_quota_sandbox_seconds_per_period: int = 0
+
     hybrid_vector_weight: float = 0.5
     hybrid_text_weight: float = 0.5
     hybrid_num_candidates: int = 100

@@ -55,6 +55,17 @@
           </div>
           <button type="submit" class="btn-primary auth-submit">Sign in</button>
         </form>
+        {% if self_registration_enabled %}
+          <p class="auth-alt">
+            No account yet?
+            <a class="link-btn" href="{{ ui_path }}/register">Create an account</a>
+          </p>
+        {% endif %}
+        <p class="auth-legal">
+          <a href="{{ ui_path }}/terms">Terms of Use</a>
+          &nbsp;·&nbsp;
+          <a href="{{ ui_path }}/privacy">Privacy Policy</a>
+        </p>
       </div>
     </div>
   </body>

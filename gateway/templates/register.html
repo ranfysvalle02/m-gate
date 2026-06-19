@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gateway — Create an account</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css?v={{ asset_version | default('dev') }}" />
+  </head>
+  <body class="theme-dark">
+    <div class="auth-shell theme-dark">
+      <div class="auth-card card">
+        <div class="auth-brand">
+          <div class="brand-chip">
+            <svg class="brand-leaf" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 1.6c1.9 3.4 5.6 6.9 5.6 12.1 0 3.3-2.2 5.7-4.8 6.4l-.5 2.3h-.6l-.5-2.3c-2.6-.7-4.8-3.1-4.8-6.4C6.4 8.5 10.1 5 12 1.6z" />
+            </svg>
+          </div>
+          <div>
+            <div class="brand-kicker">mdb-mcp-gateway</div>
+            <h1 class="brand-title">Create your beta account</h1>
+          </div>
+        </div>
+
+        <p class="auth-lede">
+          Sign up for the open beta. Your account starts
+          <strong>unconfirmed</strong>: code-only tools, capped at 1 server / 1
+          tool with a small quota. A platform admin can confirm you to lift the
+          limits.
+        </p>
+
+        <!-- The sign-up form (hidden once an account is created). -->
+        <div id="register-pane">
+          <div id="register-error" class="error-banner" style="display: none"></div>
+          <form id="register-form" class="auth-form" autocomplete="on">
+            <div>
+              <label class="field-label" for="email">Email</label>
+              <input
+                id="email"
+                name="email"
+                type="email"
+                required
+                class="field-input"
+                placeholder="you@example.com"
+                autocomplete="username"
+              />
+            </div>
+            <div>
+              <label class="field-label" for="password">Password</label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                required
+                minlength="{{ min_password_length }}"
+                class="field-input"
+                autocomplete="new-password"
+              />
+              <p class="field-hint">
+                At least {{ min_password_length }} characters.
+              </p>
+            </div>
+            <div>
+              <label class="field-label" for="confirm">Confirm password</label>
+              <input
+                id="confirm"
+                name="confirm"
+                type="password"
+                required
+                class="field-input"
+                autocomplete="new-password"
+              />
+            </div>
+            <label class="consent-row" for="agree">
+              <input id="agree" name="agree" type="checkbox" class="consent-check" required />
+              <span>
+                I agree to the
+                <a href="{{ ui_path }}/terms" target="_blank" rel="noopener">Terms of Use</a>
+                and
+                <a href="{{ ui_path }}/privacy" target="_blank" rel="noopener">Privacy Policy</a>,
+                and I understand this is a beta service provided "as is".
+              </span>
+            </label>
+            <button id="register-submit" type="submit" class="btn-primary auth-submit">
+              Create account
+            </button>
+          </form>
+          <p class="auth-alt">
+            Already have an account?
+            <a class="link-btn" href="{{ ui_path }}/login">Sign in</a>
+          </p>
+          <p class="auth-legal">
+            <a href="{{ ui_path }}/terms" target="_blank" rel="noopener">Terms of Use</a>
+            &nbsp;·&nbsp;
+            <a href="{{ ui_path }}/privacy" target="_blank" rel="noopener">Privacy Policy</a>
+          </p>
+        </div>
+
+        <!-- Success: token + tenant + ready-to-paste mcp.json (hidden initially). -->
+        <div id="register-success" style="display: none">
+          <div class="success-banner">
+            ✓ Account created. You're in the beta — your account is
+            <strong>unconfirmed</strong> for now.
+          </div>
+          <dl class="auth-facts">
+            <div>
+              <dt>Tenant</dt>
+              <dd><code id="result-tenant"></code></dd>
+            </div>
+            <div>
+              <dt>Tier</dt>
+              <dd><span class="cpill cpill-unconfirmed" id="result-tier">⏳ unconfirmed</span></dd>
+            </div>
+          </dl>
+
+          <div class="code-block">
+            <div class="code-head">
+              <span class="code-cap">~/.cursor/mcp.json</span>
+              <button type="button" class="code-copy" id="copy-mcp">Copy</button>
+            </div>
+            <pre id="result-mcp"></pre>
+          </div>
+          <p class="field-hint">
+            This bearer token is shown once. Paste the snippet into your MCP
+            client, then reload it to see the gateway's tools.
+          </p>
+          <a class="btn-primary auth-submit" href="{{ ui_path }}/login">
+            Continue to sign in
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        var form = document.getElementById("register-form");
+        var errorBox = document.getElementById("register-error");
+        var submitBtn = document.getElementById("register-submit");
+        var minLen = Number("{{ min_password_length }}") || 1;
+
+        function showError(message) {
+          errorBox.textContent = message;
+          errorBox.style.display = "block";
+        }
+
+        function clearError() {
+          errorBox.textContent = "";
+          errorBox.style.display = "none";
+        }
+
+        function mcpSnippet(token) {
+          var url = window.location.origin + "/mcp/";
+          return [
+            "{",
+            '  "mcpServers": {',
+            '    "mdb-mcp-gateway": {',
+            '      "url": "' + url + '",',
+            '      "headers": {',
+            '        "Authorization": "Bearer ' + (token || "") + '"',
+            "      }",
+            "    }",
+            "  }",
+            "}",
+          ].join("\n");
+        }
+
+        function mapError(status, detail) {
+          if (status === 409) {
+            return detail || "That email is already registered. Try signing in.";
+          }
+          if (status === 429) {
+            return (
+              detail ||
+              "Too many sign-ups from your network right now. Please wait and try again."
+            );
+          }
+          if (status === 403) {
+            return detail || "Sign-ups are currently closed.";
+          }
+          if (status === 422) {
+            return detail || "Please check your email and password and try again.";
+          }
+          return detail || "Something went wrong (" + status + "). Please try again.";
+        }
+
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          clearError();
+          var email = document.getElementById("email").value.trim();
+          var password = document.getElementById("password").value;
+          var confirm = document.getElementById("confirm").value;
+          var agreed = document.getElementById("agree").checked;
+          if (!agreed) {
+            showError("Please agree to the Terms of Use and Privacy Policy to continue.");
+            return;
+          }
+          if (password !== confirm) {
+            showError("Passwords don't match.");
+            return;
+          }
+          if (password.length < minLen) {
+            showError("Password must be at least " + minLen + " characters.");
+            return;
+          }
+          submitBtn.disabled = true;
+          submitBtn.textContent = "Creating…";
+          try {
+            var response = await fetch("/auth/register", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              body: JSON.stringify({ email: email, password: password }),
+            });
+            var payload = {};
+            try {
+              payload = await response.json();
+            } catch (_) {
+              payload = {};
+            }
+            if (!response.ok) {
+              showError(mapError(response.status, payload.detail));
+              return;
+            }
+            document.getElementById("result-tenant").textContent =
+              payload.tenant_id || "";
+            document.getElementById("result-mcp").textContent = mcpSnippet(
+              payload.token,
+            );
+            document.getElementById("register-pane").style.display = "none";
+            document.getElementById("register-success").style.display = "block";
+          } catch (err) {
+            showError("Network error. Please try again.");
+          } finally {
+            submitBtn.disabled = false;
+            submitBtn.textContent = "Create account";
+          }
+        });
+
+        document.getElementById("copy-mcp").addEventListener("click", function () {
+          var text = document.getElementById("result-mcp").textContent;
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(text);
+            this.textContent = "Copied";
+            var btn = this;
+            setTimeout(function () {
+              btn.textContent = "Copy";
+            }, 1500);
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

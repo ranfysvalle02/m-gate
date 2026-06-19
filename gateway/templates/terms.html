@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<!--
+  OPERATOR NOTE (not shown to users): This is a customizable template, not legal
+  advice. Before going live, replace every [bracketed] placeholder (legal entity,
+  jurisdiction, contact email) and have counsel review it for your jurisdiction.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Terms of Use — mdb-mcp-gateway</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css?v={{ asset_version | default('dev') }}" />
+  </head>
+  <body class="theme-dark">
+    <div class="legal-shell theme-dark">
+      <article class="legal-doc card">
+        <header class="legal-head">
+          <a class="legal-back link-btn" href="{{ ui_path }}/login">← Back to sign in</a>
+          <div class="auth-brand">
+            <div class="brand-chip">
+              <svg class="brand-leaf" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 1.6c1.9 3.4 5.6 6.9 5.6 12.1 0 3.3-2.2 5.7-4.8 6.4l-.5 2.3h-.6l-.5-2.3c-2.6-.7-4.8-3.1-4.8-6.4C6.4 8.5 10.1 5 12 1.6z" />
+              </svg>
+            </div>
+            <div>
+              <div class="brand-kicker">mdb-mcp-gateway</div>
+              <h1 class="brand-title">Terms of Use</h1>
+            </div>
+          </div>
+          <p class="legal-meta">
+            Effective {{ effective_date }} · Please read these Terms carefully before using the Service.
+          </p>
+        </header>
+
+        <nav class="legal-toc" aria-label="Table of contents">
+          <a href="#acceptance">1. Acceptance</a>
+          <a href="#service">2. The Service</a>
+          <a href="#beta">3. Beta &amp; availability</a>
+          <a href="#accounts">4. Accounts &amp; tiers</a>
+          <a href="#acceptable-use">5. Acceptable use</a>
+          <a href="#content">6. Your content &amp; data</a>
+          <a href="#limits">7. Quotas &amp; fair use</a>
+          <a href="#ip">8. Intellectual property</a>
+          <a href="#third-party">9. Third-party services</a>
+          <a href="#disclaimer">10. Disclaimers</a>
+          <a href="#liability">11. Liability</a>
+          <a href="#indemnity">12. Indemnification</a>
+          <a href="#termination">13. Termination</a>
+          <a href="#changes">14. Changes</a>
+          <a href="#law">15. Governing law</a>
+          <a href="#misc">16. Miscellaneous</a>
+          <a href="#contact">17. Contact</a>
+        </nav>
+
+        <div class="legal-body">
+          <p>
+            These Terms of Use ("<strong>Terms</strong>") are a binding agreement between you
+            ("<strong>you</strong>", "<strong>your</strong>", or "<strong>User</strong>") and
+            <strong>[Legal Entity Name]</strong> ("<strong>we</strong>", "<strong>us</strong>",
+            "<strong>our</strong>", or the "<strong>Provider</strong>"), governing your access to
+            and use of the mdb-mcp-gateway service, including the hosted gateway, admin console,
+            APIs, and related software and documentation (collectively, the "<strong>Service</strong>").
+          </p>
+
+          <h2 id="acceptance">1. Acceptance of these Terms</h2>
+          <p>
+            By creating an account, clicking "I agree", or otherwise accessing or using the
+            Service, you acknowledge that you have read, understood, and agree to be bound by these
+            Terms and by our <a href="{{ ui_path }}/privacy">Privacy Policy</a>, which is
+            incorporated by reference. If you do not agree, you must not access or use the Service.
+            If you use the Service on behalf of an organization, you represent that you are
+            authorized to bind that organization to these Terms.
+          </p>
+
+          <h2 id="service">2. The Service</h2>
+          <p>
+            The Service is a multi-tenant gateway for the Model Context Protocol (MCP). It provides,
+            among other things:
+          </p>
+          <ul>
+            <li>
+              a single authenticated endpoint that aggregates many MCP servers and tools, with
+              per-tenant isolation and role-based access control;
+            </li>
+            <li>
+              semantic and hybrid tool discovery and search powered by MongoDB Atlas (combining
+              full-text, vector, and ranking signals in one query);
+            </li>
+            <li>
+              user-authored "code tools" that execute inside a network-isolated WebAssembly
+              sandbox, with a tenant-scoped database bridge and encrypted per-server secrets;
+            </li>
+            <li>
+              tenant administration, usage metering, quotas, telemetry, and analytics.
+            </li>
+          </ul>
+          <p>
+            The specific features, limits, and behavior of the Service may differ from any
+            description and may change over time. You are responsible for evaluating whether the
+            Service is appropriate for your use case.
+          </p>
+
+          <h2 id="beta">3. Beta nature &amp; availability</h2>
+          <p>
+            The Service is offered as an <strong>open beta</strong> and is provided on an
+            "<strong>as is</strong>" and "<strong>as available</strong>" basis. It may contain bugs,
+            errors, and incomplete features; it may be changed, suspended, rate-limited, or
+            discontinued in whole or in part at any time, with or without notice; and it carries
+            <strong>no service-level agreement, uptime guarantee, or support commitment</strong>. We
+            may impose or change capacity caps, account limits, and beta-program restrictions at our
+            discretion. Do not rely on the Service for production, business-critical, safety-critical,
+            or high-risk activities, and always keep your own backups of any important data.
+          </p>
+
+          <h2 id="accounts">4. Accounts, eligibility &amp; account tiers</h2>
+          <ul>
+            <li>
+              <strong>Eligibility.</strong> You must be at least 18 years old (or the age of majority
+              in your jurisdiction) and not barred from receiving the Service under applicable law
+              (including export-control and sanctions laws).
+            </li>
+            <li>
+              <strong>Registration.</strong> You agree to provide accurate information and to keep
+              your credentials confidential. You are responsible for all activity that occurs under
+              your account and through any tokens you issue.
+            </li>
+            <li>
+              <strong>Account tiers.</strong> Self-service ("self-registered") accounts begin as
+              <strong>"unconfirmed"</strong> and are tightly capped — for example, limited to code
+              tools running in the sandbox, a small number of servers/tools, and small usage quotas,
+              with external (HTTP/SSE/stdio) server registration disabled. We may, at our sole
+              discretion, promote an account to <strong>"confirmed"</strong> (raising limits),
+              decline to do so, or revert it. We are not obligated to confirm any account.
+            </li>
+            <li>
+              <strong>No resale.</strong> You may not resell, sublicense, or provide the Service to
+              third parties except as expressly permitted by us in writing.
+            </li>
+          </ul>
+
+          <h2 id="acceptable-use">5. Acceptable use</h2>
+          <p>You agree not to, and not to permit anyone else to:</p>
+          <ul>
+            <li>use the Service for any unlawful, infringing, fraudulent, deceptive, or harmful purpose;</li>
+            <li>
+              upload, generate, store, or transmit content that is illegal, infringes intellectual
+              property or privacy rights, is defamatory, or contains malware;
+            </li>
+            <li>
+              attempt to probe, scan, circumvent, or defeat the Service's security, isolation, or
+              authentication — including attempts to escape the WebAssembly sandbox, access another
+              tenant's data, exfiltrate credentials, or use the gateway to reach internal,
+              private, or otherwise unauthorized network endpoints (e.g., SSRF or egress abuse);
+            </li>
+            <li>
+              circumvent or interfere with rate limits, quotas, beta caps, or other technical
+              restrictions, or impose an unreasonable or disproportionately large load on our
+              infrastructure (including denial-of-service activity or excessive automated requests);
+            </li>
+            <li>
+              reverse engineer, decompile, or attempt to derive source code except to the extent
+              this restriction is prohibited by applicable law;
+            </li>
+            <li>
+              connect downstream servers or data sources you are not authorized to access, or use
+              the Service to violate the terms of any third-party service;
+            </li>
+            <li>
+              use the Service to develop a competing product by copying its non-public features,
+              or to scrape or harvest data from the Service.
+            </li>
+          </ul>
+          <p>
+            We may investigate suspected violations and may suspend, throttle, or terminate access
+            to protect the Service and other users.
+          </p>
+
+          <h2 id="content">6. Your content &amp; data</h2>
+          <p>
+            "<strong>Your Content</strong>" means the data, code tools, configurations, prompts,
+            queries, and other materials you submit to or create within the Service, including data
+            stored in your tenant database. As between you and us, you retain all rights you have in
+            Your Content. You grant us a worldwide, non-exclusive, royalty-free license to host,
+            store, process, transmit, display, and otherwise use Your Content solely as necessary to
+            operate, secure, maintain, and improve the Service and to comply with law.
+          </p>
+          <p>
+            You represent and warrant that you have all rights necessary to submit Your Content and
+            to connect any data sources or downstream servers, and that Your Content and your use of
+            the Service do not violate any law or third-party right. You are solely responsible for
+            Your Content and for maintaining appropriate backups.
+          </p>
+
+          <h2 id="limits">7. Quotas, limits &amp; fair use</h2>
+          <p>
+            The Service enforces per-tenant rate limits, usage quotas (such as call counts and
+            sandbox execution seconds), and program-wide capacity caps. These limits may change at
+            any time. We may meter usage and may suspend or restrict accounts that exceed limits or
+            that we reasonably believe are abusing the Service.
+          </p>
+
+          <h2 id="ip">8. Intellectual property</h2>
+          <p>
+            The Service, including its software, design, and documentation (excluding Your Content
+            and third-party components under their own licenses), is owned by the Provider and its
+            licensors and is protected by intellectual-property laws. Except for the limited right to
+            use the Service in accordance with these Terms, no rights are granted to you. All
+            trademarks and logos are the property of their respective owners; "MongoDB" and "Atlas"
+            are trademarks of MongoDB, Inc., used here for descriptive purposes only, and this
+            Service is not endorsed by or affiliated with MongoDB, Inc. unless expressly stated.
+          </p>
+
+          <h2 id="third-party">9. Third-party services</h2>
+          <p>
+            The Service may interoperate with third-party components and services that you choose to
+            configure or connect — for example, embedding providers (such as Ollama, OpenAI, Azure
+            OpenAI, Voyage AI, or Google Gemini) and downstream MCP servers. Your use of those
+            third-party services is governed by their terms and privacy policies, and we are not
+            responsible for them. You are responsible for any data you cause the Service to send to
+            them.
+          </p>
+
+          <h2 id="disclaimer">10. Disclaimers</h2>
+          <p class="legal-strong">
+            TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE SERVICE IS PROVIDED "AS IS" AND "AS
+            AVAILABLE", WITHOUT WARRANTIES OF ANY KIND, WHETHER EXPRESS, IMPLIED, OR STATUTORY,
+            INCLUDING IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
+            TITLE, AND NON-INFRINGEMENT. WE DO NOT WARRANT THAT THE SERVICE WILL BE UNINTERRUPTED,
+            SECURE, ERROR-FREE, OR THAT DATA WILL NOT BE LOST. ANY OUTPUT, INCLUDING TOOL RESULTS
+            AND AI- OR EMBEDDING-DERIVED RESULTS, MAY BE INACCURATE; YOU ARE RESPONSIBLE FOR
+            VERIFYING IT BEFORE RELYING ON IT.
+          </p>
+
+          <h2 id="liability">11. Limitation of liability</h2>
+          <p class="legal-strong">
+            TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT WILL THE PROVIDER OR ITS AFFILIATES,
+            OFFICERS, EMPLOYEES, OR LICENSORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL,
+            CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR FOR ANY LOSS OF PROFITS, REVENUE, DATA,
+            GOODWILL, OR BUSINESS, ARISING OUT OF OR RELATED TO THE SERVICE OR THESE TERMS, WHETHER
+            IN CONTRACT, TORT, OR OTHERWISE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. OUR
+            TOTAL AGGREGATE LIABILITY FOR ALL CLAIMS RELATING TO THE SERVICE WILL NOT EXCEED THE
+            GREATER OF (A) THE AMOUNTS YOU PAID US FOR THE SERVICE IN THE THREE (3) MONTHS PRECEDING
+            THE CLAIM, OR (B) ONE HUNDRED U.S. DOLLARS (US$100). BECAUSE THE SERVICE IS PROVIDED FREE
+            OF CHARGE DURING THE BETA, YOU ACKNOWLEDGE THIS CAP MAY BE US$100. SOME JURISDICTIONS DO
+            NOT ALLOW CERTAIN LIMITATIONS, SO SOME OF THE ABOVE MAY NOT APPLY TO YOU.
+          </p>
+
+          <h2 id="indemnity">12. Indemnification</h2>
+          <p>
+            You will defend, indemnify, and hold harmless the Provider and its affiliates from and
+            against any claims, damages, liabilities, costs, and expenses (including reasonable
+            attorneys' fees) arising out of or related to Your Content, your use of the Service, or
+            your violation of these Terms or any law or third-party right.
+          </p>
+
+          <h2 id="termination">13. Suspension &amp; termination</h2>
+          <p>
+            We may suspend, restrict, or terminate your access to the Service, and may remove or
+            disable Your Content, at any time and for any reason, including suspected violation of
+            these Terms or to protect the Service — and, given the beta nature of the Service,
+            with or without notice. You may stop using the Service at any time. Upon termination,
+            your right to use the Service ceases, and we may delete your account and Your Content
+            (subject to our data-retention practices described in the Privacy Policy and to legal
+            obligations). Sections that by their nature should survive termination (including
+            ownership, disclaimers, liability limits, indemnification, and governing law) will
+            survive.
+          </p>
+
+          <h2 id="changes">14. Changes to the Service or these Terms</h2>
+          <p>
+            We may modify the Service or these Terms at any time. If we make material changes to
+            these Terms, we will update the "Effective" date above and, where practicable, provide
+            notice. Your continued use of the Service after changes become effective constitutes
+            acceptance of the revised Terms.
+          </p>
+
+          <h2 id="law">15. Governing law &amp; disputes</h2>
+          <p>
+            These Terms are governed by the laws of <strong>[Your Jurisdiction]</strong>, without
+            regard to its conflict-of-laws rules. You and the Provider agree to the exclusive
+            jurisdiction and venue of the courts located in <strong>[Your Venue]</strong> for any
+            dispute not subject to binding arbitration, and you waive any objection to that venue.
+            To the extent permitted by law, any dispute will be resolved on an individual basis and
+            not as a class action.
+          </p>
+
+          <h2 id="misc">16. Miscellaneous</h2>
+          <ul>
+            <li>
+              <strong>Entire agreement.</strong> These Terms and the Privacy Policy are the entire
+              agreement between you and us regarding the Service and supersede prior agreements.
+            </li>
+            <li>
+              <strong>Severability.</strong> If any provision is held unenforceable, the remaining
+              provisions remain in effect.
+            </li>
+            <li>
+              <strong>No waiver.</strong> Our failure to enforce a provision is not a waiver of it.
+            </li>
+            <li>
+              <strong>Assignment.</strong> You may not assign these Terms without our consent; we may
+              assign them in connection with a merger, acquisition, or sale of assets.
+            </li>
+            <li>
+              <strong>Force majeure.</strong> We are not liable for delays or failures caused by
+              events beyond our reasonable control.
+            </li>
+          </ul>
+
+          <h2 id="contact">17. Contact</h2>
+          <p>
+            Questions about these Terms? Contact us at <strong>[contact@example.com]</strong>.
+          </p>
+        </div>
+
+        <footer class="legal-foot">
+          <a class="link-btn" href="{{ ui_path }}/privacy">Privacy Policy</a>
+          <span aria-hidden="true">·</span>
+          <a class="link-btn" href="{{ ui_path }}/register">Create an account</a>
+          <span aria-hidden="true">·</span>
+          <a class="link-btn" href="{{ ui_path }}/login">Sign in</a>
+        </footer>
+      </article>
+    </div>
+  </body>
+</html>

@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import HTTPException, Query, Request, Response, status
 
 from models.admin import ServerPatchRequest, ServerUpsertRequest
+from services.account_tier import get_tenant_tier_caps
 from services.code_tools import (
     CODE_TRANSPORT,
     CodeToolValidationError,
@@ -38,16 +39,22 @@ from ._common import (
 )
 
 
-async def _enforce_max_tools(tenant_id: str, server_name: str, incoming_tool_count: int) -> None:
-    """Reject a registration that would push the tenant over its max-tools cap.
+async def _check_tool_cap(
+    tenant_id: str,
+    server_name: str,
+    incoming_tool_count: int,
+    cap: int,
+    *,
+    detail: str,
+) -> None:
+    """Reject a registration whose projected tool total exceeds ``cap``.
 
     The cap counts the tenant's catalogued tools across *other* servers plus the
     tools this registration contributes, so re-saving an existing server never
-    counts its own tools twice. ``0`` means unlimited. Best-effort for
+    counts its own tools twice. ``cap <= 0`` means unlimited. Best-effort for
     discovery-based (HTTP) servers whose tools land in the catalog asynchronously;
     authored/code servers (tools known at save time) are enforced exactly.
     """
-    cap = (await get_tool_policy(tenant_id))["max_tools"]
     if cap <= 0:
         return
     catalog = c.get_tenant_database(tenant_id)["tool_catalog"]
@@ -56,12 +63,76 @@ async def _enforce_max_tools(tenant_id: str, server_name: str, incoming_tool_cou
     if projected > cap:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=detail.format(cap=cap, projected=projected),
+        )
+
+
+async def _enforce_max_tools(tenant_id: str, server_name: str, incoming_tool_count: int) -> None:
+    """Enforce the tenant's operator-set max-tools cap (the tool policy)."""
+    cap = (await get_tool_policy(tenant_id))["max_tools"]
+    await _check_tool_cap(
+        tenant_id,
+        server_name,
+        incoming_tool_count,
+        cap,
+        detail=(
+            "Registering this server would exceed the tenant's max-tools cap "
+            "({cap}); projected total is {projected}. Raise the cap in the tenant "
+            "tool policy or remove tools before saving."
+        ),
+    )
+
+
+async def _enforce_account_tier(request: Request, tenant_id: str, doc: dict[str, Any]) -> None:
+    """Enforce the caps implied by the tenant's confirmation tier.
+
+    Platform-admins bypass entirely (they own the toggle). For everyone else —
+    including a self-registered tenant-admin acting in their own tenant — the
+    account's tier caps apply:
+
+    * **Transport allowlist**: an ``unconfirmed`` account may only register the
+      transports in its tier (by default ``code`` only). This is the key abuse
+      gate: registering an external ``streamable_http``/``sse``/``stdio`` server
+      makes the gateway dial that endpoint (an SSRF / egress vector), so it stays
+      locked until a platform-admin confirms the account. ``code`` servers run in
+      the network-isolated wasm sandbox and carry no such risk.
+    * **max_servers / max_tools**: bound the tenant's footprint per tier.
+    """
+    if _is_platform_admin(request):
+        return
+    caps = await get_tenant_tier_caps(tenant_id)
+    transport = str(doc.get("transport") or "")
+    if caps.allowed_transports and transport not in caps.allowed_transports:
+        allowed = ", ".join(sorted(caps.allowed_transports))
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                f"Registering this server would exceed the tenant's max-tools cap "
-                f"({cap}); projected total is {projected}. Raise the cap in the tenant "
-                "tool policy or remove tools before saving."
+                f"This account may only register these transports: {allowed}. "
+                "Registering external servers is unlocked once a platform-admin "
+                "confirms your account."
             ),
         )
+    if caps.max_servers > 0:
+        registry = c.get_tenant_database(tenant_id)["routing_registry"]
+        existing_other = await registry.count_documents({"_id": {"$ne": doc["server"]}})
+        if existing_other + 1 > caps.max_servers:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"This account may register at most {caps.max_servers} server(s). "
+                    "Ask a platform-admin to confirm your account to raise this limit."
+                ),
+            )
+    await _check_tool_cap(
+        tenant_id,
+        doc["server"],
+        len(doc.get("tools") or []),
+        caps.max_tools,
+        detail=(
+            "This account may register at most {cap} tool(s); projected total is "
+            "{projected}. Ask a platform-admin to confirm your account to raise this limit."
+        ),
+    )
 
 
 def _requires_secure_credential_transport(server_doc: dict[str, Any], scheme: str) -> bool:
@@ -279,6 +350,7 @@ async def create_or_update_server(request: Request, payload: ServerUpsertRequest
     await c.provision_tenant(tenant_id, wait_for_queryable_indexes=False)
     doc = _to_server_doc(payload.model_dump(), tenant_id)
     _validate_server_doc(doc)
+    await _enforce_account_tier(request, tenant_id, doc)
     await _enforce_max_tools(tenant_id, doc["server"], len(doc.get("tools") or []))
     doc = await _apply_server_policy(doc, is_platform_admin=_is_platform_admin(request))
     await _validate_server_auth(doc)
@@ -390,6 +462,7 @@ async def patch_server(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only platform-admin may modify platform-origin servers.",
         )
+    await _enforce_account_tier(request, target_tenant, merged)
     await _enforce_max_tools(target_tenant, server_name, len(merged.get("tools") or []))
     merged = await _apply_server_policy(merged, is_platform_admin=is_platform_admin)
     await _validate_server_auth(merged)

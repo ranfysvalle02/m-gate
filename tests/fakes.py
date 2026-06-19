@@ -83,6 +83,104 @@ def _matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
     return True
 
 
+def _date_trunc(value: Any, unit: str, bin_size: int) -> Any:
+    """Truncate a datetime to a unit/binSize boundary (UTC), like ``$dateTrunc``."""
+    if not isinstance(value, datetime):
+        return None
+    bin_size = max(1, int(bin_size or 1))
+    if unit == "minute":
+        floored = (value.minute // bin_size) * bin_size
+        return value.replace(minute=floored, second=0, microsecond=0)
+    if unit == "hour":
+        floored = (value.hour // bin_size) * bin_size
+        return value.replace(hour=floored, minute=0, second=0, microsecond=0)
+    if unit == "day":
+        return value.replace(hour=0, minute=0, second=0, microsecond=0)
+    return value.replace(second=0, microsecond=0)
+
+
+def _eval_expr(doc: dict[str, Any], expr: Any) -> Any:
+    """Evaluate the aggregation-expression subset the analytics pipelines use."""
+    if isinstance(expr, str):
+        if expr.startswith("$"):
+            return _resolve_path(doc, expr[1:])
+        return expr
+    if isinstance(expr, dict):
+        if "$dateTrunc" in expr:
+            spec = expr["$dateTrunc"]
+            return _date_trunc(
+                _eval_expr(doc, spec.get("date")),
+                str(spec.get("unit", "hour")),
+                int(spec.get("binSize", 1) or 1),
+            )
+        if "$ifNull" in expr:
+            primary, fallback = expr["$ifNull"]
+            resolved = _eval_expr(doc, primary)
+            return resolved if resolved is not None else _eval_expr(doc, fallback)
+        if "$cond" in expr:
+            branches = expr["$cond"]
+            if isinstance(branches, list):
+                condition, then_expr, else_expr = branches
+            else:
+                condition = branches["if"]
+                then_expr = branches["then"]
+                else_expr = branches["else"]
+            return (
+                _eval_expr(doc, then_expr)
+                if _truthy(_eval_expr(doc, condition))
+                else _eval_expr(doc, else_expr)
+            )
+        if "$regexMatch" in expr:
+            spec = expr["$regexMatch"]
+            text = _eval_expr(doc, spec.get("input"))
+            if not isinstance(text, str):
+                return False
+            flags = re.IGNORECASE if "i" in str(spec.get("options", "")) else 0
+            return re.search(str(spec.get("regex", "")), text, flags) is not None
+        # Otherwise treat as a composite group-key mapping: evaluate each value.
+        return {key: _eval_expr(doc, value) for key, value in expr.items()}
+    return expr
+
+
+def _truthy(value: Any) -> bool:
+    """MongoDB falsiness: false, null, 0, and missing are false; all else true."""
+    return value not in (False, None, 0, 0.0)
+
+
+def _hashable(value: Any) -> Any:
+    """Map a group-key value to something usable as a dict key."""
+    if isinstance(value, dict):
+        return tuple(sorted((k, _hashable(v)) for k, v in value.items()))
+    if isinstance(value, list):
+        return tuple(_hashable(v) for v in value)
+    return value
+
+
+def _reduce_accumulator(op: str, values: list[Any], operand: Any) -> Any:
+    numeric = [v for v in values if isinstance(v, int | float) and not isinstance(v, bool)]
+    if op == "$sum":
+        return sum(numeric)
+    if op == "$avg":
+        return sum(numeric) / len(numeric) if numeric else None
+    if op == "$min":
+        return min(values) if values else None
+    if op == "$max":
+        return max(values) if values else None
+    if op == "$push":
+        return list(values)
+    if op == "$percentile":
+        if not numeric:
+            return [None for _ in (operand.get("p", []) if isinstance(operand, dict) else [])]
+        ordered = sorted(numeric)
+        ps = operand.get("p", []) if isinstance(operand, dict) else []
+        result = []
+        for p in ps:
+            rank = max(0, min(len(ordered) - 1, int(round(float(p) * (len(ordered) - 1)))))
+            result.append(ordered[rank])
+        return result
+    return None
+
+
 class _FakeCursor:
     def __init__(self, docs: list[dict[str, Any]]) -> None:
         self._docs = docs
@@ -317,9 +415,14 @@ class FakeCollection:
         for stage in pipeline:
             if "$match" in stage:
                 docs = [d for d in docs if _matches(d, stage["$match"])]
+            elif "$group" in stage:
+                docs = self._emulate_group(docs, stage["$group"])
             elif "$sort" in stage:
                 for field, direction in reversed(list(stage["$sort"].items())):
-                    docs.sort(key=lambda d: d.get(field), reverse=direction < 0)
+                    docs.sort(
+                        key=lambda d, f=field: (d.get(f) is None, d.get(f)),
+                        reverse=direction < 0,
+                    )
             elif "$skip" in stage:
                 docs = docs[stage["$skip"] :]
             elif "$limit" in stage:
@@ -328,6 +431,55 @@ class FakeCollection:
                 fields = [k for k, v in stage["$project"].items() if v and k != "_id"]
                 docs = [{k: d.get(k) for k in fields if k in d} for d in docs]
         return docs
+
+    def _emulate_group(
+        self, docs: list[dict[str, Any]], spec: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Emulate a ``$group`` stage for the accumulators the gateway uses.
+
+        Supports ``_id`` as null, a field path (``"$period"``), a composite mapping
+        (``{"server": "$metadata.server"}``), or a ``$dateTrunc`` expression, and
+        the ``$sum`` / ``$avg`` / ``$min`` / ``$max`` / ``$push`` / ``$percentile``
+        accumulators (whose inputs may themselves be ``$cond`` / ``$regexMatch`` /
+        ``$ifNull`` expressions). Enough to make the analytics aggregations compute
+        real results in-process; not a general MongoDB engine.
+        """
+        id_expr = spec.get("_id")
+        accumulators = {k: v for k, v in spec.items() if k != "_id"}
+        # Insertion-ordered buckets keyed by a hashable form of the group key.
+        buckets: dict[Any, dict[str, Any]] = {}
+        for doc in docs:
+            key_value = _eval_expr(doc, id_expr)
+            key_hash = _hashable(key_value)
+            bucket = buckets.get(key_hash)
+            if bucket is None:
+                bucket = {"_key": key_value, "_acc": {field: [] for field in accumulators}}
+                buckets[key_hash] = bucket
+            for field, acc_spec in accumulators.items():
+                op, operand = next(iter(acc_spec.items()))
+                if op == "$sum":
+                    value = _eval_expr(doc, operand)
+                    if isinstance(value, bool):
+                        value = int(value)
+                    if isinstance(value, int | float):
+                        bucket["_acc"][field].append(float(value))
+                elif op in ("$avg", "$min", "$max", "$push"):
+                    bucket["_acc"][field].append(_eval_expr(doc, operand))
+                elif op == "$percentile":
+                    value = _eval_expr(doc, operand.get("input"))
+                    if isinstance(value, int | float):
+                        bucket["_acc"][field].append(float(value))
+                # Unknown accumulators collapse to None below.
+
+        results: list[dict[str, Any]] = []
+        for bucket in buckets.values():
+            row: dict[str, Any] = {"_id": bucket["_key"]}
+            for field, acc_spec in accumulators.items():
+                op, operand = next(iter(acc_spec.items()))
+                values = bucket["_acc"][field]
+                row[field] = _reduce_accumulator(op, values, operand)
+            results.append(row)
+        return results
 
     @staticmethod
     def _apply_update(doc: dict[str, Any], update: dict[str, Any]) -> None:

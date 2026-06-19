@@ -199,7 +199,11 @@ async def admin_stats(request: Request) -> StatsResponse:
     roles = set(getattr(request.state, "roles", []))
     is_platform_admin = settings.platform_admin_role in roles
     if is_platform_admin:
-        tenant_docs = await c.get_control_database()["tenants"].find({}).to_list(length=10_000)
+        tenant_docs = (
+            await c.get_control_database()["tenants"]
+            .find({}, {"tenant_id": 1})
+            .to_list(length=10_000)
+        )
         tenant_ids = sorted(
             {
                 str(doc.get("tenant_id"))
@@ -216,20 +220,29 @@ async def admin_stats(request: Request) -> StatsResponse:
     status_counts: dict[str, int] = {}
     for tenant_id in tenant_ids:
         tenant_db = c.get_tenant_database(tenant_id)
-        server_docs = await tenant_db["routing_registry"].find({}).to_list(length=10_000)
-        tool_docs = await tenant_db["tool_catalog"].find({}).to_list(length=10_000)
-        telemetry_docs = await tenant_db["audit_telemetry"].find({}).to_list(length=10_000)
-        for doc in telemetry_docs:
-            status = str(doc.get("status", "unknown"))
-            status_counts[status] = status_counts.get(status, 0) + 1
+        # Counts and a status rollup, computed server-side: no collection (and in
+        # particular not the unbounded audit_telemetry time-series) is loaded into
+        # the gateway. "enabled" defaults to true, so a missing flag counts as
+        # enabled via {"$ne": False}.
+        server_count = await tenant_db["routing_registry"].count_documents({})
+        enabled_server_count = await tenant_db["routing_registry"].count_documents(
+            {"enabled": {"$ne": False}}
+        )
+        tool_count = await tenant_db["tool_catalog"].count_documents({})
+        status_cursor = await tenant_db["audit_telemetry"].aggregate(
+            [{"$group": {"_id": "$status", "count": {"$sum": 1}}}]
+        )
+        for row in await status_cursor.to_list(length=10_000):
+            status_key = str(row.get("_id") or "unknown")
+            status_counts[status_key] = status_counts.get(status_key, 0) + int(
+                row.get("count", 0) or 0
+            )
         tenant_rows.append(
             TenantStats(
                 tenant_id=tenant_id,
-                server_count=len(server_docs),
-                enabled_server_count=sum(
-                    1 for doc in server_docs if bool(doc.get("enabled", True))
-                ),
-                tool_count=len(tool_docs),
+                server_count=int(server_count),
+                enabled_server_count=int(enabled_server_count),
+                tool_count=int(tool_count),
             )
         )
     tenant_rows.sort(key=lambda row: row.tenant_id)

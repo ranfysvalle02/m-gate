@@ -46,6 +46,13 @@ from .actions import (
     list_actions,
     reject_pending_action,
 )
+from .analytics import (
+    analytics_overview,
+    analytics_quota_utilization,
+    analytics_telemetry_trend,
+    analytics_top_tools,
+    analytics_usage_trend,
+)
 from .catalog import (
     admin_search,
     admin_stats,
@@ -79,6 +86,7 @@ from .servers import (
     patch_server,
 )
 from .tenants import (
+    confirm_tenant,
     create_tenant,
     delete_tenant,
     export_tenant_usage,
@@ -96,6 +104,7 @@ from .tenants import (
     restore_tenant,
     resume_tenant,
     suspend_tenant,
+    unconfirm_tenant,
     update_tenant_quota,
 )
 from .tools import disable_tool, enable_tool
@@ -123,6 +132,8 @@ __all__ = [
     "restore_tenant",
     "suspend_tenant",
     "resume_tenant",
+    "confirm_tenant",
+    "unconfirm_tenant",
     "make_tenant_read_only",
     "make_tenant_read_write",
     "get_tenant_tool_policy",
@@ -178,6 +189,12 @@ __all__ = [
     "list_actions",
     "approve_pending_action",
     "reject_pending_action",
+    # analytics
+    "analytics_overview",
+    "analytics_usage_trend",
+    "analytics_top_tools",
+    "analytics_telemetry_trend",
+    "analytics_quota_utilization",
     # catalog
     "list_catalog",
     "list_telemetry",

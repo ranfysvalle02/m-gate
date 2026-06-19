@@ -293,7 +293,11 @@ class AuthMiddleware:
 
     def _is_auth_public_path(self, path: str) -> bool:
         """Inbound auth endpoints must be reachable without an existing token."""
-        return path in {"/auth/token", "/.well-known/oauth-protected-resource"}
+        return path in {
+            "/auth/token",
+            "/auth/register",
+            "/.well-known/oauth-protected-resource",
+        }
 
     @staticmethod
     def _session_roles(claims: dict[str, Any]) -> list[str]:

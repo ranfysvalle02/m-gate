@@ -22,6 +22,7 @@ from models.admin import (
     WhoAmIResponse,
 )
 from services import users as users_service
+from services.account_tier import get_tenant_confirmation
 from services.admin_session import mint_bearer_jwt, mint_session
 from services.passwords import verify_password
 from services.tenant_status import get_tenant_read_only
@@ -67,6 +68,7 @@ async def who_am_i(request: Request) -> WhoAmIResponse:
         # tells even a full admin that tenant-scoped writes are frozen.
         is_read_only=bool(getattr(request.state, "is_read_only_principal", False)),
         tenant_read_only=await get_tenant_read_only(tenant_id),
+        confirmation=await get_tenant_confirmation(tenant_id),
         auth_mode=settings.auth_mode,
     )
 

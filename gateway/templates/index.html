@@ -131,6 +131,87 @@
       ></div>
     </div>
   </div>
+
+  <!-- ===================== Analytics (Chart.js) ======================= -->
+  <div class="grid gap-4 md:grid-cols-2">
+    <div class="card chart-card">
+      <div class="card-label">Calls this period</div>
+      <div
+        class="card-value metric-flow"
+        x-text="Math.round(state.displayMetrics.calls).toLocaleString()"
+      ></div>
+      <div class="chart-box-sm"><canvas id="spark-calls"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Sandbox seconds this period</div>
+      <div
+        class="card-value metric-flow"
+        x-text="Math.round(state.displayMetrics.sandbox).toLocaleString()"
+      ></div>
+      <div
+        class="text-xs text-slate-500 mt-2"
+        x-text="`Scope: ${state.analytics.overview?.scope || '—'} · ${state.analytics.overview?.period || ''}`"
+      ></div>
+    </div>
+  </div>
+
+  <!-- Beta / confirmation KPIs: platform-admin only (cross-tenant counters). -->
+  <div class="grid gap-4 md:grid-cols-2" x-show="isPlatformAdmin()">
+    <div class="card">
+      <div class="card-label">Awaiting confirmation</div>
+      <div class="card-value" x-text="awaitingConfirmationCount()"></div>
+      <div class="text-xs text-slate-500 mt-1">
+        Unconfirmed tenants in the beta queue
+      </div>
+      <button
+        type="button"
+        class="link-btn mt-1"
+        @click="state.tenantFilter = 'unconfirmed'; switchSection('tenants')"
+      >
+        Review queue →
+      </button>
+    </div>
+    <div class="card">
+      <div class="card-label">Beta headroom</div>
+      <div
+        class="card-value"
+        x-text="`${betaHeadroom().used} / ${betaHeadroom().max || '∞'}`"
+      ></div>
+      <div class="meter mt-2" x-show="betaHeadroom().pct !== null">
+        <div
+          class="meter-fill"
+          :class="betaHeadroom().pct >= 80 ? 'meter-fill-hot' : ''"
+          :style="`width:${betaHeadroom().pct || 0}%`"
+        ></div>
+      </div>
+      <div
+        class="text-xs text-slate-500 mt-1"
+        x-text="betaHeadroom().remaining === null ? 'Self-registration cap unset' : `${betaHeadroom().remaining} sign-up slot(s) remaining`"
+      ></div>
+    </div>
+  </div>
+
+  <div class="card chart-card">
+    <div class="card-label">Usage trend · last 6 months</div>
+    <div class="chart-box"><canvas id="chart-usage-trend"></canvas></div>
+  </div>
+
+  <div class="grid gap-4 md:grid-cols-2">
+    <div class="card chart-card">
+      <div class="card-label">Top tools</div>
+      <div class="chart-box"><canvas id="chart-top-tools"></canvas></div>
+    </div>
+    <div class="card chart-card">
+      <div class="card-label">Top servers</div>
+      <div class="chart-box"><canvas id="chart-top-servers"></canvas></div>
+    </div>
+  </div>
+
+  <div class="card chart-card" x-show="isPlatformAdmin()">
+    <div class="card-label">Quota utilization · calls used %</div>
+    <div class="chart-box"><canvas id="chart-quota"></canvas></div>
+  </div>
+
   <div class="card">
     <div class="card-label">Onboarding Checklist</div>
     <div class="mt-2 flex items-center justify-between gap-2 text-sm">
@@ -194,6 +275,25 @@
       Refresh
     </button>
   </form>
+  <div class="flex items-center gap-3 text-sm">
+    <span class="text-slate-500">Filter:</span>
+    <button
+      type="button"
+      class="link-btn"
+      :class="state.tenantFilter === 'all' ? 'font-semibold underline' : ''"
+      @click="state.tenantFilter = 'all'"
+    >
+      All (<span x-text="(state.tenants || []).length"></span>)
+    </button>
+    <button
+      type="button"
+      class="link-btn"
+      :class="state.tenantFilter === 'unconfirmed' ? 'font-semibold underline' : ''"
+      @click="state.tenantFilter = 'unconfirmed'"
+    >
+      Unconfirmed queue (<span x-text="unconfirmedTenantCount()"></span>)
+    </button>
+  </div>
   <div class="table-wrap">
     <table class="table">
       <thead>
@@ -201,19 +301,23 @@
           <th>Tenant</th>
           <th>DB Name</th>
           <th>Status</th>
+          <th>Tier</th>
           <th>Created</th>
           <th>Actions</th>
         </tr>
       </thead>
       <tbody>
-        <template x-if="!state.tenants || state.tenants.length === 0">
+        <template x-if="filteredTenants().length === 0">
           <tr>
-            <td class="empty-cell" colspan="5">
-              <span class="empty-emoji">🏢</span>No tenants yet
+            <td class="empty-cell" colspan="6">
+              <span class="empty-emoji">🏢</span>
+              <span
+                x-text="state.tenantFilter === 'unconfirmed' ? 'No tenants awaiting confirmation' : 'No tenants yet'"
+              ></span>
             </td>
           </tr>
         </template>
-        <template x-for="tenant in state.tenants" :key="tenant.tenant_id">
+        <template x-for="tenant in filteredTenants()" :key="tenant.tenant_id">
           <tr>
             <td x-text="tenant.tenant_id"></td>
             <td x-text="tenant.db_name"></td>
@@ -233,8 +337,32 @@
                 title="Read-only: discoverable, but tool calls and config changes are blocked"
               >🔒 read-only</span>
             </td>
+            <td>
+              <span
+                class="cpill"
+                :class="isUnconfirmed(tenant) ? 'cpill-unconfirmed' : 'cpill-confirmed'"
+                x-text="isUnconfirmed(tenant) ? '⏳ unconfirmed' : '✓ confirmed'"
+                :title="isUnconfirmed(tenant) ? 'Self-service beta account: code-only, 1 server / 1 tool, small quota' : 'Confirmed: full (uncapped) access'"
+              ></span>
+            </td>
             <td x-text="formatDate(tenant.created_at)"></td>
             <td class="space-x-2">
+              <button
+                type="button"
+                class="link-btn"
+                x-show="state.whoami?.is_platform_admin && isUnconfirmed(tenant)"
+                @click="confirmTenant(tenant)"
+              >
+                Confirm
+              </button>
+              <button
+                type="button"
+                class="link-btn text-amber-600"
+                x-show="state.whoami?.is_platform_admin && !isUnconfirmed(tenant)"
+                @click="unconfirmTenant(tenant)"
+              >
+                Unconfirm
+              </button>
               <button
                 type="button"
                 class="link-btn"
@@ -815,7 +943,14 @@
         </template>
         <template x-for="user in state.users" :key="user.id">
           <tr>
-            <td x-text="user.email"></td>
+            <td>
+              <span x-text="user.email"></span>
+              <span
+                x-show="user.self_registered"
+                class="badge badge-selfreg"
+                title="Self-registered through the public beta sign-up"
+              >self-registered</span>
+            </td>
             <td x-text="user.tenant_id"></td>
             <td x-text="personaLabel(user)"></td>
             <td x-text="(user.scopes || []).join(', ') || '-'"></td>
@@ -2110,6 +2245,18 @@
     </button>
   </div>
 
+  <!-- ===================== Telemetry trend charts (24h) =============== -->
+  <div class="grid gap-4 md:grid-cols-2">
+    <div class="card chart-card">
+      <div class="card-label">Requests vs errors · last 24h</div>
+      <div class="chart-box"><canvas id="chart-telemetry-volume"></canvas></div>
+    </div>
+    <div class="card chart-card">
+      <div class="card-label">Latency (avg / p95) · last 24h</div>
+      <div class="chart-box"><canvas id="chart-telemetry-latency"></canvas></div>
+    </div>
+  </div>
+
   <div class="grid gap-4 md:grid-cols-4">
     <div class="card">
       <div class="card-label">Events</div>
@@ -2178,72 +2325,149 @@
 </section>
 
 <section
-  x-show="activeSection === 'search'"
+  x-show="activeSection === 'usage'"
   class="space-y-4"
   x-transition:enter="view-active"
   x-transition:enter-start="view-from"
   x-transition:enter-end="view-to"
 >
-  <h2 class="text-2xl font-semibold">Search Playground</h2>
-  <form class="grid gap-3 md:grid-cols-4" @submit.prevent="runSearch()">
-    <div class="md:col-span-2">
-      <label class="field-label">Query</label
-      ><input class="field-input" x-model="forms.search.query" required />
-    </div>
+  <div class="flex items-center justify-between gap-2 flex-wrap">
     <div>
-      <label class="field-label">Mode</label
-      ><select class="field-input" x-model="forms.search.mode">
-        <option>hybrid</option>
-        <option>vector</option>
-        <option>text</option>
-      </select>
+      <h2 class="text-2xl font-semibold">Usage &amp; Quota</h2>
+      <p class="text-sm text-slate-500">
+        Current-period consumption vs quota for
+        <span class="font-medium" x-text="state.tenantId"></span>, plus the raw
+        billing events.
+      </p>
     </div>
-    <div>
-      <label class="field-label">Limit</label
-      ><input
-        type="number"
-        min="1"
-        max="50"
-        class="field-input"
-        x-model.number="forms.search.limit"
-      />
+    <div class="flex items-center gap-2">
+      <a class="btn-secondary" :href="usageExportUrl()" download>
+        ⬇ Export events (CSV)
+      </a>
+      <button type="button" class="btn-secondary" @click="loadUsageView()">
+        Refresh
+      </button>
     </div>
-    <div>
-      <button type="submit" class="btn-primary mt-6">Run Search</button>
+  </div>
+
+  <div class="grid gap-4 md:grid-cols-2">
+    <div class="card">
+      <div class="card-label">Calls</div>
+      <div
+        class="card-value"
+        x-text="`${Number(state.usage?.usage?.calls || 0).toLocaleString()} / ${Number(state.usage?.quota?.calls_limit || 0) === 0 ? '∞' : Number(state.usage?.quota?.calls_limit).toLocaleString()}`"
+      ></div>
+      <div
+        class="meter mt-2"
+        x-show="usagePct(state.usage?.usage?.calls, state.usage?.quota?.calls_limit) !== null"
+      >
+        <div
+          class="meter-fill"
+          :class="(usagePct(state.usage?.usage?.calls, state.usage?.quota?.calls_limit) || 0) >= 80 ? 'meter-fill-hot' : ''"
+          :style="`width:${usagePct(state.usage?.usage?.calls, state.usage?.quota?.calls_limit) || 0}%`"
+        ></div>
+      </div>
     </div>
-  </form>
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Server</th>
-          <th>Tool</th>
-          <th>Score</th>
-        </tr>
-      </thead>
-      <tbody>
-        <template
-          x-if="!state.searchResults || state.searchResults.length === 0"
-        >
+    <div class="card">
+      <div class="card-label">Sandbox seconds</div>
+      <div
+        class="card-value"
+        x-text="`${Math.round(Number(state.usage?.usage?.sandbox_ms || 0) / 1000).toLocaleString()} / ${Number(state.usage?.quota?.sandbox_seconds_limit || 0) === 0 ? '∞' : Number(state.usage?.quota?.sandbox_seconds_limit).toLocaleString()}`"
+      ></div>
+      <div
+        class="meter mt-2"
+        x-show="usagePct(Number(state.usage?.usage?.sandbox_ms || 0) / 1000, state.usage?.quota?.sandbox_seconds_limit) !== null"
+      >
+        <div
+          class="meter-fill"
+          :class="(usagePct(Number(state.usage?.usage?.sandbox_ms || 0) / 1000, state.usage?.quota?.sandbox_seconds_limit) || 0) >= 80 ? 'meter-fill-hot' : ''"
+          :style="`width:${usagePct(Number(state.usage?.usage?.sandbox_ms || 0) / 1000, state.usage?.quota?.sandbox_seconds_limit) || 0}%`"
+        ></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quota editing is platform-admin only (PUT /admin/tenants/{id}/quota). -->
+  <div class="card" x-show="state.whoami?.is_platform_admin">
+    <div class="card-label">Edit quota</div>
+    <form
+      class="grid gap-3 md:grid-cols-3 mt-2"
+      @submit.prevent="saveQuota()"
+    >
+      <div>
+        <label class="field-label">Calls limit (0 = unlimited)</label>
+        <input
+          type="number"
+          min="0"
+          class="field-input"
+          x-model.number="state.quotaForm.calls_limit"
+        />
+      </div>
+      <div>
+        <label class="field-label">Sandbox seconds limit (0 = unlimited)</label>
+        <input
+          type="number"
+          min="0"
+          class="field-input"
+          x-model.number="state.quotaForm.sandbox_seconds_limit"
+        />
+      </div>
+      <div class="flex items-end">
+        <button
+          type="submit"
+          class="btn-primary"
+          :disabled="state.quotaSaving"
+          x-text="state.quotaSaving ? 'Saving…' : 'Save quota'"
+        ></button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="flex items-center justify-between">
+      <div class="card-label">Recent billing events</div>
+      <div
+        class="text-xs text-slate-500"
+        x-text="`${Number(state.usageEvents?.total_amount || 0).toLocaleString()} total units`"
+      ></div>
+    </div>
+    <div class="table-wrap mt-2">
+      <table class="table">
+        <thead>
           <tr>
-            <td class="empty-cell" colspan="3">
-              <span class="empty-emoji">🔎</span>Run a search to see matching
-              tools
-            </td>
+            <th>Time</th>
+            <th>Kind</th>
+            <th>Amount</th>
+            <th>Server / tool</th>
           </tr>
-        </template>
-        <template
-          x-for="item in state.searchResults"
-          :key="`${item.server}:${item.name}`"
-        >
-          <tr>
-            <td x-text="item.server"></td>
-            <td x-text="item.name"></td>
-            <td x-text="item.score ?? '-'"></td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          <template
+            x-if="!state.usageEvents?.events || state.usageEvents.events.length === 0"
+          >
+            <tr>
+              <td class="empty-cell" colspan="4">
+                <span class="empty-emoji">📒</span>No billing events this period
+              </td>
+            </tr>
+          </template>
+          <template
+            x-for="(ev, idx) in (state.usageEvents?.events || [])"
+            :key="`${ev.ts}-${idx}`"
+          >
+            <tr>
+              <td x-text="formatDate(ev.ts)"></td>
+              <td><code x-text="ev.kind"></code></td>
+              <td x-text="Number(ev.amount || 0).toLocaleString()"></td>
+              <td
+                class="text-xs text-slate-500"
+                x-text="ev.metadata && (ev.metadata.server || ev.metadata.tool) ? `${ev.metadata.server || '—'} / ${ev.metadata.tool || '—'}` : '—'"
+              ></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
   </div>
 </section>
 

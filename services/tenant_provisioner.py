@@ -142,6 +142,15 @@ async def ensure_control_plane_indexes() -> None:
     # it must resolve to exactly one account globally.
     await control_db["users"].create_index("email", unique=True)
     await control_db["users"].create_index("tenant_id")
+    # Backs the self-registration beta cap count ({"self_registered": True}).
+    await control_db["users"].create_index("self_registered")
+    # Per-IP sign-up throttle buckets: a unique (client_ip, window) key and a TTL on
+    # expires_at so used buckets are reaped automatically.
+    await control_db["registration_attempts"].create_index("expires_at", expireAfterSeconds=0)
+    await control_db["registration_attempts"].create_index(
+        [("client_ip", 1), ("window_epoch", 1)],
+        unique=True,
+    )
     await _ensure_watcher_state_ttl_index(
         control_db=control_db,
         ttl_seconds=settings.watcher_resume_ttl_seconds,
@@ -155,6 +164,9 @@ async def ensure_control_plane_indexes() -> None:
     )
     await control_db["usage_counters"].create_index([("tenant_id", 1), ("period", 1)], unique=True)
     await control_db["usage_events"].create_index([("tenant_id", 1), ("ts", -1)])
+    # Backs the analytics top-tools/top-servers rollup, which $matches a single
+    # (tenant_id, period) then $groups by metadata.server/tool.
+    await control_db["usage_events"].create_index([("tenant_id", 1), ("period", 1)])
     await control_db["guardrail_signatures"].create_index("category")
     _model_id, dimensions, embedding_version = active_embedding_identity()
     guardrail_index_spec = guardrail_signature_index_spec(

@@ -23,6 +23,10 @@ class TenantResponse(BaseModel):
     # discoverable) but every mutation (tools/call + tenant-side config) is refused.
     read_only: bool = False
     read_only_reason: str | None = None
+    # Account confirmation tier: "unconfirmed" (a fresh self-service sign-up, tightly
+    # capped) or "confirmed" (promoted by a platform-admin / the default for
+    # admin-created tenants).
+    confirmation: str = "confirmed"
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -220,6 +224,8 @@ class UserResponse(BaseModel):
     roles: list[str] = Field(default_factory=list)
     scopes: list[str] = Field(default_factory=list)
     status: str = "active"
+    # True for accounts minted by the public self-service sign-up flow.
+    self_registered: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
     created_by: str | None = None
@@ -280,6 +286,26 @@ class DemoScopesResponse(BaseModel):
     tenant_id: str
     roles: list[str] = Field(default_factory=list)
     scopes: list[str] = Field(default_factory=list)
+
+
+class SelfRegisterRequest(BaseModel):
+    # The public sign-up surface accepts only an email + password; roles, scopes,
+    # tenant, and confirmation tier are pinned server-side (services/registration.py).
+    email: str
+    password: str
+
+
+class SelfRegisterResponse(BaseModel):
+    user: UserResponse
+    tenant_id: str
+    # Always "unconfirmed" for a fresh sign-up; surfaced so the client can show the
+    # account's tier and the caps it implies.
+    confirmation: str
+    auth_mode: str
+    # A ready-to-use credential for the new account, returned once at sign-up.
+    token: str
+    token_type: str = "bearer"
+    expires_in: int
 
 
 class EgressAllowlistUpdateRequest(BaseModel):
@@ -389,6 +415,9 @@ class WhoAmIResponse(BaseModel):
     # True when the caller's tenant itself is read-only (so even a full admin sees
     # tenant-scoped mutations refused, while platform-admin can still toggle it off).
     tenant_read_only: bool = False
+    # The caller tenant's confirmation tier ("unconfirmed" => capped self-service
+    # account; "confirmed" => promoted/normal). Lets the console show the tier.
+    confirmation: str = "confirmed"
     auth_mode: Literal["hs256", "jwks"]
 
 
@@ -520,3 +549,81 @@ class EmbeddingTestResponse(BaseModel):
     dimensions: int | None = None
     embedding_version: str | None = None
     message: str
+
+
+# --------------------------------------------------------------------------- #
+#  Admin analytics (gateway/routers/admin/analytics.py)                        #
+# --------------------------------------------------------------------------- #
+class AnalyticsOverviewResponse(BaseModel):
+    """Headline numbers for the dashboard.
+
+    ``scope`` is ``"platform"`` for a platform-admin (cross-tenant rollup) or
+    ``"tenant"`` for a tenant-admin (their tenant only). Beta-headroom fields are
+    populated only for the platform scope (they are global counters).
+    """
+
+    scope: Literal["platform", "tenant"]
+    period: str
+    tenant_count: int
+    calls: int = 0
+    sandbox_ms: int = 0
+    confirmed_count: int | None = None
+    unconfirmed_count: int | None = None
+    self_registered_count: int | None = None
+    self_registration_max_tenants: int | None = None
+
+
+class UsageTrendPoint(BaseModel):
+    period: str
+    calls: int = 0
+    sandbox_ms: int = 0
+
+
+class UsageTrendResponse(BaseModel):
+    scope: Literal["platform", "tenant"]
+    points: list[UsageTrendPoint] = Field(default_factory=list)
+
+
+class TopToolEntry(BaseModel):
+    server: str
+    # None for the "top servers" rollup, which groups by server only.
+    tool: str | None = None
+    calls: int = 0
+
+
+class TopToolsResponse(BaseModel):
+    scope: Literal["platform", "tenant"]
+    period: str
+    tools: list[TopToolEntry] = Field(default_factory=list)
+    servers: list[TopToolEntry] = Field(default_factory=list)
+
+
+class TelemetryTrendPoint(BaseModel):
+    bucket: datetime
+    total: int = 0
+    errors: int = 0
+    latency_avg_ms: float | None = None
+    latency_p95_ms: float | None = None
+
+
+class TelemetryTrendResponse(BaseModel):
+    scope: Literal["platform", "tenant"]
+    points: list[TelemetryTrendPoint] = Field(default_factory=list)
+
+
+class QuotaUtilizationEntry(BaseModel):
+    tenant_id: str
+    period: str
+    calls: int = 0
+    calls_limit: int = 0
+    sandbox_ms: int = 0
+    sandbox_seconds_limit: int = 0
+    # 0-100, or None when the corresponding limit is 0 (unlimited).
+    calls_utilization_pct: float | None = None
+    sandbox_utilization_pct: float | None = None
+
+
+class QuotaUtilizationResponse(BaseModel):
+    scope: Literal["platform", "tenant"]
+    period: str
+    tenants: list[QuotaUtilizationEntry] = Field(default_factory=list)
