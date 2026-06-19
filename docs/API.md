@@ -188,27 +188,34 @@ require the `platform-admin` role.
   refused for tenant-admins when the tenant is **read-only** (platform-admin
   bypasses); token minting and self-service password change stay available.
   - `POST /admin/users` — create a user (`email`, `password`, optional `tenant_id`,
-    `roles`, `scopes`, `status`). Only `platform-admin` may grant the `platform-admin`
-    role or target another tenant.
-  - `POST /admin/users/demo` — one-click: create a ready-to-use, tool-invoking demo
-    account. Optional body `{"email"?, "tenant_id"?}`; both are auto-resolved when
-    omitted (a unique `demo-<rand>@demo.local` is generated). Grants `user` +
-    `tool:invoke` plus **catalog-derived scopes** (`server:*` and every distinct tool
-    scope in the tenant) so the account can discover *and* invoke tools immediately.
-    Returns the generated `password` exactly once (never retrievable later) alongside
-    the created user. Same tenant-scoping RBAC as the other user routes; the creation
-    is audit-logged (the password is never logged). This backs the **Create demo user**
-    button in the Users tab.
+    `roles`, `scopes`, `status`, and optional cosmetic `label`/`client`). Only
+    `platform-admin` may grant the `platform-admin` role or target another tenant.
+    `label` (display name) and `client` (the MCP client it was minted for) are
+    recognition-only and never consulted for authorization.
+  - `POST /admin/users/demo` — one-click: create a ready-to-use, tool-invoking
+    **full-access** credential. Optional body `{"email"?, "tenant_id"?, "label"?,
+    "client"?}`; email/tenant are auto-resolved when omitted (a unique
+    `demo-<rand>@demo.local` is generated). Grants `user` + `tool:invoke` plus
+    **catalog-derived scopes** (`server:*` and every distinct tool scope in the
+    tenant) so the account can discover *and* invoke tools immediately. Returns the
+    generated `password` exactly once (never retrievable later) alongside the created
+    user. Same tenant-scoping RBAC as the other user routes; the creation is
+    audit-logged (the password is never logged). This backs the **Full access** tier
+    in the Credentials tab.
+  - `POST /admin/users/team` — one-click: create a safe-to-share, **read-only**
+    credential. Same optional body as `/users/demo`, grants `user` + `tool:invoke`
+    but with `derive_safe_scopes` (read-only tools only — every write/destructive
+    tool's scope is dropped), so per-call authorization refuses anything that
+    mutates. Backs the **Read-only** tier in the Credentials tab.
   - `POST /admin/users/viewer` — one-click: create the complete **read-only**
-    showcase identity. Same optional `{"email"?, "tenant_id"?}` body and
-    catalog-derived scopes (so discovery is complete) as `/users/demo`, but the
-    account carries `user` + `viewer` + `tool:read` (never `tool:invoke`). The one
-    credential is read-only on **both** planes: `viewer` makes it a read-only
+    showcase identity (the **Explore** tier in the Credentials tab). Same optional
+    body and catalog-derived scopes (so discovery is complete) as `/users/demo`, but
+    the account carries `user` + `viewer` + `tool:read` (never `tool:invoke`). The
+    one credential is read-only on **both** planes: `viewer` makes it a read-only
     **console** login (loads the UI + tool source, every mutation `403`s) and
     `tool:read` makes a minted token a discover-only **MCP** principal
     (`tools/list` / `tools/search` work; `tools/call` → `invoke_not_permitted`).
-    Returns the generated `password` once. Backs the **Create viewer user** button
-    in the Users tab.
+    Returns the generated `password` once.
   - `GET /admin/users/demo-scopes` — recommended demo `roles`/`scopes` for a tenant
     (optional `tenant_id` query), derived from its live catalog. Backs the console's
     **Demo** role preset so a manually-created demo user gets working scopes.
@@ -222,8 +229,8 @@ require the `platform-admin` role.
   - `POST /admin/users/me/password` — self-service password change (`current_password`,
     `new_password`); unavailable for the env bootstrap admin.
   - `POST /admin/users/{id}/token` — mint a ready-to-use bearer token carrying that
-    user's `tenant_id`, `roles`, and `scopes` (the "Generate token" button in the Users
-    tab). Optional body `{"ttl_minutes": <int>}` (clamped server-side). Same RBAC as the
+    user's `tenant_id`, `roles`, and `scopes` (the "Get config" button in the
+    Credentials tab). Optional body `{"ttl_minutes": <int>}` (clamped server-side). Same RBAC as the
     other user routes (tenant-admins scoped to their own tenant; never a platform-admin
     user). Auth-mode aware: `hs256` returns a real scoped bearer; `jwks` returns a
     roles-only admin-session token plus a `caveat` (scoped tokens come from your IdP).

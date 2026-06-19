@@ -5,7 +5,7 @@ window.adminConsole = function adminConsole(config) {
     navItems: [
       { key: "dashboard", label: "Dashboard", icon: "📊" },
       { key: "tenants", label: "Tenants", icon: "🏢" },
-      { key: "users", label: "Users", icon: "👥" },
+      { key: "users", label: "Credentials", icon: "🔑" },
       { key: "approvals", label: "Approvals", icon: "✅" },
       { key: "servers", label: "MCP Servers", icon: "🧰" },
       { key: "catalog", label: "Catalog", icon: "🗂️" },
@@ -161,6 +161,10 @@ window.adminConsole = function adminConsole(config) {
       // One-time password shown in the token modal right after a demo account is
       // created (it is never retrievable again). Cleared when the modal closes.
       userTokenNewPassword: "",
+      // Optional human-friendly label applied to the next credential we mint, and
+      // the MCP client whose config we show (drives the connect-flow snippet).
+      credName: "",
+      connectClient: "cursor",
       demoCreating: false,
       viewerCreating: false,
       teamCreating: false,
@@ -409,6 +413,17 @@ window.adminConsole = function adminConsole(config) {
       }
     },
 
+    // Body shared by every one-click tier: the active tenant plus the optional
+    // cosmetic label/client the operator picked above the cards. Empty values are
+    // omitted so the request stays clean.
+    _credCreateBody() {
+      const body = { tenant_id: this.state.tenantId };
+      const label = (this.state.credName || "").trim();
+      if (label) body.label = label;
+      if (this.state.connectClient) body.client = this.state.connectClient;
+      return body;
+    },
+
     async createDemoUser() {
       this.clearError();
       this.state.userNotice = "";
@@ -416,10 +431,11 @@ window.adminConsole = function adminConsole(config) {
       try {
         const result = await this.apiRequest("/admin/users/demo", {
           method: "POST",
-          body: { tenant_id: this.state.tenantId },
+          body: this._credCreateBody(),
         });
         await this.loadUsers();
-        this.notify(`Demo user '${result.user.email}' created.`);
+        this.state.credName = "";
+        this.notify(`Full-access credential '${this.credentialName(result.user)}' created.`);
         // Immediately hand over a working credential: open the token modal with
         // the freshly minted bearer plus the one-time password.
         await this.generateUserToken(result.user, { password: result.password });
@@ -437,12 +453,13 @@ window.adminConsole = function adminConsole(config) {
       try {
         const result = await this.apiRequest("/admin/users/team", {
           method: "POST",
-          body: { tenant_id: this.state.tenantId },
+          body: this._credCreateBody(),
         });
         await this.loadUsers();
-        this.notify(`Team user '${result.user.email}' created.`);
-        // Same hand-off as the demo button: open the token modal with a working
-        // bearer + one-time password, ready to paste into a teammate's mcp.json.
+        this.state.credName = "";
+        this.notify(`Read-only credential '${this.credentialName(result.user)}' created.`);
+        // Same hand-off as the full-access button: open the token modal with a
+        // working bearer + one-time password, ready to paste into a client config.
         await this.generateUserToken(result.user, { password: result.password });
       } catch (error) {
         this.setError(error);
@@ -463,21 +480,71 @@ window.adminConsole = function adminConsole(config) {
       return `${window.location.origin}/mcp/`;
     },
 
-    userMcpSnippet() {
+    // The MCP clients we generate paste-ready config for. Cursor and Claude
+    // Desktop share the `mcpServers` url+headers shape; VS Code uses its own
+    // `servers` + `type: "http"` schema. Order = how they appear in the picker.
+    connectClients: [
+      { key: "cursor", label: "Cursor", file: "~/.cursor/mcp.json", cap: "mcp.json" },
+      {
+        key: "claude",
+        label: "Claude Desktop",
+        file: "claude_desktop_config.json",
+        cap: "claude_desktop_config.json",
+      },
+      { key: "vscode", label: "VS Code", file: ".vscode/mcp.json", cap: ".vscode/mcp.json" },
+    ],
+
+    clientConfigMeta() {
+      const key = this.state.connectClient || "cursor";
+      return (
+        this.connectClients.find((c) => c.key === key) || this.connectClients[0]
+      );
+    },
+
+    // Paste-ready config for the selected client, with the live bearer baked in.
+    // The token is identical across clients; only the wrapper schema differs.
+    clientConfigSnippet() {
       const result = this.state.userTokenResult;
       if (!result) return "";
+      const token = result.token || "";
+      const url = this.mcpEndpoint();
+      if ((this.state.connectClient || "cursor") === "vscode") {
+        return [
+          "{",
+          '  "servers": {',
+          '    "mdb-mcp-gateway": {',
+          '      "type": "http",',
+          `      "url": "${url}",`,
+          '      "headers": {',
+          `        "Authorization": "Bearer ${token}"`,
+          "      }",
+          "    }",
+          "  }",
+          "}",
+        ].join("\n");
+      }
+      // Cursor + Claude Desktop both consume the `mcpServers` url/headers shape.
       return [
         "{",
-        '  \"mcpServers\": {',
-        '    \"mdb-mcp-gateway\": {',
-        `      \"url\": \"${this.mcpEndpoint()}\",`,
-        '      \"headers\": {',
-        `        \"Authorization\": \"Bearer ${result.token || ""}\"`,
+        '  "mcpServers": {',
+        '    "mdb-mcp-gateway": {',
+        `      "url": "${url}",`,
+        '      "headers": {',
+        `        "Authorization": "Bearer ${token}"`,
         "      }",
         "    }",
         "  }",
         "}",
       ].join("\n");
+    },
+
+    // Backward-compatible alias: the Cursor-shaped snippet (other callers/tests).
+    userMcpSnippet() {
+      const prior = this.state.connectClient;
+      this.state.connectClient = "cursor";
+      const snippet = this.clientConfigSnippet();
+      this.state.connectClient = prior;
+      return snippet;
     },
 
     userCurlSample() {
@@ -890,12 +957,13 @@ window.adminConsole = function adminConsole(config) {
       try {
         const result = await this.apiRequest("/admin/users/viewer", {
           method: "POST",
-          body: { tenant_id: this.state.tenantId },
+          body: this._credCreateBody(),
         });
         await this.loadUsers();
-        this.notify(`Viewer user '${result.user.email}' created.`);
+        this.state.credName = "";
+        this.notify(`Explore credential '${this.credentialName(result.user)}' created.`);
         // Hand over a working discover-only credential immediately (same flow as
-        // the demo button): the token modal carries the bearer + one-time password.
+        // the full-access button): the token modal carries the bearer + one-time password.
         await this.generateUserToken(result.user, { password: result.password });
       } catch (error) {
         this.setError(error);
@@ -1045,12 +1113,12 @@ window.adminConsole = function adminConsole(config) {
     },
 
     roleOptions: [
-      { value: "user", label: "User" },
-      { value: "team", label: "Team member (read-only invoke)" },
-      { value: "demo", label: "Demo (full invoke)" },
-      { value: "viewer", label: "Viewer (read-only)" },
-      { value: "tenant-admin", label: "Tenant admin" },
-      { value: "platform-admin", label: "Platform admin" },
+      { value: "user", label: "User (no tools)" },
+      { value: "team", label: "Read-only (safe invoke)" },
+      { value: "demo", label: "Full access (read + write)" },
+      { value: "viewer", label: "Explore (discover-only)" },
+      { value: "tenant-admin", label: "Tenant admin (console)" },
+      { value: "platform-admin", label: "Platform admin (console)" },
     ],
 
     rolesForSelection(selection) {
@@ -1092,23 +1160,51 @@ window.adminConsole = function adminConsole(config) {
       }
     },
 
-    // Persona label for the users table. Demo and team share the `tool:invoke`
-    // role, so they are told apart by scopes: a team user's read-only scope set
-    // carries no write/destructive scope (heuristically, none ending in ":write").
+    // Capability label for a credential/operator. Full-access and read-only both
+    // carry the `tool:invoke` role, so they are told apart by scopes: a read-only
+    // scope set carries no write/destructive scope (heuristically, none with
+    // ":write"). Console roles (admin/platform-admin) are checked first.
     personaLabel(user) {
       const roles = new Set(user?.roles || []);
       if (roles.has("platform-admin")) return "Platform admin";
       if (roles.has("admin")) return "Tenant admin";
-      if (roles.has("viewer")) return "Viewer (read-only)";
       if (roles.has("tool:invoke")) {
         const scopes = user?.scopes || [];
         const hasWriteScope = scopes.some(
           (s) => typeof s === "string" && s.includes(":write"),
         );
-        return hasWriteScope ? "Demo (full invoke)" : "Team (read-only invoke)";
+        return hasWriteScope ? "Full access" : "Read-only";
       }
-      if (roles.has("tool:read")) return "Viewer (discover-only)";
+      if (roles.has("tool:read") || roles.has("viewer")) return "Explore (discover-only)";
       return (user?.roles || []).join(", ") || "user";
+    },
+
+    // The "agent credentials vs console operators" split. A credential's purpose
+    // is an MCP bearer (it can invoke or discover tools); a console operator is a
+    // human who signs in to manage the console (admin/platform-admin). The viewer
+    // tier lands under credentials: its hero use is a read-only MCP/console
+    // showcase, and it carries `tool:read` for discovery over MCP.
+    isAgentCredential(user) {
+      const roles = new Set(user?.roles || []);
+      if (roles.has("admin") || roles.has("platform-admin")) return false;
+      return (
+        roles.has("tool:invoke") || roles.has("tool:read") || roles.has("viewer")
+      );
+    },
+
+    agentCredentials() {
+      return (this.state.users || []).filter((u) => this.isAgentCredential(u));
+    },
+
+    consoleOperators() {
+      return (this.state.users || []).filter((u) => !this.isAgentCredential(u));
+    },
+
+    // Friendly display name for a credential: the operator-supplied label when
+    // present, otherwise the generated email it falls back to.
+    credentialName(user) {
+      const label = (user?.label || "").trim?.() ?? "";
+      return label || user?.email || "credential";
     },
 
     roleLabel(roles) {

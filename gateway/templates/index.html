@@ -18,9 +18,9 @@
           Connect a client in seconds
         </h2>
         <p class="connect-now-sub">
-          One click mints a tool-ready demo account, then hands you a bearer
-          token and a ready-to-paste Cursor <code>mcp.json</code>. No terminal
-          required.
+          One click mints a tool-ready, full-access credential, then hands you a
+          bearer token and a ready-to-paste config for Cursor, Claude, or VS Code.
+          No terminal required.
         </p>
       </div>
       <button
@@ -29,7 +29,7 @@
         x-show="canMutate()"
         @click="createDemoUser()"
         :disabled="state.demoCreating"
-        title="Create a tool-invoking demo account and get a token + mcp.json"
+        title="Create a full-access, tool-invoking credential and get a token + client config"
       >
         <span
           class="spinner"
@@ -38,7 +38,7 @@
           aria-hidden="true"
         ></span>
         <span
-          x-text="state.demoCreating ? 'Creating…' : '✨ Create demo user & connect'"
+          x-text="state.demoCreating ? 'Creating…' : '✨ Create credential & connect'"
         ></span>
       </button>
     </div>
@@ -46,7 +46,7 @@
     <ol class="connect-steps">
       <li class="connect-step">
         <span class="connect-step-num">1</span>
-        <span><strong>Create</strong> a demo user &amp; token (button above)</span>
+        <span><strong>Create</strong> a credential &amp; token (button above)</span>
       </li>
       <li class="connect-step">
         <span class="connect-step-num">2</span>
@@ -748,13 +748,13 @@
   x-transition:enter-start="view-from"
   x-transition:enter-end="view-to"
 >
-  <h2 class="text-2xl font-semibold">Users</h2>
+  <h2 class="text-2xl font-semibold">Credentials</h2>
   <p class="text-sm text-slate-600 max-w-3xl">
-    Users belong to the tenant selected in the top bar. A
-    <span class="font-medium">tenant admin</span> manages users and servers
-    within their own tenant; only a
-    <span class="font-medium">platform admin</span> can grant the platform-admin
-    role or manage users across tenants.
+    A credential is what your AI client (Cursor, Claude, VS Code, …) pastes in to
+    reach this tenant's tools over MCP. Pick how much it's allowed to do — we mint
+    the account, generate a bearer token, and hand you a ready-to-paste config.
+    <span class="font-medium">Console operators</span> (the humans who sign in and
+    manage this console) are listed separately below.
   </p>
   <template x-if="state.userNotice">
     <div
@@ -762,35 +762,58 @@
       x-text="state.userNotice"
     ></div>
   </template>
-  <!-- One-click personas: the easy, obvious path to a shareable credential. -->
+  <!-- One-click capability tiers: the easy, obvious path to a shareable credential. -->
   <div x-show="canMutate()" class="space-y-3">
     <div class="flex items-center justify-between flex-wrap gap-2">
-      <h3 class="text-lg font-semibold">Create a user to share</h3>
+      <h3 class="text-lg font-semibold">Create a credential</h3>
       <button type="button" class="btn-secondary" @click="loadUsers()">Refresh</button>
     </div>
-    <p class="text-sm text-slate-600 max-w-3xl">
-      Pick a persona — we mint the account, generate a password, and hand you a
-      bearer token plus a ready-to-paste Cursor <code>mcp.json</code>. No fields to fill in.
-    </p>
-    <div class="grid gap-4 md:grid-cols-3">
-      <!-- Team member: safe-to-share, read-only invoke (the "hello world"). -->
+    <!-- Optional name + default client: cosmetic only, but it makes a credential
+         recognizable in the table and pre-selects the right config in the modal. -->
+    <div class="grid gap-3 md:grid-cols-2 max-w-3xl">
+      <div>
+        <label class="field-label">Name <span class="text-slate-400">(optional)</span></label>
+        <input
+          class="field-input"
+          x-model="state.credName"
+          placeholder="e.g. Cursor — MacBook Pro"
+          maxlength="80"
+        />
+      </div>
+      <div>
+        <label class="field-label">Client</label>
+        <div class="segment-ctrl" role="group" aria-label="MCP client">
+          <template x-for="c in connectClients" :key="c.key">
+            <button
+              type="button"
+              class="segment-btn"
+              :class="state.connectClient === c.key ? 'segment-btn-active' : ''"
+              @click="state.connectClient = c.key"
+              x-text="c.label"
+            ></button>
+          </template>
+        </div>
+      </div>
+    </div>
+    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <!-- Read-only: safe-to-share, non-destructive invoke (the "hello world"). -->
       <div
         class="card flex flex-col gap-3"
         style="border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent)"
       >
         <div>
           <div class="flex items-center gap-2">
-            <span class="text-2xl" aria-hidden="true">🤝</span>
+            <span class="text-2xl" aria-hidden="true">🛡️</span>
             <span
               class="inline-flex items-center rounded-full bg-emerald-100 text-emerald-700 text-xs font-semibold px-2 py-0.5"
               >Recommended</span
             >
           </div>
-          <h4 class="text-base font-semibold mt-2">Team member</h4>
+          <h4 class="text-base font-semibold mt-2">Read-only</h4>
           <p class="text-sm text-slate-600 mt-1">
             Safe to share. Can <strong>run read-only tools</strong> — say hello with
             <code>gateway_hello</code>, check the weather, look things up — but
-            <strong>cannot change or delete anything</strong>.
+            <strong>cannot write or delete anything</strong>.
           </p>
         </div>
         <button
@@ -798,16 +821,16 @@
           class="btn-primary mt-auto"
           @click="createTeamUser()"
           :disabled="state.teamCreating"
-          title="Create a non-destructive, tool-invoking team account and get a token + mcp.json"
-          x-text="state.teamCreating ? 'Creating…' : '🤝 Create team user'"
+          title="Mint a non-destructive, tool-invoking credential and get a token + client config"
+          x-text="state.teamCreating ? 'Creating…' : '🛡️ Create read-only'"
         ></button>
       </div>
 
-      <!-- Demo: full invoke, including writes — for your own testing. -->
+      <!-- Full access: every tool, including writes — for trusted/own use. -->
       <div class="card flex flex-col gap-3">
         <div>
-          <span class="text-2xl" aria-hidden="true">✨</span>
-          <h4 class="text-base font-semibold mt-2">Demo</h4>
+          <span class="text-2xl" aria-hidden="true">⚡</span>
+          <h4 class="text-base font-semibold mt-2">Full access</h4>
           <p class="text-sm text-slate-600 mt-1">
             Full power. Can invoke <strong>every</strong> tool, including ones that
             <strong>write or delete</strong>. Best for your own end-to-end testing.
@@ -818,19 +841,19 @@
           class="btn-primary mt-auto"
           @click="createDemoUser()"
           :disabled="state.demoCreating"
-          title="Create a ready-to-use, tool-invoking demo account and get a token + mcp.json"
-          x-text="state.demoCreating ? 'Creating…' : '✨ Create demo user'"
+          title="Mint a ready-to-use, tool-invoking credential (read + write) and get a token + client config"
+          x-text="state.demoCreating ? 'Creating…' : '⚡ Create full access'"
         ></button>
       </div>
 
-      <!-- Viewer: look but don't touch — discover-only, mutates nothing. -->
+      <!-- Explore: discover-only — list/search but never run a tool. -->
       <div class="card flex flex-col gap-3">
         <div>
-          <span class="text-2xl" aria-hidden="true">👁</span>
-          <h4 class="text-base font-semibold mt-2">Viewer</h4>
+          <span class="text-2xl" aria-hidden="true">🔍</span>
+          <h4 class="text-base font-semibold mt-2">Explore</h4>
           <p class="text-sm text-slate-600 mt-1">
-            Look, don't touch. Browses the console and can
-            <strong>list &amp; search</strong> the catalog, but
+            Look, don't touch. Can <strong>list &amp; search</strong> the catalog
+            (and browse this console read-only), but
             <strong>cannot run any tool</strong>. Ideal for a safe showcase.
           </p>
         </div>
@@ -839,26 +862,36 @@
           class="btn-secondary mt-auto"
           @click="createViewerUser()"
           :disabled="state.viewerCreating"
-          title="Create a read-only viewer account (viewer + tool:read): a read-only console login AND a discover-only MCP token — it can browse and list/search tools but cannot mutate or call them"
-          x-text="state.viewerCreating ? 'Creating…' : '👁 Create viewer user'"
+          title="Mint a discover-only credential (viewer + tool:read): browses the console read-only and can list/search tools over MCP, but cannot mutate or call them"
+          x-text="state.viewerCreating ? 'Creating…' : '🔍 Create explore'"
+        ></button>
+      </div>
+
+      <!-- Custom: explicit email/password/role/scopes for power users. -->
+      <div class="card flex flex-col gap-3">
+        <div>
+          <span class="text-2xl" aria-hidden="true">🎛️</span>
+          <h4 class="text-base font-semibold mt-2">Custom</h4>
+          <p class="text-sm text-slate-600 mt-1">
+            Granular control. Set your own <strong>email, password, role &amp;
+            scopes</strong> — pick exactly what this credential can reach.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="btn-secondary mt-auto"
+          @click="state.userAdvancedOpen = !state.userAdvancedOpen"
+          :aria-expanded="state.userAdvancedOpen"
+          x-text="state.userAdvancedOpen ? '🎛️ Hide custom form' : '🎛️ Custom credential'"
         ></button>
       </div>
     </div>
   </div>
 
-  <!-- Advanced: explicit email/password/role/scopes for power users. -->
-  <div class="pt-1" x-show="canMutate()">
-    <button
-      type="button"
-      class="link-btn"
-      @click="state.userAdvancedOpen = !state.userAdvancedOpen"
-      :aria-expanded="state.userAdvancedOpen"
-      x-text="(state.userAdvancedOpen ? '▾' : '▸') + ' Advanced: custom user (set your own email, password, role & scopes)'"
-    ></button>
+  <!-- Custom credential form: revealed by the Custom card. -->
+  <div class="pt-1" x-show="canMutate() && state.userAdvancedOpen" x-cloak>
     <form
-      x-show="state.userAdvancedOpen"
-      x-cloak
-      class="grid gap-3 md:grid-cols-3 mt-3"
+      class="grid gap-3 md:grid-cols-3 mt-1 card"
       @submit.prevent="createUser()"
     >
       <div>
@@ -881,7 +914,7 @@
         />
       </div>
       <div>
-        <label class="field-label">Role</label>
+        <label class="field-label">Access</label>
         <select
           class="field-input"
           x-model="forms.user.role"
@@ -908,87 +941,176 @@
         </select>
       </div>
       <div class="flex items-end gap-2 md:col-span-3 flex-wrap">
-        <button type="submit" class="btn-primary" x-show="canMutate()">Create User</button>
+        <button type="submit" class="btn-primary" x-show="canMutate()">Create credential</button>
         <button type="button" class="btn-secondary" @click="resetUserForm()">
           Reset
         </button>
       </div>
       <p class="text-xs text-slate-500 md:col-span-3">
-        Full control over roles and scopes. Tip: pick <strong>Team member</strong> or
-        <strong>Demo</strong> as the Role to auto-fill a working scope set, or type your
-        own (e.g. <code>orders:read, weather</code>). Leaving scopes empty on an
-        invoke role means discovery and <code>tools/call</code> silently match nothing.
+        Full control over roles and scopes. Tip: pick <strong>Read-only</strong> or
+        <strong>Full access</strong> as the Access level to auto-fill a working scope
+        set, or type your own (e.g. <code>orders:read, weather</code>). Leaving scopes
+        empty on an invoke role means discovery and <code>tools/call</code> silently
+        match nothing.
       </p>
     </form>
   </div>
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Email</th>
-          <th>Tenant</th>
-          <th>Role</th>
-          <th>Scopes</th>
-          <th>Status</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        <template x-if="!state.users || state.users.length === 0">
+
+  <!-- Agent credentials: bearer tokens that MCP clients paste in. -->
+  <div class="space-y-2">
+    <h3 class="text-lg font-semibold">Agent credentials</h3>
+    <p class="text-sm text-slate-600 max-w-3xl">
+      Tokens an AI client uses to reach your tools over MCP. Use
+      <strong>Get config</strong> to grab a ready-to-paste bearer + client config.
+    </p>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
           <tr>
-            <td class="empty-cell" colspan="6">
-              <span class="empty-emoji">👥</span>No users in this tenant yet
-            </td>
+            <th>Name</th>
+            <th>Access</th>
+            <th>Reaches</th>
+            <th>Status</th>
+            <th>Actions</th>
           </tr>
-        </template>
-        <template x-for="user in state.users" :key="user.id">
+        </thead>
+        <tbody>
+          <template x-if="agentCredentials().length === 0">
+            <tr>
+              <td class="empty-cell" colspan="5">
+                <span class="empty-emoji">🔑</span>No agent credentials in this tenant yet
+              </td>
+            </tr>
+          </template>
+          <template x-for="user in agentCredentials()" :key="user.id">
+            <tr>
+              <td>
+                <span class="font-medium" x-text="credentialName(user)"></span>
+                <template x-if="user.label">
+                  <span class="block text-xs text-slate-500" x-text="user.email"></span>
+                </template>
+                <span
+                  x-show="user.self_registered"
+                  class="badge badge-selfreg"
+                  title="Self-registered through the public beta sign-up"
+                >self-registered</span>
+              </td>
+              <td x-text="personaLabel(user)"></td>
+              <td x-text="(user.scopes || []).join(', ') || '-'"></td>
+              <td x-text="user.status"></td>
+              <td class="space-x-2">
+                <button
+                  type="button"
+                  class="link-btn"
+                  @click="generateUserToken(user)"
+                  :disabled="state.userTokenGenerating"
+                >
+                  Get config
+                </button>
+                <button
+                  type="button"
+                  class="link-btn"
+                  @click="toggleUserStatus(user)"
+                  x-text="user.status === 'active' ? 'Disable' : 'Enable'"
+                ></button>
+                <button
+                  type="button"
+                  class="link-btn"
+                  @click="resetUserPassword(user)"
+                >
+                  Reset password
+                </button>
+                <button
+                  type="button"
+                  class="link-btn text-rose-600"
+                  @click="deleteUser(user)"
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Console operators: the humans who sign in and manage this console. -->
+  <div class="space-y-2">
+    <h3 class="text-lg font-semibold">Console operators</h3>
+    <p class="text-sm text-slate-600 max-w-3xl">
+      People who sign in to manage this console. A
+      <span class="font-medium">tenant admin</span> manages this tenant; only a
+      <span class="font-medium">platform admin</span> can grant the platform-admin
+      role or manage credentials across tenants.
+    </p>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
           <tr>
-            <td>
-              <span x-text="user.email"></span>
-              <span
-                x-show="user.self_registered"
-                class="badge badge-selfreg"
-                title="Self-registered through the public beta sign-up"
-              >self-registered</span>
-            </td>
-            <td x-text="user.tenant_id"></td>
-            <td x-text="personaLabel(user)"></td>
-            <td x-text="(user.scopes || []).join(', ') || '-'"></td>
-            <td x-text="user.status"></td>
-            <td class="space-x-2">
-              <button
-                type="button"
-                class="link-btn"
-                @click="generateUserToken(user)"
-                :disabled="state.userTokenGenerating"
-              >
-                Generate token
-              </button>
-              <button
-                type="button"
-                class="link-btn"
-                @click="toggleUserStatus(user)"
-                x-text="user.status === 'active' ? 'Disable' : 'Enable'"
-              ></button>
-              <button
-                type="button"
-                class="link-btn"
-                @click="resetUserPassword(user)"
-              >
-                Reset password
-              </button>
-              <button
-                type="button"
-                class="link-btn text-rose-600"
-                @click="deleteUser(user)"
-              >
-                Delete
-              </button>
-            </td>
+            <th>Email</th>
+            <th>Role</th>
+            <th>Tenant</th>
+            <th>Status</th>
+            <th>Actions</th>
           </tr>
-        </template>
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          <template x-if="consoleOperators().length === 0">
+            <tr>
+              <td class="empty-cell" colspan="5">
+                <span class="empty-emoji">🧑</span>No console operators in this tenant yet
+              </td>
+            </tr>
+          </template>
+          <template x-for="user in consoleOperators()" :key="user.id">
+            <tr>
+              <td>
+                <span x-text="user.email"></span>
+                <span
+                  x-show="user.self_registered"
+                  class="badge badge-selfreg"
+                  title="Self-registered through the public beta sign-up"
+                >self-registered</span>
+              </td>
+              <td x-text="personaLabel(user)"></td>
+              <td x-text="user.tenant_id"></td>
+              <td x-text="user.status"></td>
+              <td class="space-x-2">
+                <button
+                  type="button"
+                  class="link-btn"
+                  @click="generateUserToken(user)"
+                  :disabled="state.userTokenGenerating"
+                >
+                  Generate token
+                </button>
+                <button
+                  type="button"
+                  class="link-btn"
+                  @click="toggleUserStatus(user)"
+                  x-text="user.status === 'active' ? 'Disable' : 'Enable'"
+                ></button>
+                <button
+                  type="button"
+                  class="link-btn"
+                  @click="resetUserPassword(user)"
+                >
+                  Reset password
+                </button>
+                <button
+                  type="button"
+                  class="link-btn text-rose-600"
+                  @click="deleteUser(user)"
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
   </div>
 </section>
 
@@ -3083,8 +3205,8 @@
         <span>
           <strong>Auth mode:</strong>
           <span x-text="authModeLabel()"></span>. Security is always enforced.
-          The fastest path: open the <strong>Users</strong> tab and click
-          <strong>Generate token</strong>. Or get a bearer from
+          The fastest path: open the <strong>Credentials</strong> tab and click
+          <strong>Get config</strong>. Or get a bearer from
           <code>POST /auth/token</code> (username/password), or bring your own JWT
           with <code>tenant_id</code>, <code>roles:["tool:invoke"]</code>, and
           scopes/groups.
@@ -3109,10 +3231,10 @@
       <div class="space-y-3">
         <h4>2) Get a token</h4>
         <p class="muted">
-          Fastest path: open the <strong>Users</strong> tab and click
-          <strong>Generate token</strong> on a user — it mints a scoped bearer and
-          hands you a ready-to-paste Cursor <code>mcp.json</code> and curl. Or
-          exchange a username/password for a bearer below.
+          Fastest path: open the <strong>Credentials</strong> tab and click
+          <strong>Get config</strong> on a credential — it mints a scoped bearer and
+          hands you a ready-to-paste client config (Cursor, Claude, VS Code) and
+          curl. Or exchange a username/password for a bearer below.
         </p>
         <div class="code-block">
           <div class="code-head">
@@ -3238,8 +3360,8 @@
           x-text="`Token for '${state.userTokenUser}'`"
         ></h2>
         <p class="modal-subtitle">
-          A ready-to-use credential carrying this user's tenant, roles, and
-          scopes. Paste it into your MCP client to connect as this account.
+          A ready-to-use credential carrying this account's tenant, roles, and
+          scopes. Pick your client below and paste the config to connect.
         </p>
       </div>
       <button
@@ -3279,8 +3401,8 @@
             <strong>Heads up:</strong> this account has neither the
             <code>admin</code> nor <code>tool:invoke</code> role, so the token
             authenticates but is rejected at the <code>/rpc</code> and
-            <code>/mcp</code> gate. Give the user the
-            <em>Demo (can invoke tools)</em> role to call tools.
+            <code>/mcp</code> gate. Give it <em>Read-only</em> or
+            <em>Full access</em> to call tools.
           </div>
         </template>
 
@@ -3343,19 +3465,35 @@
           </div>
         </template>
 
-        <h4>Cursor MCP config (<code>~/.cursor/mcp.json</code>)</h4>
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <h4>MCP client config</h4>
+          <div class="segment-ctrl" role="group" aria-label="MCP client">
+            <template x-for="c in connectClients" :key="c.key">
+              <button
+                type="button"
+                class="segment-btn"
+                :class="state.connectClient === c.key ? 'segment-btn-active' : ''"
+                @click="state.connectClient = c.key"
+                x-text="c.label"
+              ></button>
+            </template>
+          </div>
+        </div>
+        <p class="text-xs text-slate-500 -mt-1">
+          Add to <code x-text="clientConfigMeta().file"></code> and restart the client.
+        </p>
         <div class="code-block">
           <div class="code-head">
-            <span class="code-cap">mcp.json</span>
+            <span class="code-cap" x-text="clientConfigMeta().cap"></span>
             <button
               type="button"
               class="code-copy"
-              @click="copyText(userMcpSnippet(), 'MCP config', $event)"
+              @click="copyText(clientConfigSnippet(), 'MCP config', $event)"
             >
               Copy
             </button>
           </div>
-          <pre x-text="userMcpSnippet()"></pre>
+          <pre x-text="clientConfigSnippet()"></pre>
         </div>
 
         <h4>Verify with curl</h4>

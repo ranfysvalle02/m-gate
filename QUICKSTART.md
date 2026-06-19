@@ -78,7 +78,7 @@ tier instantly (local/dev only — never seeded in production):
 | **Viewer** (read-only) | `viewer@demo.com` / `viewer-demo` | Read-only console + **discover-only** MCP — browses everything, mutates/invokes nothing (see [`READONLY.md`](READONLY.md)). |
 
 Each persona works on both surfaces: log into the console with it, or mint its bearer
-(**Users → Generate token**, or `POST /auth/token`) for an MCP client.
+(**Credentials → Get config**, or `POST /auth/token`) for an MCP client.
 
 Once you're in, the dashboard greets you with a **Connect Now** hero — the fastest
 path from zero to a connected client:
@@ -87,23 +87,29 @@ path from zero to a connected client:
 
 ## 4. Get a working credential (no terminal needed)
 
-Open the **Users** tab. You have two one-click options:
+Open the **Credentials** tab and pick how much the credential is allowed to do —
+optionally name it and choose your client (Cursor / Claude / VS Code) first:
 
-- **✨ Create demo user** — generates a fresh account with a strong password and
+- **⚡ Create full access** — generates a fresh credential with a strong password and
   *catalog-derived* scopes (so it can both discover **and** invoke every tool in the
   tenant), then immediately pops a modal with the one-time password, a bearer token,
-  and a ready-to-paste Cursor `mcp.json`. This is the fastest path.
-- **Generate token** on the seeded **`agent@demo.com`** user — it already carries the
-  `tool:invoke` role, so its tokens clear the data-plane gate.
+  and a ready-to-paste client config. This is the fastest path.
+- **🛡️ Create read-only** — the safe-to-share twin: it can run read-only tools but
+  cannot write or delete anything.
+- **🔍 Create explore** — discover-only: it can `tools/list` / `tools/search` but
+  never `tools/call`.
+- **Get config** on the seeded **`agent@demo.com`** credential — it already carries
+  the `tool:invoke` role, so its tokens clear the data-plane gate.
 
-Either way the console mints a *real* scoped bearer JWT signed with the gateway's
-`jwt_secret`, embedding the user's `tenant_id`, `roles`, and `scopes`. Every account
-creation and token issuance is audit-logged.
+Any of these mints a *real* scoped bearer JWT signed with the gateway's
+`jwt_secret`, embedding the account's `tenant_id`, `roles`, and `scopes`. Every
+credential creation and token issuance is audit-logged.
 
-![Credential modal with the one-time password, bearer token, and ready-to-paste Cursor mcp.json](docs/images/demo-credential.png)
+![Credential modal with the one-time password, bearer token, and ready-to-paste client config](docs/images/demo-credential.png)
 
-> Want a demo user in the manual form instead? Pick the **Demo (can invoke tools)**
-> role — the scopes field auto-fills from the tenant's catalog so the account works.
+> Need finer control? Use the **Custom** card to set your own email, password,
+> access level, and scopes. Picking **Full access (read + write)** or **Read-only
+> (safe invoke)** auto-fills a working scope set from the tenant's catalog.
 
 > Prefer the terminal? Exchange credentials for a bearer at `POST /auth/token`:
 >
@@ -169,8 +175,8 @@ them run arbitrary tools? As a **platform-admin**, from the console:
 2. **Freeze the tenant** — Tenants → **Make read-only**. The tenant stays active
    and browsable, but `tools/call` and tenant config edits now return `403`. A
    sticky banner appears in the console.
-3. **Hand out a least-privilege login** — Users → **Create viewer user**. It gives
-   you both a read-only **console** login (browse the UI + tool source; every
+3. **Hand out a least-privilege login** — Credentials → **🔍 Create explore**. It
+   gives you both a read-only **console** login (browse the UI + tool source; every
    mutation is `403`) and an MCP token whose role is `tool:read`: it can
    `tools/list` / `tools/search` the curated catalog, but `tools/call` is rejected
    (`invoke_not_permitted`).
@@ -190,7 +196,7 @@ and can lift the freeze (**Make read-write**) or re-curate at any time.
 | --- | --- |
 | `401 {"detail":"Missing bearer token."}` | The data plane always requires auth. Attach `Authorization: Bearer <token>` (step 4). |
 | `401 {"detail":"Invalid bearer token."}` | Token expired or signed with a different secret. Generate a fresh one from the console. |
-| `403 {"detail":"Insufficient permissions."}` | The principal lacks `tool:invoke`, `tool:read`, or `admin`. Use `agent@demo.com`, or grant the role in the Users tab. |
+| `403 {"detail":"Insufficient permissions."}` | The principal lacks `tool:invoke`, `tool:read`, or `admin`. Use `agent@demo.com`, or grant the access in the Credentials tab. |
 | `tools/call` → `403` `reason=invoke_not_permitted` | The token is discover-only (`tool:read`, e.g. a viewer). Use an account with `tool:invoke` to run tools. |
 | `tools/call` → `403` `reason=tenant_read_only` | The tenant is frozen read-only. **Make read-write** (platform-admin) to re-enable invocation; discovery still works. |
 | `tools/call` → `403` `reason=tool_not_allowlisted` / `tool_disabled` | The tool is outside the tenant allowlist or disabled. Adjust **Tool policy** / re-enable the tool (platform/tenant-admin). |

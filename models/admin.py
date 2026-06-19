@@ -206,6 +206,11 @@ class UserCreateRequest(BaseModel):
     roles: list[str] = Field(default_factory=lambda: ["user"])
     scopes: list[str] = Field(default_factory=list)
     status: Literal["active", "disabled"] = "active"
+    # Cosmetic only: a human-friendly display name for the credential and the MCP
+    # client it was minted for. Neither grants privilege; both aid recognition in
+    # the console. ``label`` is bounded to keep the stored doc tidy.
+    label: str | None = Field(default=None, max_length=120)
+    client: str | None = Field(default=None, max_length=40)
 
 
 class UserUpdateRequest(BaseModel):
@@ -226,6 +231,10 @@ class UserResponse(BaseModel):
     status: str = "active"
     # True for accounts minted by the public self-service sign-up flow.
     self_registered: bool = False
+    # Cosmetic display metadata: an operator-supplied name and the MCP client the
+    # credential was minted for. Absent on older records (falls back to email).
+    label: str | None = None
+    client: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     created_by: str | None = None
@@ -270,6 +279,10 @@ class DemoUserCreateRequest(BaseModel):
     # platform-admin cross-tenant rules as the rest of the user surface.
     email: str | None = None
     tenant_id: str | None = None
+    # Cosmetic only (see UserCreateRequest): a recognizable name for the minted
+    # credential and the MCP client it targets. Never affect roles or scopes.
+    label: str | None = Field(default=None, max_length=120)
+    client: str | None = Field(default=None, max_length=40)
 
 
 class DemoUserCreateResponse(BaseModel):

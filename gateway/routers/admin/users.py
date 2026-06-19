@@ -87,6 +87,8 @@ async def create_user(request: Request, payload: UserCreateRequest) -> UserRespo
             scopes=payload.scopes,
             status=payload.status,
             created_by=str(getattr(request.state, "user_id", "")) or None,
+            label=payload.label,
+            client=payload.client,
         )
     except users_service.UserAlreadyExists as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -173,6 +175,8 @@ async def create_demo_user(
         created_by=created_by,
         roles=list(DEMO_USER_ROLES),
         email_prefix="demo",
+        label=payload.label,
+        client=payload.client,
     )
     await users_service.sync_session_context(user)
 
@@ -217,6 +221,8 @@ async def create_viewer_user(
         created_by=created_by,
         roles=list(VIEWER_USER_ROLES),
         email_prefix="viewer",
+        label=payload.label,
+        client=payload.client,
     )
     await users_service.sync_session_context(user)
 
@@ -261,6 +267,8 @@ async def create_team_user(
         created_by=created_by,
         roles=list(TEAM_USER_ROLES),
         email_prefix="team",
+        label=payload.label,
+        client=payload.client,
     )
     await users_service.sync_session_context(user)
 
@@ -283,6 +291,8 @@ async def _create_preset_user_record(
     created_by: str | None,
     roles: list[str],
     email_prefix: str,
+    label: str | None = None,
+    client: str | None = None,
 ) -> dict[str, Any]:
     """Create a preset (demo/viewer) user, retrying generated emails on collision.
 
@@ -306,6 +316,8 @@ async def _create_preset_user_record(
                 scopes=scopes,
                 status="active",
                 created_by=created_by,
+                label=label,
+                client=client,
             )
         except users_service.UserAlreadyExists as exc:
             last_exc = exc

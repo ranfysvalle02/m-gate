@@ -6,6 +6,34 @@
 - **Severe Server Deadlock (MCP streaming).** Fixed a catastrophic deadlock that froze the entire `uvicorn` event loop and pegged the CPU at 100% when an MCP client connected via Server-Sent Events (SSE). The deadlock occurred because `GuardrailsMiddleware` wrapped the ASGI `receive` channel with an immediate-return payload, causing `sse-starlette`'s disconnect-monitoring loop to spin infinitely without yielding to the async loop. Streaming `/mcp` endpoints now bypass the body-buffering guardrails entirely.
 - **MongoDB QE Timeout in Rate Limiter.** Rate limit clock synchronization via `mongo_server_now()` now correctly leverages the QE-bypass client. This prevents timeout errors (`ServerSelectionTimeoutError`) when Queryable Encryption's query analysis attempts to parse the `hostInfo` command.
 
+### Feature: the admin console "Users" page is now a "Credentials" experience
+- **Reframed around the outcome, not the persona.** The console's **Users** tab is
+  now **Credentials** (🔑). The unit you create is framed as *the scoped bearer
+  token an MCP client pastes in to reach your tools*, not a "user." The three
+  one-click personas are recast as capability tiers — **Explore** (discover-only,
+  `viewer` + `tool:read`), **Read-only** (safe invoke, `tool:invoke` +
+  `derive_safe_scopes`), and **Full access** (read + write, `tool:invoke` +
+  `derive_demo_scopes`) — plus a first-class **Custom** card for explicit
+  email/password/role/scopes. Roles, scopes, and the `POST /admin/users/{demo,team,viewer}`
+  endpoints are **unchanged**: this is a terminology + UX reframe, fully backward
+  compatible (the nav key stays `users`, so deep links and routing are untouched).
+- **Client-aware connect flow.** The credential modal now generates ready-to-paste
+  config for **Cursor**, **Claude Desktop**, and **VS Code** via a segmented
+  switcher that renders the right schema per client (`mcpServers` url/headers for
+  Cursor & Claude; `servers` + `type:"http"` for VS Code), alongside the existing
+  curl verify snippet. The same bearer powers all three. An optional **name** and
+  default **client** can be set before minting.
+- **Agent credentials vs console operators.** The single user list is split into two
+  grouped tables: **Agent credentials** (anything carrying `tool:invoke` /
+  `tool:read` / `viewer` — the MCP tokens) and **Console operators** (the humans who
+  sign in: `admin` / `platform-admin`). Same data, grouped by intent, so the page
+  reads honestly at a glance.
+- **Optional credential name + client (cosmetic, additive).** `POST /admin/users`,
+  `/users/demo`, `/users/team`, and `/users/viewer` now accept optional `label` and
+  `client` fields (surfaced on `UserResponse`), purely for recognition in the
+  console — neither is ever consulted for authorization. Schemaless and backward
+  compatible: records minted before this fall back to the generated email.
+
 ### Feature: read-only tenants, viewer principals, and per-tenant tool curation
 - **Read-only tenants.** A tenant can be frozen with a new `read_only` flag
   (orthogonal to `status`): it stays `active` and fully discoverable, but

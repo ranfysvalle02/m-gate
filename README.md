@@ -616,7 +616,7 @@ whole tier skips cleanly — a no-op on a bare laptop, a hard gate in CI.
 
 This is the **`AUTH_MODE=jwks`** path, for exercising asymmetric RS256 verification
 offline. (The default setup is `hs256` — there, mint tokens from the admin console's
-**Users → Generate token** button or `POST /auth/token`, not the script below.)
+**Credentials → Get config** button or `POST /auth/token`, not the script below.)
 
 This repo ships a local dev RSA keypair + JWKS so the jwks path needs no external IdP:
 
@@ -748,10 +748,10 @@ full walkthrough with screenshots**; the auth model lives in
   it stays `active` and discoverable, but `tools/call` and tenant config edits
   return `403` (`tenant_read_only`). Platform-admin always bypasses.
 - **`viewer` role** — a read-only **console** login: browse the UI + tool source,
-  every mutation `403`. One click via **Users → Create viewer user**.
+  every mutation `403`. One click via **Credentials → 🔍 Create explore**.
 - **`tool:read` role** — a discover-only **MCP** token: `tools/list` /
   `tools/search` work, `tools/call` is refused (`invoke_not_permitted`). Minted by
-  the same Create-viewer-user button.
+  the same **Create explore** tier.
 - **Per-tenant tool curation** — an `allowlist` (`server/name` / `server/*`) and a
   `max_tools` cap (`GET`/`PUT /admin/tenants/{id}/tool-policy`), plus per-server
   enable/disable and a per-tool kill-switch (`disabled_tools`) that blocks a tool
@@ -783,7 +783,7 @@ in the code, so the post and the implementation stay honest with each other.
 
 > Okta JWT verification (Section 2 of the post) is documented as the production
 > wiring; locally the gateway verifies HS256 JWT claims (`AUTH_MODE=hs256`, the
-> default) — mint one from the admin console's **Generate token** button — so the
+> default) — mint one from the admin console's **Credentials → Get config** button — so the
 > scope-to-retrieval mapping is fully exercisable without an external IdP.
 
 # Architectural Blueprint: Building a High-Throughput, Reactive MCP Gateway with FastAPI and MongoDB Async

@@ -156,6 +156,9 @@ def public_user(doc: dict[str, Any]) -> dict[str, Any]:
         "scopes": _clean_str_list(doc.get("scopes")),
         "status": str(doc.get("status", "active")),
         "self_registered": bool(doc.get("self_registered", False)),
+        # Cosmetic display metadata; ``None`` on records minted before it existed.
+        "label": (str(doc["label"]) if doc.get("label") else None),
+        "client": (str(doc["client"]) if doc.get("client") else None),
         "created_at": doc.get("created_at"),
         "updated_at": doc.get("updated_at"),
         "created_by": doc.get("created_by"),
@@ -194,6 +197,8 @@ async def create_user(
     status: str = "active",
     created_by: str | None = None,
     self_registered: bool = False,
+    label: str | None = None,
+    client: str | None = None,
 ) -> dict[str, Any]:
     """Create a user, enforcing globally-unique email.
 
@@ -213,6 +218,8 @@ async def create_user(
     if existing is not None:
         raise UserAlreadyExists(f"A user with email '{normalized}' already exists.")
     now = datetime.now(UTC)
+    clean_label = label.strip() if isinstance(label, str) and label.strip() else None
+    clean_client = client.strip() if isinstance(client, str) and client.strip() else None
     doc = {
         "_id": uuid.uuid4().hex,
         "tenant_id": tenant_id,
@@ -222,6 +229,9 @@ async def create_user(
         "scopes": _clean_str_list(scopes),
         "status": status,
         "self_registered": bool(self_registered),
+        # Cosmetic recognition metadata only; never consulted for authorization.
+        "label": clean_label,
+        "client": clean_client,
         "created_at": now,
         "updated_at": now,
         "created_by": created_by,
