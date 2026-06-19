@@ -1624,6 +1624,92 @@ textarea.field-input {
   color: color-mix(in srgb, var(--accent) 75%, var(--text-primary));
 }
 
+/* Per-requirement pip-policy chips (Functions Studio + tenant policy modal) */
+.req-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+}
+
+.req-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+  padding: 0.16rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 640;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+}
+
+.req-chip-dot {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.req-chip-tag {
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-weight: 600;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.85;
+}
+
+.req-chip-allowed {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  background: color-mix(in srgb, var(--success) 13%, transparent);
+  color: color-mix(in srgb, var(--success) 80%, var(--text-primary));
+}
+
+.req-chip-pending {
+  border-color: color-mix(in srgb, var(--warning) 48%, var(--border));
+  background: color-mix(in srgb, var(--warning) 13%, transparent);
+  color: color-mix(in srgb, var(--warning) 86%, var(--text-primary));
+}
+
+.req-chip-blocked {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 13%, transparent);
+  color: color-mix(in srgb, var(--danger) 82%, var(--text-primary));
+}
+
+.req-chip-neutral {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: color-mix(in srgb, var(--accent) 75%, var(--text-primary));
+}
+
+.req-policy-note {
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.policy-banner {
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.55rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+}
+
+.policy-banner-warn {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+  color: color-mix(in srgb, var(--warning) 85%, var(--text-primary));
+}
+
 .lint-hints {
   border: 1px solid color-mix(in srgb, var(--danger) 48%, var(--border));
   border-radius: var(--radius-sm);

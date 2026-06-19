@@ -338,6 +338,41 @@ class EgressAllowlistResponse(BaseModel):
     updated_by: str | None = None
 
 
+class PipPolicyUpdateRequest(BaseModel):
+    # Bare PyPI distribution names this tenant's code tools may install (e.g.
+    # ["requests", "orjson"]). Empty clears the tenant allowlist, which — under
+    # the intersection model — means the tenant may install no third-party
+    # packages (stdlib only), regardless of the global ceiling.
+    allowlist: list[str] = Field(default_factory=list)
+
+
+class PipPolicyEntry(BaseModel):
+    # One curated tenant entry plus whether the operator ceiling currently admits
+    # it. ``in_global_ceiling=False`` => the entry is stored but has no effect
+    # until a platform operator adds it to SANDBOX_ALLOWED_REQUIREMENTS.
+    name: str
+    in_global_ceiling: bool = False
+
+
+class PipPolicyResponse(BaseModel):
+    tenant_id: str
+    # The tenant's curated allowlist (normalized distribution names).
+    allowlist: list[str] = Field(default_factory=list)
+    # The operator ceiling (SANDBOX_ALLOWED_REQUIREMENTS), surfaced read-only.
+    global_ceiling: list[str] = Field(default_factory=list)
+    # What actually installs: ``allowlist ∩ global_ceiling``.
+    effective: list[str] = Field(default_factory=list)
+    # Per-entry detail so the editor can flag "awaiting operator" entries.
+    entries: list[PipPolicyEntry] = Field(default_factory=list)
+    # True when the operator ceiling is non-empty (any third-party install is even
+    # possible). False => no tenant may install anything until an operator opts in.
+    global_restricted: bool = False
+    # Whether transport="code" execution is on at all (CODE_TOOL_EXECUTION_ENABLED).
+    execution_enabled: bool = False
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+
+
 class ServerEnvUpdateRequest(BaseModel):
     # Empty string clears a key; omitted keys are unchanged.
     values: dict[str, str] = Field(default_factory=dict)
@@ -416,6 +451,26 @@ class UsageEventsResponse(BaseModel):
     events: list[UsageEventRecord] = Field(default_factory=list)
 
 
+class CodeRequirementsPolicySummary(BaseModel):
+    """Compact effective code-package policy for the caller's tenant.
+
+    Drives the Functions Studio's per-requirement allow/deny chips and the sandbox
+    contract card without a second round trip: the UI marks a requirement allowed
+    iff its normalized distribution name is in ``effective``.
+    """
+
+    # What actually installs for this tenant: ``allowlist ∩ global_ceiling``.
+    effective: list[str] = Field(default_factory=list)
+    # The tenant's curated allowlist (may include entries not yet in the ceiling).
+    allowlist: list[str] = Field(default_factory=list)
+    # The operator ceiling (SANDBOX_ALLOWED_REQUIREMENTS).
+    global_ceiling: list[str] = Field(default_factory=list)
+    # True when the operator ceiling is non-empty (any third-party install possible).
+    global_restricted: bool = False
+    # Whether transport="code" execution is enabled at all.
+    execution_enabled: bool = False
+
+
 class WhoAmIResponse(BaseModel):
     tenant_id: str
     user_id: str
@@ -431,6 +486,11 @@ class WhoAmIResponse(BaseModel):
     # The caller tenant's confirmation tier ("unconfirmed" => capped self-service
     # account; "confirmed" => promoted/normal). Lets the console show the tier.
     confirmation: str = "confirmed"
+    # Effective code-package policy, so the Functions Studio can render
+    # allow/deny chips and contract context without an extra request.
+    code_requirements: CodeRequirementsPolicySummary = Field(
+        default_factory=CodeRequirementsPolicySummary
+    )
     auth_mode: Literal["hs256", "jwks"]
 
 

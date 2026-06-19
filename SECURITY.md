@@ -247,13 +247,30 @@ per tenant, exactly which hosts/networks the gateway may reach:
 - **Server env injection:** per-server code-tool env values are stored encrypted in the
   tenant DB (`server_secrets`) and injected into sandbox runtime as `context.env`,
   never into gateway process environment variables.
-- **Dependency installation is deny-by-default:** a code tool's pinned `requirements`
-  are installed with host `pip` *before* the wasm jail, so a source build could execute
-  `setup.py` on the host. The executor therefore (a) refuses any distribution not in the
-  operator allowlist `SANDBOX_ALLOWED_REQUIREMENTS` (empty by default ⇒ stdlib-only code
-  tools) and (b) installs **wheels only** (`--only-binary=:all: --no-deps`), so no source
-  build runs on the host — allowlisted package code only executes later, inside the sandbox.
-  The pinned-spec authoring lint is *not* a substitute for this; the allowlist is the boundary.
+- **Dependency installation is deny-by-default, two-gate:** a code tool's pinned
+  `requirements` are installed with host `pip` *before* the wasm jail, so a source build
+  could execute `setup.py` on the host. Installs are governed by a **two-gate allowlist**
+  mirroring the egress model:
+  - **Global ceiling** (`SANDBOX_ALLOWED_REQUIREMENTS`, `config/settings.py`): the operator
+    set of vetted distribution names. Empty ⇒ **no tenant may install anything** (stdlib-only).
+  - **Per-tenant allowlist** (`services/tenant_pip_policy.py`): stored on the tenant control
+    doc (`code_requirements_allowlist`), managed via
+    `PUT /admin/tenants/{tenant_id}/code-requirements`. The **effective** policy is the
+    intersection `tenant_allowlist ∩ global_ceiling`; a package must be in **both**, and an
+    empty tenant allowlist ⇒ stdlib-only for that tenant regardless of the ceiling.
+
+  The trusted host (proxy registry / workbench) resolves the tenant's effective list and
+  hands it to the executor, which (a) installs **only** distributions in it, re-clamped to
+  the operator ceiling as a backstop, and (b) installs **wheels only**
+  (`--only-binary=:all: --no-deps`), so no source build runs on the host — package code only
+  executes later, inside the sandbox. The same intersection is enforced consistently at
+  authoring/validate, server save, the sandbox test-run, and runtime, so what an author sees
+  is what installs. The pinned-spec authoring lint is *not* a substitute for this; the
+  intersected allowlist is the boundary.
+
+  > **Breaking change:** the global ceiling alone no longer grants installs. Existing tenants
+  > that relied on global-only behavior must be opted in per tenant (set their
+  > `code-requirements` allowlist) — fail-closed by default.
 
 ### Human-in-the-loop destructive-action approvals
 

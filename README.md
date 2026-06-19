@@ -758,6 +758,12 @@ full walkthrough with screenshots**; the auth model lives in
   enable/disable and a per-tool kill-switch (`disabled_tools`) that blocks a tool
   for everyone, including admins (`tool_disabled`). Curation filters both
   discovery and invocation, so a showcase only ever surfaces the curated set.
+- **Per-tenant code-package (pip) policy** — what a tenant's code tools may install
+  is the global operator ceiling (`SANDBOX_ALLOWED_REQUIREMENTS`) **intersected**
+  with a tenant allowlist (`GET`/`PUT /admin/tenants/{id}/code-requirements`, or
+  **Code packages** in the console). Empty tenant allowlist ⇒ stdlib-only. The
+  intersection is enforced consistently while authoring, on save, in the test-run,
+  and at runtime, and the Functions Studio shows an allow/deny chip per requirement.
 
 Net effect: hand teammates a viewer login on a frozen, curated tenant and they can
 explore everything and run nothing, while platform-admins retain full control.

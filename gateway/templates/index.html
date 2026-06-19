@@ -382,6 +382,14 @@
                 type="button"
                 class="link-btn"
                 x-show="state.whoami?.is_platform_admin"
+                @click="openCodePkgPolicy(tenant.tenant_id)"
+              >
+                Code packages
+              </button>
+              <button
+                type="button"
+                class="link-btn"
+                x-show="state.whoami?.is_platform_admin"
                 @click="toggleTenantReadOnly(tenant)"
                 x-text="tenant.read_only ? 'Make read-write' : 'Make read-only'"
               ></button>
@@ -1384,11 +1392,42 @@
             </li>
             <li>
               <span class="contract-key">Third-party packages</span>
-              <span class="contract-val"
-                >Pin each in <em>Requirements</em> as
-                <code>package==1.2.3</code> (one per line). No network at
-                runtime.</span
-              >
+              <span class="contract-val">
+                <template x-if="(codePolicy().effective || []).length">
+                  <span
+                    >Allowed for this tenant:
+                    <template
+                      x-for="(name, i) in codePolicy().effective"
+                      :key="name"
+                    >
+                      <span
+                        ><code x-text="name"></code
+                        ><span
+                          x-show="i < codePolicy().effective.length - 1"
+                          >, </span
+                        ></span
+                      > </template
+                    >. Pin each in <em>Requirements</em> as
+                    <code>package==1.2.3</code> (one per line). No network at
+                    runtime.</span
+                  >
+                </template>
+                <template x-if="!(codePolicy().effective || []).length">
+                  <span
+                    >No third-party packages are allowed for this tenant yet —
+                    <strong>standard library only</strong>.<button
+                      type="button"
+                      class="ei-link ml-1"
+                      x-show="state.whoami?.is_platform_admin"
+                      @click="openCodePkgPolicy(state.whoami?.tenant_id)"
+                    >
+                      Allow packages</button
+                    ><span x-show="!state.whoami?.is_platform_admin"
+                      >&nbsp;A platform admin can allow packages.</span
+                    ></span
+                  >
+                </template>
+              </span>
             </li>
             <li>
               <span class="contract-key">Your function</span>
@@ -1638,6 +1677,65 @@
                       @input="scheduleToolValidate(tool)"
                       placeholder="httpx==0.27.0"
                     ></textarea>
+                    <!-- Live per-requirement verdict against the tenant's
+                         effective pip policy (tenant allowlist ∩ operator ceiling). -->
+                    <div class="req-chips" x-show="requirementChips(tool).length">
+                      <template
+                        x-for="chip in requirementChips(tool)"
+                        :key="chip.spec"
+                      >
+                        <span
+                          class="req-chip"
+                          :class="`req-chip-${chip.status}`"
+                          :title="chip.title"
+                        >
+                          <span class="req-chip-dot"></span>
+                          <span x-text="chip.name || chip.spec"></span>
+                          <span
+                            class="req-chip-tag"
+                            x-show="chip.status === 'pending'"
+                            >awaiting operator</span
+                          >
+                          <span
+                            class="req-chip-tag"
+                            x-show="chip.status === 'blocked'"
+                            >not allowed</span
+                          >
+                        </span>
+                      </template>
+                    </div>
+                    <p
+                      class="req-policy-note"
+                      x-show="requirementChips(tool).some((c) => c.status !== 'allowed')"
+                    >
+                      <template
+                        x-if="requirementChips(tool).some((c) => c.status === 'blocked')"
+                      >
+                        <span
+                          >Blocked packages aren't in this tenant's
+                          <strong>code-package policy</strong>.
+                          <button
+                            type="button"
+                            class="ei-link"
+                            x-show="state.whoami?.is_platform_admin"
+                            @click="openCodePkgPolicy(state.whoami?.tenant_id)"
+                          >
+                            Manage allowed packages</button
+                          ><span x-show="!state.whoami?.is_platform_admin"
+                            >Ask a platform admin to allow them.</span
+                          ></span
+                        >
+                      </template>
+                      <template
+                        x-if="!requirementChips(tool).some((c) => c.status === 'blocked') && requirementChips(tool).some((c) => c.status === 'pending')"
+                      >
+                        <span
+                          >"Awaiting operator" packages are in this tenant's policy
+                          but not yet in the platform ceiling
+                          (<code>SANDBOX_ALLOWED_REQUIREMENTS</code>).</span
+                        >
+                      </template>
+                    </p>
                   </div>
                 </div>
 

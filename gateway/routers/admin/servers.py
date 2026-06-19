@@ -26,6 +26,7 @@ from services.server_exporter import (
 )
 from services.server_guard import EndpointNotAllowed, StdioNotAllowed, enforce_server_policy
 from services.tenant_egress import get_tenant_egress_allowlist
+from services.tenant_pip_policy import evaluate_tenant_requirements
 from services.tenant_tool_policy import get_tool_policy
 
 from . import _common as c
@@ -232,6 +233,22 @@ async def _prepare_code_server(doc: dict[str, Any], tenant_id: str) -> dict[str,
                     detail=str(exc),
                 ) from exc
             tool["raw_code"] = await encrypt_raw_code(tenant_id, raw_code)
+        # Refuse to persist a tool whose pinned requirements fall outside the
+        # effective ``tenant ∩ global_ceiling`` pip policy — fail closed, with the
+        # same actor-targeted message the runtime install would raise. Requirements
+        # are stored in plaintext, so this is checked on every save (including
+        # re-saves carrying over encrypted source).
+        decision = await evaluate_tenant_requirements(
+            tenant_id,
+            [str(req) for req in (tool.get("requirements") or [])],
+            settings=settings,
+        )
+        if not decision.ok:
+            tool_label = str(tool.get("name") or "<unnamed>")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Tool '{tool_label}': {decision.error_message()}",
+            )
         # An authored function is not a downstream embedding target.
         tool["embedding"] = []
         prepared.append(tool)

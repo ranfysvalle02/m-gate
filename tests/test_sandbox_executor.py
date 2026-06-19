@@ -357,17 +357,23 @@ async def test_stage_requirements_failure_surfaces_error(monkeypatch):
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
-    # Allowlist the package so it reaches pip (which then fails, as mocked).
+    # Package is in the operator ceiling AND the tenant's injected effective list,
+    # so it passes policy and reaches pip (which then fails, as mocked).
     settings = Settings(sandbox_allowed_requirements="requests")
     executor = WasmExecutor(settings=settings, python_bin="python")
-    request = _request()
-    request = ExecRequest(**{**request.__dict__, "requirements": ["requests==2.32.3"]})
+    request = ExecRequest(
+        **{
+            **_request().__dict__,
+            "requirements": ["requests==2.32.3"],
+            "allowed_requirements": ("requests",),
+        }
+    )
     with pytest.raises(SandboxError, match="requirements"):
         await executor.run(request)
 
 
 @pytest.mark.asyncio
-async def test_requirements_not_in_allowlist_are_rejected_before_pip(monkeypatch):
+async def test_requirements_blocked_by_global_ceiling_before_pip(monkeypatch):
     spawned = {"count": 0}
 
     async def _spawn(*_args, **_kwargs):
@@ -375,12 +381,38 @@ async def test_requirements_not_in_allowlist_are_rejected_before_pip(monkeypatch
         return _FakeProcess(returncode=0)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
-    # Default settings => empty allowlist => any requirement is denied.
+    # Default settings => empty operator ceiling => any requirement is denied, even
+    # if a (buggy) caller injected it into allowed_requirements.
     executor = WasmExecutor(settings=Settings(), python_bin="python")
-    request = ExecRequest(**{**_request().__dict__, "requirements": ["evil-pkg==6.6.6"]})
-    with pytest.raises(SandboxError, match="not permitted by the sandbox allowlist"):
+    request = ExecRequest(
+        **{
+            **_request().__dict__,
+            "requirements": ["evil-pkg==6.6.6"],
+            "allowed_requirements": ("evil-pkg",),
+        }
+    )
+    with pytest.raises(SandboxError, match="platform pip ceiling"):
         await executor.run(request)
     # The host pip subprocess must never be spawned for a denied requirement.
+    assert spawned["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_requirements_blocked_by_tenant_policy_before_pip(monkeypatch):
+    spawned = {"count": 0}
+
+    async def _spawn(*_args, **_kwargs):
+        spawned["count"] += 1
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
+    # Package IS in the operator ceiling but the tenant did not allow it (empty
+    # injected effective list) => blocked by tenant policy, fail-closed.
+    settings = Settings(sandbox_allowed_requirements="requests")
+    executor = WasmExecutor(settings=settings, python_bin="python")
+    request = ExecRequest(**{**_request().__dict__, "requirements": ["requests==2.32.3"]})
+    with pytest.raises(SandboxError, match="not in this tenant's code-package policy"):
+        await executor.run(request)
     assert spawned["count"] == 0
 
 
@@ -513,8 +545,15 @@ async def test_allowlisted_requirements_install_wheels_only(monkeypatch):
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
     settings = Settings(sandbox_allowed_requirements="Requests, orjson")
     executor = WasmExecutor(settings=settings, python_bin="python")
-    # Name normalization is spelling-insensitive (Req_uests matches "requests").
-    request = ExecRequest(**{**_request().__dict__, "requirements": ["requests==2.32.3"]})
+    # Name normalization is spelling-insensitive (Req_uests matches "requests"),
+    # and the tenant's injected effective list permits it.
+    request = ExecRequest(
+        **{
+            **_request().__dict__,
+            "requirements": ["requests==2.32.3"],
+            "allowed_requirements": ("requests", "orjson"),
+        }
+    )
     result = await executor.run(request)
     assert result.payload == {"ok": 1}
     # The pip command forces wheels and disables transitive installs.

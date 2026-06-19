@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import HTTPException, Query, Request, status
 
 from models.admin import (
+    CodeRequirementsPolicySummary,
     DemoScopesResponse,
     DemoUserCreateRequest,
     DemoUserCreateResponse,
@@ -25,6 +26,11 @@ from services import users as users_service
 from services.account_tier import get_tenant_confirmation
 from services.admin_session import mint_bearer_jwt, mint_session
 from services.passwords import verify_password
+from services.tenant_pip_policy import (
+    effective_allowlist,
+    get_tenant_pip_allowlist,
+    global_ceiling_names,
+)
 from services.tenant_status import get_tenant_read_only
 from services.users import (
     DEMO_USER_ROLES,
@@ -58,6 +64,15 @@ async def who_am_i(request: Request) -> WhoAmIResponse:
     scopes = list(getattr(request.state, "scopes", []))
     tenant_id = str(getattr(request.state, "tenant_id", settings.default_tenant_id))
     user_id = str(getattr(request.state, "user_id", "anonymous"))
+    tenant_allowlist = await get_tenant_pip_allowlist(tenant_id, settings=settings)
+    ceiling = sorted(global_ceiling_names(settings))
+    code_requirements = CodeRequirementsPolicySummary(
+        effective=effective_allowlist(tenant_allowlist, settings=settings),
+        allowlist=tenant_allowlist,
+        global_ceiling=ceiling,
+        global_restricted=bool(ceiling),
+        execution_enabled=bool(settings.code_tool_execution_enabled),
+    )
     return WhoAmIResponse(
         tenant_id=tenant_id,
         user_id=user_id,
@@ -69,6 +84,7 @@ async def who_am_i(request: Request) -> WhoAmIResponse:
         is_read_only=bool(getattr(request.state, "is_read_only_principal", False)),
         tenant_read_only=await get_tenant_read_only(tenant_id),
         confirmation=await get_tenant_confirmation(tenant_id),
+        code_requirements=code_requirements,
         auth_mode=settings.auth_mode,
     )
 

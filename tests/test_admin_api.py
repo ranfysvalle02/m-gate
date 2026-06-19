@@ -13,9 +13,11 @@ from models.admin import (
     AdminSearchRequest,
     CacheMigrateRequest,
     CodeToolTestRequest,
+    CodeToolValidateRequest,
     EgressAllowlistUpdateRequest,
     ExploreQueryRequest,
     ExploreSampleRequest,
+    PipPolicyUpdateRequest,
     QuotaUpdateRequest,
     ServerEnvUpdateRequest,
     ServerPatchRequest,
@@ -1470,6 +1472,134 @@ async def test_egress_allowlist_cross_tenant_requires_platform_admin(patch_mongo
     assert exc.value.status_code == 403
 
 
+# --------------------------------------------------------------------------- #
+# Per-tenant code-package (pip) policy — admin endpoints + enforcement
+# --------------------------------------------------------------------------- #
+def _pip_telemetry(monkeypatch, admin):
+    monkeypatch.setattr(
+        admin._common,
+        "get_telemetry_logger",
+        lambda: type("T", (), {"log_background": lambda *a, **k: None})(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_code_requirements_defaults_empty_with_ceiling(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    monkeypatch.setattr(
+        admin.settings, "sandbox_allowed_requirements", "requests orjson", raising=False
+    )
+    response = await admin.get_code_requirements_policy(_Req(roles=["admin"]), "local-dev")
+    assert response.tenant_id == "local-dev"
+    assert response.allowlist == []
+    assert response.global_ceiling == ["orjson", "requests"]
+    assert response.effective == []  # empty tenant list ⇒ stdlib-only
+    assert response.global_restricted is True
+
+
+@pytest.mark.asyncio
+async def test_put_and_get_code_requirements_round_trip_intersects(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    await patch_mongo._control_db["tenants"].insert_one(
+        {"tenant_id": "local-dev", "db_name": "db", "status": "active"}
+    )
+    _pip_telemetry(monkeypatch, admin)
+    monkeypatch.setattr(admin.settings, "sandbox_allowed_requirements", "requests", raising=False)
+
+    updated = await admin.put_code_requirements_policy(
+        _Req(roles=["admin"], user_id="ops@example.com"),
+        "local-dev",
+        PipPolicyUpdateRequest(allowlist=["Requests", "requests", "pandas"]),
+    )
+    # Normalized + de-duped; effective intersects with the ceiling (pandas excluded).
+    assert updated.allowlist == ["pandas", "requests"]
+    assert updated.effective == ["requests"]
+    assert updated.updated_by == "ops@example.com"
+    by_name = {e.name: e.in_global_ceiling for e in updated.entries}
+    assert by_name == {"pandas": False, "requests": True}
+
+    fetched = await admin.get_code_requirements_policy(_Req(roles=["admin"]), "local-dev")
+    assert fetched.allowlist == ["pandas", "requests"]
+    assert fetched.effective == ["requests"]
+
+
+@pytest.mark.asyncio
+async def test_put_code_requirements_rejects_non_bare_name(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    await patch_mongo._control_db["tenants"].insert_one({"tenant_id": "local-dev", "db_name": "db"})
+    _pip_telemetry(monkeypatch, admin)
+    with pytest.raises(HTTPException) as exc:
+        await admin.put_code_requirements_policy(
+            _Req(roles=["admin"]),
+            "local-dev",
+            PipPolicyUpdateRequest(allowlist=["requests==2.32.3"]),
+        )
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_put_code_requirements_unknown_tenant_404(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    _pip_telemetry(monkeypatch, admin)
+    with pytest.raises(HTTPException) as exc:
+        await admin.put_code_requirements_policy(
+            _Req(roles=[admin.settings.platform_admin_role]),
+            "ghost",
+            PipPolicyUpdateRequest(allowlist=["requests"]),
+        )
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_code_requirements_cross_tenant_requires_platform_admin(patch_mongo):
+    import gateway.routers.admin as admin
+
+    with pytest.raises(HTTPException) as exc:
+        await admin.get_code_requirements_policy(
+            _Req(tenant_id="tenant-a", roles=["admin"]), "tenant-b"
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_put_code_requirements_refused_when_tenant_read_only(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    await patch_mongo._control_db["tenants"].insert_one(
+        {"tenant_id": "tenant-a", "db_name": "db", "read_only": True}
+    )
+    _pip_telemetry(monkeypatch, admin)
+    # A tenant-admin (not platform-admin) cannot mutate a read-only tenant.
+    with pytest.raises(HTTPException) as exc:
+        await admin.put_code_requirements_policy(
+            _Req(tenant_id="tenant-a", roles=["admin"]),
+            "tenant-a",
+            PipPolicyUpdateRequest(allowlist=["requests"]),
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_whoami_returns_code_requirements_summary(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    await patch_mongo._control_db["tenants"].insert_one(
+        {"tenant_id": "tenant-a", "db_name": "db", "code_requirements_allowlist": ["requests"]}
+    )
+    monkeypatch.setattr(
+        admin.settings, "sandbox_allowed_requirements", "requests orjson", raising=False
+    )
+    response = await admin.who_am_i(_Req(tenant_id="tenant-a", roles=["admin"]))
+    assert response.code_requirements.allowlist == ["requests"]
+    assert response.code_requirements.effective == ["requests"]
+    assert response.code_requirements.global_ceiling == ["orjson", "requests"]
+    assert response.code_requirements.global_restricted is True
+
+
 @pytest.mark.asyncio
 async def test_register_server_blocked_by_global_allowlist(patch_mongo, monkeypatch):
     import gateway.routers.admin as admin
@@ -1578,11 +1708,25 @@ def _code_tool(**overrides):
         "name": "add",
         "description": "Add two numbers",
         "raw_code": _CODE_SRC,
-        "requirements": ["httpx==0.27.0"],
+        # Stdlib-only by default: third-party requirements are gated by the
+        # tenant pip policy, exercised explicitly in the policy-focused tests.
+        "requirements": [],
         "metadata": {"action_type": "read", "requires_confirmation": False},
     }
     base.update(overrides)
     return ToolDocument(**base)
+
+
+async def _allow_tenant_packages(patch_mongo, monkeypatch, admin, names, *, tenant="local-dev"):
+    """Set the operator ceiling + tenant allowlist so ``names`` are installable."""
+    monkeypatch.setattr(
+        admin.settings, "sandbox_allowed_requirements", " ".join(names), raising=False
+    )
+    await patch_mongo._control_db["tenants"].update_one(
+        {"tenant_id": tenant},
+        {"$set": {"tenant_id": tenant, "db_name": "db", "code_requirements_allowlist": names}},
+        upsert=True,
+    )
 
 
 def _patch_code_admin(monkeypatch, admin, mounted=None):
@@ -1634,9 +1778,15 @@ async def test_get_code_server_decrypts_source_for_editor(patch_mongo, monkeypat
     import gateway.routers.admin as admin
 
     _patch_code_admin(monkeypatch, admin)
+    # An allowed third-party requirement round-trips through save/get.
+    await _allow_tenant_packages(patch_mongo, monkeypatch, admin, ["httpx"])
     await admin.create_or_update_server(
         _Req(roles=["admin"]),
-        ServerUpsertRequest(server="my-funcs", transport="code", tools=[_code_tool()]),
+        ServerUpsertRequest(
+            server="my-funcs",
+            transport="code",
+            tools=[_code_tool(requirements=["httpx==0.27.0"])],
+        ),
     )
 
     detail = await admin.get_server(_Req(roles=["admin"]), "my-funcs", tenant_id=None)
@@ -1698,3 +1848,149 @@ async def test_patch_code_tool_does_not_double_encrypt(patch_mongo, monkeypatch)
     # Still decryptable to the original plaintext (i.e. not re-encrypted twice).
     detail = await admin.get_server(_Req(roles=["admin"]), "my-funcs", tenant_id=None)
     assert detail["tools"][0]["raw_code"] == _CODE_SRC
+
+
+@pytest.mark.asyncio
+async def test_save_code_tool_blocked_by_pip_policy(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    _patch_code_admin(monkeypatch, admin)
+    # httpx is not in the (empty) operator ceiling nor any tenant allowlist.
+    payload = ServerUpsertRequest(
+        server="my-funcs",
+        transport="code",
+        tools=[_code_tool(requirements=["httpx==0.27.0"])],
+    )
+    with pytest.raises(HTTPException) as exc:
+        await admin.create_or_update_server(_Req(roles=["admin"]), payload)
+    assert exc.value.status_code == 422
+    assert "platform pip ceiling" in str(exc.value.detail)
+    assert "Tool 'add'" in str(exc.value.detail)  # names the offending tool
+
+
+@pytest.mark.asyncio
+async def test_save_code_tool_blocked_by_tenant_policy(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    _patch_code_admin(monkeypatch, admin)
+    # httpx IS in the operator ceiling, but the tenant has not allowed it.
+    monkeypatch.setattr(admin.settings, "sandbox_allowed_requirements", "httpx", raising=False)
+    payload = ServerUpsertRequest(
+        server="my-funcs",
+        transport="code",
+        tools=[_code_tool(requirements=["httpx==0.27.0"])],
+    )
+    with pytest.raises(HTTPException) as exc:
+        await admin.create_or_update_server(_Req(roles=["admin"]), payload)
+    assert exc.value.status_code == 422
+    assert "tenant's code-package policy" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_save_code_tool_allowed_when_in_effective_policy(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    _patch_code_admin(monkeypatch, admin)
+    await _allow_tenant_packages(patch_mongo, monkeypatch, admin, ["httpx"])
+    payload = ServerUpsertRequest(
+        server="my-funcs",
+        transport="code",
+        tools=[_code_tool(requirements=["httpx==0.27.0"])],
+    )
+    result = await admin.create_or_update_server(_Req(roles=["admin"]), payload)
+    assert result["transport"] == "code"
+
+
+@pytest.mark.asyncio
+async def test_validate_endpoint_flags_disallowed_requirement(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    monkeypatch.setattr(admin.settings, "sandbox_allowed_requirements", "", raising=False)
+    response = await admin.validate_code_tool_endpoint(
+        _Req(roles=["admin"]),
+        CodeToolValidateRequest(
+            name="add",
+            raw_code=_CODE_SRC,
+            requirements=["httpx==0.27.0"],
+        ),
+    )
+    assert response.ok is False
+    assert any(
+        "platform pip ceiling" in issue.message
+        for issue in response.issues
+        if issue.severity == "error"
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_endpoint_passes_when_requirement_allowed(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    await _allow_tenant_packages(patch_mongo, monkeypatch, admin, ["httpx"])
+    response = await admin.validate_code_tool_endpoint(
+        _Req(roles=["admin"]),
+        CodeToolValidateRequest(
+            name="add",
+            raw_code=_CODE_SRC,
+            requirements=["httpx==0.27.0"],
+        ),
+    )
+    assert response.ok is True
+    assert all(issue.severity != "error" for issue in response.issues)
+
+
+@pytest.mark.asyncio
+async def test_test_code_tool_blocked_by_pip_policy_before_sandbox(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    spawned = {"count": 0}
+
+    class _Executor:
+        async def run(self, request):  # pragma: no cover - must not be reached
+            spawned["count"] += 1
+            raise AssertionError("sandbox must not run for a policy-blocked requirement")
+
+    monkeypatch.setattr(admin._common, "get_executor", lambda: _Executor())
+
+    response = await admin.test_code_tool(
+        _Req(roles=["admin"]),
+        "my-funcs",
+        "add",
+        CodeToolTestRequest(
+            raw_code=_CODE_SRC, arguments={"a": 1, "b": 2}, requirements=["httpx==0.27.0"]
+        ),
+    )
+    assert response.ok is False
+    assert "platform pip ceiling" in (response.error or "")
+    assert spawned["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_test_code_tool_injects_effective_allowlist(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    await _allow_tenant_packages(patch_mongo, monkeypatch, admin, ["httpx"])
+
+    class _Result:
+        payload = {"sum": 3}
+        elapsed_ms = 1.0
+
+    seen = {}
+
+    class _Executor:
+        async def run(self, request):
+            seen["allowed"] = tuple(request.allowed_requirements)
+            return _Result()
+
+    monkeypatch.setattr(admin._common, "get_executor", lambda: _Executor())
+
+    response = await admin.test_code_tool(
+        _Req(roles=["admin"]),
+        "my-funcs",
+        "add",
+        CodeToolTestRequest(
+            raw_code=_CODE_SRC, arguments={"a": 1, "b": 2}, requirements=["httpx==0.27.0"]
+        ),
+    )
+    assert response.ok is True
+    assert seen["allowed"] == ("httpx",)

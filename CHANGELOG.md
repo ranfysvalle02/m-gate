@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Feature: per-tenant code-package (pip) policy — BREAKING
+- **Tenant pip allowlist, intersected with the operator ceiling.** What a code
+  tool may install is now `SANDBOX_ALLOWED_REQUIREMENTS` (global operator ceiling)
+  **∩** a per-tenant allowlist (`code_requirements_allowlist`, new on the tenant
+  control doc). A package must be in **both**. New admin endpoints
+  `GET`/`PUT /admin/tenants/{id}/code-requirements` (tenant-admin for own tenant,
+  platform-admin cross-tenant; refused while read-only) manage the tenant list, and
+  the console gains a **Code packages** editor per tenant. Backed by a cached
+  `services/tenant_pip_policy.py` mirroring the egress/tool-policy pattern.
+- **BREAKING:** the global ceiling alone no longer grants installs. An **empty
+  tenant allowlist means stdlib-only** for that tenant, regardless of the ceiling —
+  fail-closed. Existing tenants that relied on global-only behavior must be opted in
+  per tenant (set their `code-requirements` allowlist). There is no compatibility
+  shim.
+- **Enforced consistently end-to-end.** The same `tenant ∩ ceiling` intersection is
+  applied at authoring (`POST /admin/code-tools/validate` returns actor-targeted
+  error issues), on server save (`422`), in the sandbox test-run, and at runtime —
+  where the executor installs only the trusted-caller-resolved effective list,
+  re-clamped to the operator ceiling, wheels-only. Rejections name *which* gate
+  blocked the package and *who* can unblock it (platform operator vs. tenant admin).
+- **Magical authoring UX.** The Functions Studio renders a live chip per requirement
+  (green = installs, amber "awaiting operator", red "not allowed"), the sandbox
+  contract card reflects the tenant's effective packages, and `GET /admin/whoami`
+  now returns a `code_requirements` summary so the UI needs no extra round trip.
+- **Docs:** refreshed `SECURITY.md`, `README.md`, `docs/API.md`, `CONTEXT.md`,
+  `TROUBLESHOOTING.md` (new failure mode #12), `ARCHITECTURE.md`, and `.env.example`.
+
 ### Bug Fixes
 - **Pinned the MCP SDK to stop a transitive dependency skew.** `fastmcp==3.4.2` requires `mcp>=1.24.0,<2.0`, but `mcp` was never pinned, so environments drifted to `mcp 1.23.3` — a version that dropped `streamable_http_client`, which `fastmcp` imports at module load. The result was an `ImportError` on `import fastmcp` that made every router-level test fail at *collection* time (the suite couldn't even start). `requirements.txt` now pins `mcp==1.28.0` (the latest in-range release) so the SDK pair is deterministic and the full unit suite collects and runs.
 - **Severe Server Deadlock (MCP streaming).** Fixed a catastrophic deadlock that froze the entire `uvicorn` event loop and pegged the CPU at 100% when an MCP client connected via Server-Sent Events (SSE). The deadlock occurred because `GuardrailsMiddleware` wrapped the ASGI `receive` channel with an immediate-return payload, causing `sse-starlette`'s disconnect-monitoring loop to spin infinitely without yielding to the async loop. Streaming `/mcp` endpoints now bypass the body-buffering guardrails entirely.

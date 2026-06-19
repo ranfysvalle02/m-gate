@@ -26,36 +26,75 @@ from services.sandbox_executor import (
     SandboxProtocolError,
     SandboxTimeoutError,
 )
+from services.tenant_pip_policy import (
+    PipPolicyDecision,
+    evaluate_tenant_requirements,
+    get_effective_pip_allowlist,
+)
 
 from . import _common as c
 from ._common import _require_tenant_admin, _resolve_target_tenant, router, settings
+
+
+def _pip_policy_issues(decision: PipPolicyDecision) -> list[CodeToolValidationIssue]:
+    """Turn a blocked-requirement decision into authoring-time error issues.
+
+    Split by who can unblock each package so the author is pointed at the right
+    actor (platform operator vs. tenant admin) — the same distinction the runtime
+    install error carries.
+    """
+    issues: list[CodeToolValidationIssue] = []
+    for name in decision.blocked_by_global:
+        issues.append(
+            CodeToolValidationIssue(
+                severity="error",
+                message=(
+                    f"Package '{name}' isn't permitted by the platform pip ceiling "
+                    "(SANDBOX_ALLOWED_REQUIREMENTS); a platform operator must allow it."
+                ),
+            )
+        )
+    for name in decision.blocked_by_tenant:
+        issues.append(
+            CodeToolValidationIssue(
+                severity="error",
+                message=(
+                    f"Package '{name}' isn't in this tenant's code-package policy; a "
+                    "tenant admin must add it to the tenant's allowed packages."
+                ),
+            )
+        )
+    return issues
 
 
 @router.post("/code-tools/validate", response_model=CodeToolValidateResponse)
 async def validate_code_tool_endpoint(
     request: Request, payload: CodeToolValidateRequest
 ) -> CodeToolValidateResponse:
-    """Lint authored Python without executing it.
+    """Lint authored Python and check requirements against the tenant pip policy.
 
-    Returns the exact set of issues the save path enforces (same
-    :func:`validate_code_tool`), so the admin UI can block a broken save before it
-    is attempted and surface line-accurate problems while the author types. Pure
-    and cheap: no DB access, no sandbox spawn.
+    Returns the exact set of issues the save path enforces (the static
+    :func:`validate_code_tool` lint plus the effective ``tenant ∩ global_ceiling``
+    pip-policy check), so the admin UI can block a broken save before it is
+    attempted and surface line-accurate, actor-targeted problems while the author
+    types. The one cheap DB read is the cached tenant allowlist.
     """
     _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, payload.tenant_id)
+    requirements = [str(req).strip() for req in (payload.requirements or []) if str(req).strip()]
     issues = validate_code_tool(
         {
             "name": payload.name,
             "raw_code": payload.raw_code,
-            "requirements": [
-                str(req).strip() for req in (payload.requirements or []) if str(req).strip()
-            ],
+            "requirements": requirements,
             "metadata": {"action_type": payload.action_type},
             "input_schema": payload.input_schema,
         }
     )
-    ok = not any(issue["severity"] == "error" for issue in issues)
     typed_issues = [CodeToolValidationIssue(**issue) for issue in issues]
+    decision = await evaluate_tenant_requirements(target_tenant, requirements, settings=settings)
+    typed_issues.extend(_pip_policy_issues(decision))
+    ok = not any(issue.severity == "error" for issue in typed_issues)
     return CodeToolValidateResponse(
         ok=ok,
         issues=typed_issues,
@@ -95,6 +134,19 @@ async def test_code_tool(
     except CodeToolValidationError as exc:
         return CodeToolTestResponse(ok=False, error=str(exc))
 
+    # Fail fast (before spawning the sandbox) when a requirement is outside the
+    # effective ``tenant ∩ global_ceiling`` policy, with the same actor-targeted
+    # message the runtime install would raise.
+    requirements = list(candidate_tool["requirements"])
+    decision = await evaluate_tenant_requirements(target_tenant, requirements, settings=settings)
+    if not decision.ok:
+        return CodeToolTestResponse(ok=False, error=decision.error_message())
+    allowed_requirements = (
+        tuple(await get_effective_pip_allowlist(target_tenant, settings=settings))
+        if requirements
+        else ()
+    )
+
     timeout_seconds = settings.sandbox_wall_timeout_ms / 1000
     executor = c.get_executor()
     # Let the workbench "Run" exercise context.tools just like production: an
@@ -118,11 +170,12 @@ async def test_code_tool(
                     server=server_name,
                     tool=tool_name,
                     raw_code=payload.raw_code,
-                    requirements=list(candidate_tool["requirements"]),
+                    requirements=requirements,
                     arguments=payload.arguments if isinstance(payload.arguments, dict) else {},
                     env={},
                     action_type=payload.action_type,
                     tool_invoker=tool_invoker,
+                    allowed_requirements=allowed_requirements,
                 )
             ),
             timeout=timeout_seconds,

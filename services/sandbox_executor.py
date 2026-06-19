@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import json
 import os
-import re
 import sys
 import tempfile
 import time
@@ -22,6 +21,7 @@ from services.sandbox_errors import (
     SandboxTimeoutError,
 )
 from services.sandbox_tool_bridge import SandboxToolBridge, ToolInvoker
+from services.tenant_pip_policy import evaluate_requirements, normalize_requirement_name
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -70,6 +70,12 @@ class ExecRequest:
     # (the originating run accounts for the slot), so a re-entrant call cannot
     # deadlock against the per-tenant/global semaphore.
     call_depth: int = 0
+    # The tenant's *effective* pip allowlist (``tenant ∩ global_ceiling``) resolved
+    # by the trusted caller (proxy registry / workbench). The executor installs
+    # ONLY distributions in this set, re-clamped to the operator ceiling — so an
+    # empty/unset value denies all third-party installs (fail-closed). Never
+    # serialized into the worker job; the host stages wheels before the wasm jail.
+    allowed_requirements: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -140,6 +146,7 @@ class WasmExecutor:
                         requirements=request.requirements,
                         workspace=temp_path,
                         timeout_ms=limits.wall_timeout_ms,
+                        allowed_requirements=request.allowed_requirements,
                     )
                     job_path.write_text(
                         json.dumps(self._job_payload(request, python_paths, limits)),
@@ -452,20 +459,11 @@ class WasmExecutor:
     def _dist_name(requirement: str) -> str:
         """Normalize a requirement to its PEP 503 distribution name.
 
-        Strips the version pin and any extras, then lowercases and collapses
-        ``-_.`` runs so allowlist matching is spelling-insensitive.
+        Thin alias over :func:`services.tenant_pip_policy.normalize_requirement_name`
+        so name matching is identical across the policy editor, authoring lint, and
+        this runtime boundary.
         """
-        base = requirement.split("==", 1)[0].split("[", 1)[0].strip()
-        return re.sub(r"[-_.]+", "-", base).lower()
-
-    def _allowed_requirement_names(self) -> set[str]:
-        raw = self.settings.sandbox_allowed_requirements or ""
-        names: set[str] = set()
-        for token in re.split(r"[,\s]+", raw):
-            normalized = self._dist_name(token) if token.strip() else ""
-            if normalized:
-                names.add(normalized)
-        return names
+        return normalize_requirement_name(requirement)
 
     async def _stage_requirements(
         self,
@@ -473,21 +471,22 @@ class WasmExecutor:
         requirements: list[str],
         workspace: Path,
         timeout_ms: int,
+        allowed_requirements: tuple[str, ...] = (),
     ) -> list[str]:
         normalized = [req.strip() for req in requirements if isinstance(req, str) and req.strip()]
         if not normalized:
             return []
-        # Deny-by-default: host pip runs OUTSIDE the wasm jail, so only operator-
-        # allowlisted distributions may be installed. This is enforced here (the
-        # security boundary), not just at authoring time.
-        allowed = self._allowed_requirement_names()
-        rejected = sorted({self._dist_name(req) for req in normalized} - allowed)
-        if rejected:
-            raise SandboxError(
-                "Code-tool requirement(s) not permitted by the sandbox allowlist: "
-                + ", ".join(rejected)
-                + ". An operator must add them to SANDBOX_ALLOWED_REQUIREMENTS."
-            )
+        # Deny-by-default boundary: host pip runs OUTSIDE the wasm jail, so this
+        # installs ONLY the tenant's effective allowlist (``tenant ∩ ceiling``,
+        # injected by the trusted caller) re-clamped to the operator ceiling. The
+        # split decision names who can unblock each rejected distribution.
+        decision = evaluate_requirements(
+            normalized,
+            tenant_allowlist=allowed_requirements,
+            settings=self.settings,
+        )
+        if not decision.ok:
+            raise SandboxError(decision.error_message())
         target = workspace / "site-packages"
         command = [
             self.python_bin,
@@ -623,6 +622,7 @@ class PooledWasmExecutor(WasmExecutor):
                         requirements=request.requirements,
                         workspace=temp_path,
                         timeout_ms=limits.wall_timeout_ms,
+                        allowed_requirements=request.allowed_requirements,
                     )
                     job_path.write_text(
                         json.dumps(self._job_payload(request, python_paths, limits)),

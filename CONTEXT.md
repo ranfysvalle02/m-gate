@@ -231,7 +231,12 @@ This is the fastest way to discover query shape while authoring tools.
 
 - Match function name to tool name.
 - Keep output JSON-serializable.
-- Pin requirements (`package==version`) when needed.
+- Pin requirements (`package==version`) when needed — but each package must also be
+  **allowed for your tenant**. The Functions Studio shows a chip per requirement:
+  green = installs, amber "awaiting operator" = in your tenant policy but not yet in the
+  platform ceiling, red "not allowed" = ask a tenant admin to add it under **Code
+  packages**. A tool with a disallowed package cannot be saved or run. Empty tenant policy
+  ⇒ standard library only.
 - Choose the narrowest correct `action_type`.
 - Use Explore Database to generate and validate query snippets.
 

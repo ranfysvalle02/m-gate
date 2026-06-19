@@ -922,6 +922,154 @@ def latest(user_id: str) -> dict:
         </div>
       </div>
 
+      <!-- ====================== Tenant code-package (pip) policy ============== -->
+      <div
+        class="modal-overlay"
+        x-show="state.codePkgPolicyOpen"
+        x-cloak
+        @click.self="closeCodePkgPolicy()"
+        @keydown.escape.window="closeCodePkgPolicy()"
+        x-transition:enter="modal-overlay-enter-active"
+        x-transition:enter-start="modal-overlay-enter-from"
+        x-transition:enter-end="modal-overlay-enter-to"
+        x-transition:leave="modal-overlay-leave-active"
+        x-transition:leave-start="modal-overlay-leave-from"
+        x-transition:leave-end="modal-overlay-leave-to"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="code-pkg-policy-title"
+      >
+        <div
+          class="modal-card"
+          x-show="state.codePkgPolicyOpen"
+          x-transition:enter="modal-card-enter-active"
+          x-transition:enter-start="modal-card-enter-from"
+          x-transition:enter-end="modal-card-enter-to"
+        >
+          <div class="modal-header">
+            <div>
+              <div class="modal-eyebrow">Tenant curation</div>
+              <h2 class="modal-title" id="code-pkg-policy-title">
+                Code packages — <span x-text="state.codePkgPolicyTenant"></span>
+              </h2>
+              <p class="modal-subtitle">
+                Choose which PyPI distributions this tenant's code tools may
+                install in the sandbox. What actually installs is this list
+                <strong>intersected with the platform ceiling</strong>
+                (<code>SANDBOX_ALLOWED_REQUIREMENTS</code>). An empty list means
+                standard library only.
+              </p>
+            </div>
+            <button type="button" class="modal-close" @click="closeCodePkgPolicy()" title="Close (Esc)" aria-label="Close">✕</button>
+          </div>
+
+          <div class="modal-body">
+            <template x-if="state.codePkgPolicyLoading">
+              <p class="text-sm text-slate-500">Loading policy…</p>
+            </template>
+
+            <template x-if="!state.codePkgPolicyLoading && state.codePkgPolicy">
+              <div class="space-y-4">
+                <template x-if="!state.codePkgPolicy.execution_enabled">
+                  <p class="policy-banner policy-banner-warn">
+                    Code-tool execution is disabled on this deployment
+                    (<code>CODE_TOOL_EXECUTION_ENABLED=false</code>). This policy is
+                    saved but has no effect until an operator enables execution.
+                  </p>
+                </template>
+                <template x-if="state.codePkgPolicy.execution_enabled && !state.codePkgPolicy.global_restricted">
+                  <p class="policy-banner policy-banner-warn">
+                    The platform ceiling
+                    (<code>SANDBOX_ALLOWED_REQUIREMENTS</code>) is empty, so
+                    <strong>no third-party packages can install for any tenant</strong>.
+                    A platform operator must set the ceiling before tenant entries
+                    take effect.
+                  </p>
+                </template>
+
+                <div class="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label class="field-label" for="code-pkg-allowlist"
+                      >Allowed packages
+                      <span class="field-hint">(one bare name per line)</span></label
+                    >
+                    <textarea
+                      id="code-pkg-allowlist"
+                      class="field-input font-mono text-xs"
+                      rows="8"
+                      x-model="state.codePkgPolicyText"
+                      placeholder="requests&#10;orjson&#10;pandas"
+                    ></textarea>
+                    <p class="field-hint mt-1">
+                      Bare distribution names only (no <code>==</code> pins or
+                      <code>[extras]</code>). The exact version is pinned per tool
+                      in its <em>Requirements</em>.
+                    </p>
+                    <button
+                      type="button"
+                      class="btn-primary mt-3"
+                      @click="saveCodePkgPolicy()"
+                      :disabled="state.codePkgPolicySaving"
+                      x-text="state.codePkgPolicySaving ? 'Saving…' : 'Save allowed packages'"
+                    ></button>
+                  </div>
+
+                  <div class="space-y-3">
+                    <div>
+                      <div class="field-label">This change (preview)</div>
+                      <div class="req-chips" x-show="codePkgPolicyPreview().length">
+                        <template x-for="entry in codePkgPolicyPreview()" :key="entry.name">
+                          <span
+                            class="req-chip"
+                            :class="entry.inCeiling ? 'req-chip-allowed' : 'req-chip-pending'"
+                            :title="entry.inCeiling ? `${entry.name} is within the platform ceiling and will install.` : `${entry.name} is not in the platform ceiling yet — saved, but it won't install until an operator allows it.`"
+                          >
+                            <span class="req-chip-dot"></span>
+                            <span x-text="entry.name"></span>
+                            <span class="req-chip-tag" x-show="!entry.inCeiling">awaiting operator</span>
+                          </span>
+                        </template>
+                      </div>
+                      <p class="text-xs text-slate-500" x-show="!codePkgPolicyPreview().length">
+                        No packages — code tools will be limited to the standard library.
+                      </p>
+                    </div>
+
+                    <div>
+                      <div class="field-label">Platform ceiling (read-only)</div>
+                      <div class="req-chips" x-show="(state.codePkgPolicy.global_ceiling || []).length">
+                        <template x-for="name in state.codePkgPolicy.global_ceiling" :key="`ceiling-${name}`">
+                          <span class="req-chip req-chip-neutral" :title="`${name} is allowed by the operator ceiling.`">
+                            <span class="req-chip-dot"></span>
+                            <span x-text="name"></span>
+                          </span>
+                        </template>
+                      </div>
+                      <p class="text-xs text-slate-500" x-show="!(state.codePkgPolicy.global_ceiling || []).length">
+                        Operator ceiling is empty.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <p class="text-xs text-slate-500">
+                  Effective now (saved):
+                  <template x-if="(state.codePkgPolicy.effective || []).length">
+                    <span>
+                      <template x-for="(name, i) in state.codePkgPolicy.effective" :key="`eff-${name}`">
+                        <span><code x-text="name"></code><span x-show="i < state.codePkgPolicy.effective.length - 1">, </span></span>
+                      </template>
+                    </span>
+                  </template>
+                  <span x-show="!(state.codePkgPolicy.effective || []).length"><strong>standard library only</strong></span>.
+                  Enforced consistently while authoring, on save, in the test run, and at runtime.
+                </p>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
       <!-- ============================ Legal, privacy & data =================== -->
       <div
         class="modal-overlay"

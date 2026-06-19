@@ -14,6 +14,9 @@ from fastapi.responses import StreamingResponse
 from models.admin import (
     EgressAllowlistResponse,
     EgressAllowlistUpdateRequest,
+    PipPolicyEntry,
+    PipPolicyResponse,
+    PipPolicyUpdateRequest,
     QuotaResponse,
     QuotaUpdateRequest,
     ServerEnvResponse,
@@ -40,6 +43,12 @@ from services.account_tier import (
 from services.code_tools import encrypt_raw_code
 from services.egress_policy import EgressNotAllowed, parse_allowlist
 from services.tenant_egress import set_tenant_egress_allowlist
+from services.tenant_pip_policy import (
+    PipPolicyError,
+    effective_allowlist,
+    global_ceiling_names,
+    set_tenant_pip_allowlist,
+)
 from services.tenant_provisioner import (
     deprovision_tenant,
     soft_delete_tenant,
@@ -560,6 +569,89 @@ async def put_egress_allowlist(
         },
     )
     return _egress_allowlist_response(target_tenant, doc)
+
+
+def _pip_policy_response(tenant_id: str, doc: dict[str, Any] | None) -> PipPolicyResponse:
+    stored = (doc or {}).get("code_requirements_allowlist")
+    allowlist = (
+        sorted(
+            {str(item).strip() for item in stored if isinstance(item, str) and str(item).strip()}
+        )
+        if isinstance(stored, list)
+        else []
+    )
+    ceiling = sorted(global_ceiling_names(settings))
+    ceiling_set = set(ceiling)
+    effective = effective_allowlist(allowlist, settings=settings)
+    return PipPolicyResponse(
+        tenant_id=tenant_id,
+        allowlist=allowlist,
+        global_ceiling=ceiling,
+        effective=effective,
+        entries=[
+            PipPolicyEntry(name=name, in_global_ceiling=name in ceiling_set) for name in allowlist
+        ],
+        global_restricted=bool(ceiling),
+        execution_enabled=bool(settings.code_tool_execution_enabled),
+        updated_at=(doc or {}).get("code_requirements_updated_at"),
+        updated_by=(doc or {}).get("code_requirements_updated_by"),
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/code-requirements",
+    response_model=PipPolicyResponse,
+)
+async def get_code_requirements_policy(request: Request, tenant_id: str) -> PipPolicyResponse:
+    # Read-only-safe (GET): tenant-admins may view their own code-package policy;
+    # cross-tenant still needs platform-admin via _resolve_target_tenant.
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    doc = await c.get_control_database()["tenants"].find_one({"tenant_id": target_tenant})
+    return _pip_policy_response(target_tenant, doc)
+
+
+@router.put(
+    "/tenants/{tenant_id}/code-requirements",
+    response_model=PipPolicyResponse,
+)
+async def put_code_requirements_policy(
+    request: Request,
+    tenant_id: str,
+    payload: PipPolicyUpdateRequest,
+) -> PipPolicyResponse:
+    # Curating the tenant's allowed packages is a tenant-admin operation, refused
+    # while the tenant is read-only (platform-admin bypasses, since they own the
+    # freeze and may need to re-curate it).
+    _require_tenant_admin(request)
+    target_tenant = _resolve_target_tenant(request, tenant_id)
+    await _require_tenant_writable(request, target_tenant)
+    actor = str(getattr(request.state, "user_id", "admin"))
+    try:
+        doc = await set_tenant_pip_allowlist(
+            target_tenant,
+            payload.allowlist,
+            updated_by=actor,
+        )
+    except PipPolicyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    if doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+    c.get_telemetry_logger().log_background(
+        tenant_id=target_tenant,
+        user_id=actor,
+        method="admin/tenants/code-requirements",
+        status="code_requirements_updated",
+        metadata={
+            "tenant_id": target_tenant,
+            "actor": actor,
+            "entries": len(payload.allowlist),
+        },
+    )
+    return _pip_policy_response(target_tenant, doc)
 
 
 @router.get(

@@ -106,6 +106,21 @@ require the `platform-admin` role.
     can only narrow the global ceiling). Egress is enforced when registering downstream
     `streamable_http`/`sse` servers (disallowed endpoints → `422`) and authoritatively at
     connect time with DNS re-resolution + IP pinning. Same RBAC scoping as the GET.
+  - `GET /admin/tenants/{tenant_id}/code-requirements` — the tenant's code-tool pip
+    policy: `{allowlist, global_ceiling, effective, entries, global_restricted,
+    execution_enabled, updated_at, updated_by}`, where `effective` is
+    `allowlist ∩ global_ceiling` (what actually installs) and `entries` annotates each
+    tenant entry with `in_global_ceiling`. Platform-admin for any tenant; tenant-admin
+    for their own.
+  - `PUT /admin/tenants/{tenant_id}/code-requirements` — replace the tenant's allowed
+    packages (`{"allowlist":["requests","orjson"]}`). Entries must be **bare distribution
+    names** (no `==` pins, `[extras]`, URLs, or paths); malformed entries return `422`.
+    The tenant list intersects with `SANDBOX_ALLOWED_REQUIREMENTS` (it can only narrow the
+    operator ceiling); an empty list means stdlib-only for that tenant. The intersection is
+    enforced consistently at authoring/validate (`POST /admin/code-tools/validate` returns
+    error issues for disallowed packages), on server save (`422`), in the sandbox test-run,
+    and at runtime (the install is refused with an actor-targeted message). Refused while
+    the tenant is read-only (platform-admin bypasses). Same RBAC scoping as the GET.
 - **Human-in-the-loop approvals** (tenant-admin or platform-admin required)
   - `GET /admin/actions?status=pending` — list pending/approved/rejected actions
     for the active tenant.
@@ -247,8 +262,11 @@ require the `platform-admin` role.
   - `GET /admin/whoami` — caller identity: `tenant_id`, `user_id`, `roles`,
     `scopes`, `is_platform_admin`, `auth_mode`, plus `is_read_only` (the caller is
     a read-only `viewer` principal) and `tenant_read_only` (the active tenant is
-    frozen — surfaced even to full admins). The console uses these to drive its
-    read-only banner and hide mutating affordances.
+    frozen — surfaced even to full admins). Also returns `confirmation` (tier) and
+    `code_requirements` — the tenant's effective pip policy
+    (`{effective, allowlist, global_ceiling, global_restricted, execution_enabled}`)
+    that drives the Functions Studio's per-requirement allow/deny chips. The console
+    uses these to drive its read-only banner and hide mutating affordances.
 - **Cache maintenance**
   - `POST /admin/cache/migrate`
 - **Embedding control plane** (`platform-admin` required)

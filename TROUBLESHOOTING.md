@@ -292,6 +292,50 @@ guesses. Each section includes:
 - `/health/ready` `checks.encryption` and `qe.error`
 - `HTTP 5xx Error Rate` during rollout
 
+## 12) Code tool blocked: requirement not permitted by the pip policy
+
+**Symptom**
+
+- Saving a code server returns `422`: `Tool '<name>': Code-tool requirement(s) ...`.
+- The Functions Studio shows an amber **"awaiting operator"** or red **"not allowed"**
+  chip under a tool's *Requirements*, and Save is blocked.
+- A `tools/call` (or the sandbox test-run) fails with `Code-tool requirement(s) not
+  permitted by the platform pip ceiling (SANDBOX_ALLOWED_REQUIREMENTS): ...` or `... not
+  in this tenant's code-package policy: ...`.
+
+**Why it happens**
+
+Code-tool dependencies are gated by a **two-gate, deny-by-default** allowlist (host `pip`
+runs outside the wasm jail). A package installs only when it is in **both**:
+
+- the **global operator ceiling** `SANDBOX_ALLOWED_REQUIREMENTS`, and
+- the **tenant allowlist** `code_requirements_allowlist`
+  (`PUT /admin/tenants/{id}/code-requirements`).
+
+The **effective** policy is the intersection. An empty tenant allowlist ⇒ stdlib-only,
+*even if the global ceiling is permissive*. (This is a breaking change from the previous
+global-only behavior: tenants must be opted in explicitly.) The error message names which
+gate blocked the package and who can unblock it.
+
+**How to fix**
+
+- **Red "not allowed" / "not in this tenant's code-package policy"** → a tenant admin adds
+  the bare distribution name under the console's **Code packages** editor (or
+  `PUT /admin/tenants/{id}/code-requirements`).
+- **Amber "awaiting operator" / "not permitted by the platform pip ceiling"** → a platform
+  operator adds the distribution to `SANDBOX_ALLOWED_REQUIREMENTS` and restarts; the tenant
+  entry then becomes effective.
+- Use bare names in the tenant allowlist (`requests`), and pin the exact version per tool
+  in its *Requirements* (`requests==2.32.3`). Wheels only — a package with no matching
+  wheel still fails at install with `Failed to install tool requirements`.
+- Policy changes take effect within `TENANT_STATUS_CACHE_TTL_SECONDS` across replicas
+  (immediately on the acting node); the console refreshes `whoami` on save.
+
+**What to watch**
+
+- `422` rate on `POST /admin/servers` and `POST /admin/code-tools/validate`.
+- `DownstreamError` on `tools/call` for `transport="code"` servers.
+
 ## Quick triage sequence
 
 1. Check gateway process health (`/health/live`).

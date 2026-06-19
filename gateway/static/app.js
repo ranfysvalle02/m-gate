@@ -183,6 +183,15 @@ window.adminConsole = function adminConsole(config) {
       toolPolicyMaxTools: 0,
       toolPolicyLoading: false,
       toolPolicySaving: false,
+      // Per-tenant code-package (pip) policy editor. The tenant allowlist is
+      // intersected with the operator ceiling (SANDBOX_ALLOWED_REQUIREMENTS) to
+      // decide what a code tool may install in the sandbox.
+      codePkgPolicyOpen: false,
+      codePkgPolicyTenant: "",
+      codePkgPolicy: null,
+      codePkgPolicyText: "",
+      codePkgPolicyLoading: false,
+      codePkgPolicySaving: false,
       serverComposerOpen: false,
       serverComposerMode: "create",
       serverWorkspace: {
@@ -1148,6 +1157,156 @@ window.adminConsole = function adminConsole(config) {
       } catch (error) {
         this.setError(error);
       }
+    },
+
+    // ---- Per-tenant code-package (pip) policy --------------------------------
+    async openCodePkgPolicy(tenantId) {
+      this.state.codePkgPolicyTenant = String(
+        tenantId || this.state.tenantId || "",
+      ).trim();
+      this.state.codePkgPolicyOpen = true;
+      await this.loadCodePkgPolicy(this.state.codePkgPolicyTenant);
+    },
+
+    closeCodePkgPolicy() {
+      this.state.codePkgPolicyOpen = false;
+      this.state.codePkgPolicy = null;
+      this.state.codePkgPolicyText = "";
+      this.state.codePkgPolicySaving = false;
+    },
+
+    async loadCodePkgPolicy(tenantId) {
+      this.state.codePkgPolicyLoading = true;
+      try {
+        const payload = await this.apiRequest(
+          `/admin/tenants/${encodeURIComponent(tenantId)}/code-requirements`,
+          { includeTenant: false },
+        );
+        this.state.codePkgPolicy = payload;
+        this.state.codePkgPolicyText = (payload.allowlist || []).join("\n");
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.codePkgPolicyLoading = false;
+      }
+    },
+
+    // Bare distribution names typed into the editor (newline/comma separated).
+    codePkgPolicyEntries() {
+      return String(this.state.codePkgPolicyText || "")
+        .split(/[\n,]/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    },
+
+    // Preview of how each typed entry will resolve against the operator ceiling,
+    // so an admin sees "awaiting operator" before saving.
+    codePkgPolicyPreview() {
+      const ceiling = new Set(
+        (this.state.codePkgPolicy?.global_ceiling || []).map((n) =>
+          this._normalizeReqName(n),
+        ),
+      );
+      const seen = new Set();
+      const out = [];
+      for (const raw of this.codePkgPolicyEntries()) {
+        const name = this._normalizeReqName(raw);
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        out.push({ name, inCeiling: ceiling.has(name) });
+      }
+      return out.sort((a, b) => a.name.localeCompare(b.name));
+    },
+
+    async saveCodePkgPolicy() {
+      const tenantId = this.state.codePkgPolicyTenant;
+      this.state.codePkgPolicySaving = true;
+      this.clearError();
+      try {
+        const payload = await this.apiRequest(
+          `/admin/tenants/${encodeURIComponent(tenantId)}/code-requirements`,
+          {
+            method: "PUT",
+            includeTenant: false,
+            body: { allowlist: this.codePkgPolicyEntries() },
+          },
+        );
+        this.state.codePkgPolicy = payload;
+        this.state.codePkgPolicyText = (payload.allowlist || []).join("\n");
+        this.notify(`Code-package policy saved for '${tenantId}'.`);
+        // Refresh whoami so the Functions Studio chips/contract reflect the new
+        // effective policy immediately when editing the caller's own tenant.
+        if (tenantId === this.state.whoami?.tenant_id) {
+          await this.loadWhoAmI();
+          for (const tool of this.forms.server?.tools || []) {
+            this.scheduleToolValidate(tool);
+          }
+        }
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.codePkgPolicySaving = false;
+      }
+    },
+
+    // ---- Functions Studio: effective pip policy + per-requirement chips ------
+    codePolicy() {
+      return (
+        this.state.whoami?.code_requirements || {
+          effective: [],
+          allowlist: [],
+          global_ceiling: [],
+          global_restricted: false,
+          execution_enabled: false,
+        }
+      );
+    },
+
+    // PEP 503 distribution-name normalization, mirroring the server so a chip's
+    // verdict matches exactly what the runtime install enforces.
+    _normalizeReqName(spec) {
+      const base = String(spec || "")
+        .split("==")[0]
+        .split("[")[0]
+        .trim();
+      return base.replace(/[-_.]+/g, "-").toLowerCase();
+    },
+
+    // One chip per requirement line: allowed (installs), pending (in tenant
+    // policy but awaiting the operator ceiling), or blocked (tenant must add it).
+    requirementChips(tool) {
+      const policy = this.codePolicy();
+      const effective = new Set(
+        (policy.effective || []).map((n) => this._normalizeReqName(n)),
+      );
+      const tenantList = new Set(
+        (policy.allowlist || []).map((n) => this._normalizeReqName(n)),
+      );
+      return this._requirementLines(tool).map((spec) => {
+        const name = this._normalizeReqName(spec);
+        if (effective.has(name)) {
+          return {
+            spec,
+            name,
+            status: "allowed",
+            title: `${name} is allowed for this tenant — it installs in the sandbox.`,
+          };
+        }
+        if (tenantList.has(name)) {
+          return {
+            spec,
+            name,
+            status: "pending",
+            title: `${name} is in this tenant's policy but not the platform ceiling yet — a platform operator must allow it in SANDBOX_ALLOWED_REQUIREMENTS.`,
+          };
+        }
+        return {
+          spec,
+          name,
+          status: "blocked",
+          title: `${name} is not in this tenant's code-package policy — a tenant admin must add it before this tool can run.`,
+        };
+      });
     },
 
     async toggleServerEnabled(server) {

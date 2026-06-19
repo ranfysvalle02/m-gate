@@ -111,6 +111,12 @@ def patch_mongo(monkeypatch, fake_db):
 
     tenant_egress.reset_tenant_egress_cache()
 
+    # The per-tenant code-package (pip) allowlist cache is process-global; clear it
+    # so a tenant's allowed packages never leak across tests.
+    import services.tenant_pip_policy as tenant_pip_policy
+
+    tenant_pip_policy.reset_tenant_pip_policy_cache()
+
     # The active embedding config/service is process-global; reset it so tests that
     # exercise provisioning/identity start from the env defaults backed by the fake.
     import services.embedding_config as embedding_config
@@ -138,6 +144,7 @@ def patch_mongo(monkeypatch, fake_db):
         "services.tenant_status",
         "services.tenant_tool_policy",
         "services.tenant_egress",
+        "services.tenant_pip_policy",
         "services.account_tier",
         "services.registration",
         "gateway.middleware.rbac",

@@ -18,7 +18,7 @@ iterates the bounded tenant list and merges the per-tenant buckets in memory.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Query, Request
 
@@ -60,7 +60,7 @@ _TELEMETRY_ERROR_REGEX = (
 
 def _analytics_scope(
     request: Request, requested_tenant: str | None
-) -> tuple[str, list[str] | None]:
+) -> tuple[Literal["platform", "tenant"], list[str] | None]:
     """Resolve (scope, tenant_ids) for an analytics request.
 
     Returns ``("platform", None)`` for a platform-admin with no explicit tenant

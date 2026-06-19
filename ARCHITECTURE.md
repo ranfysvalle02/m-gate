@@ -149,7 +149,7 @@ Execution modes:
 Isolation model:
 
 - each job runs with resource bounds (fuel, memory, wall timeout, output cap)
-- requirements install is allowlist-gated and wheel-only
+- requirements install is two-gate allowlisted (operator ceiling ∩ tenant policy) and wheel-only
 - per-call temp workspace
 - protocol-framed worker responses with strict validation
 

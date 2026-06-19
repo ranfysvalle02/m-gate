@@ -36,6 +36,7 @@ from services.sandbox_executor import (
 )
 from services.sandbox_tool_bridge import ToolCallDenied, ToolInvoker
 from services.server_guard import assert_mountable
+from services.tenant_pip_policy import get_effective_pip_allowlist
 from services.tracing import set_span_attribute, start_span
 from services.usage_metering import emit_billing_event, record_usage
 
@@ -439,6 +440,14 @@ class InMemoryFastMCPRegistry:
             caller=caller,
             call_depth=call_depth,
         )
+        # Resolve the tenant's effective pip policy (``tenant ∩ global_ceiling``)
+        # here, on the trusted host, and hand it to the executor — which installs
+        # nothing outside it. Cached, so it adds no round trip once warm.
+        allowed_requirements = (
+            tuple(await get_effective_pip_allowlist(server.tenant_id, settings=self.settings))
+            if requirements
+            else ()
+        )
         request = ExecRequest(
             tenant_id=server.tenant_id,
             server=server.server,
@@ -450,6 +459,7 @@ class InMemoryFastMCPRegistry:
             action_type=str(metadata.get("action_type") or "read"),
             tool_invoker=tool_invoker,
             call_depth=call_depth,
+            allowed_requirements=allowed_requirements,
         )
         timeout_seconds = self.settings.sandbox_wall_timeout_ms / 1000
         try:
