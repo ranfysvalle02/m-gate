@@ -2,6 +2,11 @@ fastapi==0.136.3
 jinja2==3.1.6
 uvicorn[standard]==0.49.0
 fastmcp==3.4.2
+# Pin the MCP SDK explicitly. fastmcp 3.4.2 requires mcp>=1.24.0,<2.0; leaving it
+# unpinned let it drift to 1.23.3 locally, which dropped `streamable_http_client`
+# and broke `import fastmcp` (and thus every router-level test) at collection time.
+# An exact pin keeps the transitive SDK deterministic and in-range.
+mcp==1.28.0
 pymongo[encryption]==4.17.0
 pydantic==2.13.4
 pydantic-settings==2.14.1

@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Bug Fixes
+- **Pinned the MCP SDK to stop a transitive dependency skew.** `fastmcp==3.4.2` requires `mcp>=1.24.0,<2.0`, but `mcp` was never pinned, so environments drifted to `mcp 1.23.3` — a version that dropped `streamable_http_client`, which `fastmcp` imports at module load. The result was an `ImportError` on `import fastmcp` that made every router-level test fail at *collection* time (the suite couldn't even start). `requirements.txt` now pins `mcp==1.28.0` (the latest in-range release) so the SDK pair is deterministic and the full unit suite collects and runs.
 - **Severe Server Deadlock (MCP streaming).** Fixed a catastrophic deadlock that froze the entire `uvicorn` event loop and pegged the CPU at 100% when an MCP client connected via Server-Sent Events (SSE). The deadlock occurred because `GuardrailsMiddleware` wrapped the ASGI `receive` channel with an immediate-return payload, causing `sse-starlette`'s disconnect-monitoring loop to spin infinitely without yielding to the async loop. Streaming `/mcp` endpoints now bypass the body-buffering guardrails entirely.
 - **MongoDB QE Timeout in Rate Limiter.** Rate limit clock synchronization via `mongo_server_now()` now correctly leverages the QE-bypass client. This prevents timeout errors (`ServerSelectionTimeoutError`) when Queryable Encryption's query analysis attempts to parse the `hostInfo` command.
 
