@@ -13,127 +13,199 @@
     <link rel="stylesheet" href="/static/styles.css?v={{ asset_version | default('dev') }}" />
   </head>
   <body class="theme-dark">
-    <div class="auth-shell theme-dark">
-      <div class="auth-card card">
-        <div class="auth-brand">
-          <div class="brand-chip">
-            <svg class="brand-leaf" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 1.6c1.9 3.4 5.6 6.9 5.6 12.1 0 3.3-2.2 5.7-4.8 6.4l-.5 2.3h-.6l-.5-2.3c-2.6-.7-4.8-3.1-4.8-6.4C6.4 8.5 10.1 5 12 1.6z" />
-            </svg>
+    <div class="auth-shell theme-dark auth-shell-wide">
+      <main class="auth-split">
+        <!-- Left column: why you should sign up. -->
+        <section class="auth-pitch">
+          <div class="auth-brand">
+            <div class="brand-chip">
+              <svg class="brand-leaf" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 1.6c1.9 3.4 5.6 6.9 5.6 12.1 0 3.3-2.2 5.7-4.8 6.4l-.5 2.3h-.6l-.5-2.3c-2.6-.7-4.8-3.1-4.8-6.4C6.4 8.5 10.1 5 12 1.6z" />
+              </svg>
+            </div>
+            <div>
+              <div class="brand-kicker">m-gate</div>
+              <div class="brand-title">MCP Gateway</div>
+            </div>
           </div>
-          <div>
-            <div class="brand-kicker">m-gate</div>
-            <h1 class="brand-title">Create your beta account</h1>
+
+          <span class="auth-pitch-eyebrow">
+            <span class="auth-pitch-pulse" aria-hidden="true"></span>
+            Open beta · free to join
+          </span>
+          <h2 class="auth-headline">From no MCP to MCP magic in minutes.</h2>
+          <p class="auth-subhead">
+            Paste a Python function. We lint it, encrypt it at rest, run it
+            sandboxed in WebAssembly, and expose it as a real MCP tool behind one
+            endpoint — no Dockerfile, no deploy, no infra to babysit.
+          </p>
+
+          <div class="auth-pitch-code" aria-hidden="true">
+            <div class="auth-pitch-code-head">
+              <span class="auth-pitch-code-dot"></span>
+              <span class="auth-pitch-code-dot"></span>
+              <span class="auth-pitch-code-dot"></span>
+              <span class="auth-pitch-code-cap">word_count.py</span>
+            </div>
+            <pre><span class="tk-key">def</span> <span class="tk-def">word_count</span>(text: <span class="tk-type">str</span>) -&gt; <span class="tk-type">dict</span>:
+    words = [w <span class="tk-key">for</span> w <span class="tk-key">in</span> text.split() <span class="tk-key">if</span> w]
+    <span class="tk-key">return</span> {<span class="tk-str">"words"</span>: len(words), <span class="tk-str">"characters"</span>: len(text)}</pre>
           </div>
-        </div>
 
-        <p class="auth-lede">
-          Sign up for the open beta. Your account starts
-          <strong>unconfirmed</strong>: code-only tools, capped at 1 server / 1
-          tool with a small quota. A platform admin can confirm you to lift the
-          limits.
-        </p>
-
-        <!-- The sign-up form (hidden once an account is created). -->
-        <div id="register-pane">
-          <div id="register-error" class="error-banner" style="display: none"></div>
-          <form id="register-form" class="auth-form" autocomplete="on">
-            <div>
-              <label class="field-label" for="email">Email</label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                required
-                class="field-input"
-                placeholder="you@example.com"
-                autocomplete="username"
-              />
-            </div>
-            <div>
-              <label class="field-label" for="password">Password</label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                required
-                minlength="{{ min_password_length }}"
-                class="field-input"
-                autocomplete="new-password"
-              />
-              <p class="field-hint">
-                At least {{ min_password_length }} characters.
-              </p>
-            </div>
-            <div>
-              <label class="field-label" for="confirm">Confirm password</label>
-              <input
-                id="confirm"
-                name="confirm"
-                type="password"
-                required
-                class="field-input"
-                autocomplete="new-password"
-              />
-            </div>
-            <label class="consent-row" for="agree">
-              <input id="agree" name="agree" type="checkbox" class="consent-check" required />
+          <ul class="auth-pitch-list">
+            <li class="auth-pitch-item">
+              <span class="auth-pitch-icon" aria-hidden="true">⚡</span>
               <span>
-                I agree to the
-                <a href="{{ ui_path }}/terms" target="_blank" rel="noopener">Terms of Use</a>
-                and
-                <a href="{{ ui_path }}/privacy" target="_blank" rel="noopener">Privacy Policy</a>,
-                and I understand this is a beta service provided "as is".
+                <strong>Real tools, not config.</strong> Your function is instantly
+                discoverable and callable over MCP — an agent can use it the moment
+                you hit save.
               </span>
-            </label>
-            <button id="register-submit" type="submit" class="btn-primary auth-submit">
-              Create account
-            </button>
-          </form>
-          <p class="auth-alt">
-            Already have an account?
-            <a class="link-btn" href="{{ ui_path }}/login">Sign in</a>
-          </p>
-          <p class="auth-legal">
-            <a href="{{ ui_path }}/terms" target="_blank" rel="noopener">Terms of Use</a>
-            &nbsp;·&nbsp;
-            <a href="{{ ui_path }}/privacy" target="_blank" rel="noopener">Privacy Policy</a>
-          </p>
-        </div>
+            </li>
+            <li class="auth-pitch-item">
+              <span class="auth-pitch-icon" aria-hidden="true">🔐</span>
+              <span>
+                <strong>Batteries-included <code>context</code>.</strong>
+                Tenant-scoped <code>context.db</code>, encrypted
+                <code>context.env</code>, sibling <code>context.tools</code>, and
+                opt-in <code>context.http</code> — zero credentials in your code.
+              </span>
+            </li>
+            <li class="auth-pitch-item">
+              <span class="auth-pitch-icon" aria-hidden="true">🔎</span>
+              <span>
+                <strong>Sharp at scale.</strong> One endpoint aggregates every
+                tool, and hybrid search on MongoDB Atlas keeps routing precise as
+                your catalog grows.
+              </span>
+            </li>
+            <li class="auth-pitch-item">
+              <span class="auth-pitch-icon" aria-hidden="true">📦</span>
+              <span>
+                <strong>No lock-in.</strong> Export any server as a runnable
+                FastMCP project (.zip), fully wired up.
+              </span>
+            </li>
+          </ul>
 
-        <!-- Success: token + tenant + ready-to-paste mcp.json (hidden initially). -->
-        <div id="register-success" style="display: none">
-          <div class="success-banner">
-            ✓ Account created. You're in the beta — your account is
-            <strong>unconfirmed</strong> for now.
-          </div>
-          <dl class="auth-facts">
-            <div>
-              <dt>Tenant</dt>
-              <dd><code id="result-tenant"></code></dd>
-            </div>
-            <div>
-              <dt>Tier</dt>
-              <dd><span class="cpill cpill-unconfirmed" id="result-tier">⏳ unconfirmed</span></dd>
-            </div>
-          </dl>
-
-          <div class="code-block">
-            <div class="code-head">
-              <span class="code-cap">~/.cursor/mcp.json</span>
-              <button type="button" class="code-copy" id="copy-mcp">Copy</button>
-            </div>
-            <pre id="result-mcp"></pre>
-          </div>
-          <p class="field-hint">
-            This bearer token is shown once. Paste the snippet into your MCP
-            client, then reload it to see the gateway's tools.
+          <p class="auth-trust">
+            <span aria-hidden="true">🛡️</span>
+            Network-isolated sandbox · fuel, memory &amp; wall-clock bounded ·
+            secrets encrypted at rest.
           </p>
-          <a class="btn-primary auth-submit" href="{{ ui_path }}/login">
-            Continue to sign in
-          </a>
+        </section>
+
+        <!-- Right column: the sign-up form. -->
+        <div class="auth-card card auth-card-form">
+          <h1 class="auth-form-title">Create your beta account</h1>
+
+          <p class="auth-lede">
+            Sign up for the open beta. Your account starts
+            <strong>unconfirmed</strong>: code-only tools, capped at 1 server / 1
+            tool with a small quota. A platform admin can confirm you to lift the
+            limits.
+          </p>
+
+          <!-- The sign-up form (hidden once an account is created). -->
+          <div id="register-pane">
+            <div id="register-error" class="error-banner" style="display: none"></div>
+            <form id="register-form" class="auth-form" autocomplete="on">
+              <div>
+                <label class="field-label" for="email">Email</label>
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  required
+                  class="field-input"
+                  placeholder="you@example.com"
+                  autocomplete="username"
+                />
+              </div>
+              <div>
+                <label class="field-label" for="password">Password</label>
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  required
+                  minlength="{{ min_password_length }}"
+                  class="field-input"
+                  autocomplete="new-password"
+                />
+                <p class="field-hint">
+                  At least {{ min_password_length }} characters.
+                </p>
+              </div>
+              <div>
+                <label class="field-label" for="confirm">Confirm password</label>
+                <input
+                  id="confirm"
+                  name="confirm"
+                  type="password"
+                  required
+                  class="field-input"
+                  autocomplete="new-password"
+                />
+              </div>
+              <label class="consent-row" for="agree">
+                <input id="agree" name="agree" type="checkbox" class="consent-check" required />
+                <span>
+                  I agree to the
+                  <a href="{{ ui_path }}/terms" target="_blank" rel="noopener">Terms of Use</a>
+                  and
+                  <a href="{{ ui_path }}/privacy" target="_blank" rel="noopener">Privacy Policy</a>,
+                  and I understand this is a beta service provided "as is".
+                </span>
+              </label>
+              <button id="register-submit" type="submit" class="btn-primary auth-submit">
+                Create account
+              </button>
+            </form>
+            <p class="auth-alt">
+              Already have an account?
+              <a class="link-btn" href="{{ ui_path }}/login">Sign in</a>
+            </p>
+            <p class="auth-legal">
+              <a href="{{ ui_path }}/terms" target="_blank" rel="noopener">Terms of Use</a>
+              &nbsp;·&nbsp;
+              <a href="{{ ui_path }}/privacy" target="_blank" rel="noopener">Privacy Policy</a>
+            </p>
+          </div>
+
+          <!-- Success: token + tenant + ready-to-paste mcp.json (hidden initially). -->
+          <div id="register-success" style="display: none">
+            <div class="success-banner">
+              ✓ Account created. You're in the beta — your account is
+              <strong>unconfirmed</strong> for now.
+            </div>
+            <dl class="auth-facts">
+              <div>
+                <dt>Tenant</dt>
+                <dd><code id="result-tenant"></code></dd>
+              </div>
+              <div>
+                <dt>Tier</dt>
+                <dd><span class="cpill cpill-unconfirmed" id="result-tier">⏳ unconfirmed</span></dd>
+              </div>
+            </dl>
+
+            <div class="code-block">
+              <div class="code-head">
+                <span class="code-cap">~/.cursor/mcp.json</span>
+                <button type="button" class="code-copy" id="copy-mcp">Copy</button>
+              </div>
+              <pre id="result-mcp"></pre>
+            </div>
+            <p class="field-hint">
+              This bearer token is shown once. Paste the snippet into your MCP
+              client, then reload it to see the gateway's tools.
+            </p>
+            <a class="btn-primary auth-submit" href="{{ ui_path }}/login">
+              Continue to sign in
+            </a>
+          </div>
         </div>
-      </div>
+      </main>
     </div>
 
     <script>

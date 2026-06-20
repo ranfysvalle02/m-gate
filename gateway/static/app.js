@@ -196,6 +196,11 @@ window.adminConsole = function adminConsole(config) {
       codePkgPolicySaving: false,
       serverComposerOpen: false,
       serverComposerMode: "create",
+      // Function Studio (full-screen code-tool editor) view state. The inspector
+      // (right settings panel) is open by default; the bottom dock (Test /
+      // Problems) is closed until the author opens it or runs a test.
+      fnInspectorOpen: true,
+      fnDock: null,
       serverWorkspace: {
         open: false,
         server: "",
@@ -2092,6 +2097,43 @@ window.adminConsole = function adminConsole(config) {
       this.$nextTick(() => this.refreshCodeEditors());
     },
 
+    // --- Function Studio (full-screen code-tool editor) ----------------------
+    // True when the immersive studio should be on screen: the code-tool composer
+    // is open and the workspace is on the Tools tab. Drives the body scroll lock
+    // and chrome-hiding class on the app shell.
+    fnStudioActive() {
+      return (
+        this.state.serverComposerOpen &&
+        this.workspaceTabIs("tools") &&
+        this.serverKindIsCode()
+      );
+    },
+
+    toggleFnInspector() {
+      this.state.fnInspectorOpen = !this.state.fnInspectorOpen;
+      // The editor width changes when the inspector slides in/out, so let
+      // CodeMirror recompute its layout after the DOM settles.
+      this.$nextTick(() => this._measureCodeEditors());
+    },
+
+    setFnDock(tab) {
+      this.state.fnDock = this.state.fnDock === tab ? null : tab;
+      this.$nextTick(() => this._measureCodeEditors());
+    },
+
+    // Ask every live CodeMirror view to re-measure. Used after layout shifts
+    // (inspector/dock toggles, entering the studio) so the editor never renders
+    // against a stale width/height.
+    _measureCodeEditors() {
+      for (const view of Object.values(this._codeEditors || {})) {
+        try {
+          view.requestMeasure();
+        } catch (_) {
+          // A torn-down view can throw; safe to ignore.
+        }
+      }
+    },
+
     // Back-compat shims (older callers); both now select a single function.
     toggleTool(localId) {
       this.selectTool(localId);
@@ -3349,6 +3391,8 @@ window.adminConsole = function adminConsole(config) {
 
     async runToolTest(tool) {
       this.clearError();
+      // Surface the run in the studio's bottom dock so the result is visible.
+      this.state.fnDock = "test";
       const serverName = String(this.forms.server.server || "").trim();
       if (!serverName) {
         this.setError("Set a server name before running a function test.");

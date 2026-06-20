@@ -57,7 +57,7 @@
   <body>
     <div
       class="app-shell theme-dark"
-      :class="isDarkTheme() ? 'theme-dark' : 'theme-light'"
+      :class="{ 'theme-dark': isDarkTheme(), 'theme-light': !isDarkTheme(), 'fn-focus': fnStudioActive() }"
       x-data='adminConsole({
         uiPath: "{{ ui_path }}",
         defaultTenantId: "{{ default_tenant_id }}",

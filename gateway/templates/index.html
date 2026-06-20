@@ -1264,7 +1264,7 @@
     class="server-composer space-y-4"
     @submit.prevent="saveServer()"
   >
-    <div class="builder-head">
+    <div class="builder-head" x-show="!serverKindIsCode()">
       <div
         class="builder-title"
         x-text="state.serverComposerMode === 'edit' ? 'Edit MCP server' : 'Create MCP server'"
@@ -1277,7 +1277,7 @@
         Done editing
       </button>
     </div>
-    <div class="mb-2">
+    <div class="mb-2" x-show="!serverKindIsCode()">
       <div class="segment-ctrl">
         <button
           type="button"
@@ -1305,7 +1305,7 @@
       ></p>
     </div>
 
-    <div class="grid gap-4 md:grid-cols-2">
+    <div class="grid gap-4 md:grid-cols-2" x-show="!serverKindIsCode()">
       <div>
         <label class="field-label"
           >Server name
@@ -1370,195 +1370,116 @@
     </div>
 
     <template x-if="serverKindIsCode()">
-      <div class="studio-panel space-y-4">
-        <ol class="studio-steps" aria-label="How to build a virtual MCP tool">
-          <li class="studio-step">
-            <span class="studio-step-num">1</span>
-            <span class="studio-step-text"
-              >Name the server <span class="studio-step-sub">above</span></span
-            >
-          </li>
-          <li class="studio-step-arrow" aria-hidden="true">→</li>
-          <li class="studio-step">
-            <span class="studio-step-num">2</span>
-            <span class="studio-step-text"
-              >Write &amp; test a function
-              <button
-                type="button"
-                class="studio-step-link"
-                @click="openExampleGallery()"
-              >
-                start from an example</button
-              ></span
-            >
-          </li>
-          <li class="studio-step-arrow" aria-hidden="true">→</li>
-          <li class="studio-step">
-            <span class="studio-step-num">3</span>
-            <span class="studio-step-text"
-              >Save to expose it as a real MCP tool</span
-            >
-          </li>
-        </ol>
-
-        <div class="builder-head">
-          <div>
-            <div class="builder-title">Tools in this server</div>
-            <div
-              class="builder-sub"
-              x-text="`${forms.server.tools.length} function${forms.server.tools.length === 1 ? '' : 's'} · sandboxed Python, exposed as MCP tools`"
-            ></div>
-          </div>
-          <div class="builder-actions">
+      <div
+        class="fn-studio"
+        :class="{ 'fn-studio--inspector': state.fnInspectorOpen, 'fn-studio--dock': !!state.fnDock }"
+      >
+        <header class="fn-studio-topbar">
+          <div class="fn-studio-bar-group">
             <button
               type="button"
-              class="btn-secondary"
+              class="fn-studio-exit"
+              @click="closeServerWorkspace()"
+              title="Exit the function studio"
+            >
+              <span class="fn-studio-exit-arrow" aria-hidden="true">‹</span> Exit
+            </button>
+            <span class="fn-studio-divider" aria-hidden="true"></span>
+            <div class="fn-studio-server">
+              <span
+                class="fn-studio-server-tag"
+                x-text="state.serverComposerMode === 'edit' ? 'Editing' : 'New server'"
+              ></span>
+              <input
+                class="fn-studio-server-input"
+                x-model="forms.server.server"
+                @input="forms.server.server = (forms.server.server || '').toLowerCase().replace(/\s+/g, '-')"
+                placeholder="my-tools"
+                required
+                aria-label="Server name"
+              />
+              <button
+                type="button"
+                class="fn-studio-kind-link"
+                x-show="state.serverComposerMode === 'create'"
+                @click="chooseServerKind('connect')"
+                title="Connect an MCP server you already run instead"
+              >
+                Advanced: connect existing
+              </button>
+            </div>
+            <nav class="fn-studio-tabs" aria-label="Server workspace">
+              <button type="button" class="fn-studio-tab fn-studio-tab-active">
+                Tools
+              </button>
+              <button
+                type="button"
+                class="fn-studio-tab"
+                @click="setWorkspaceTab('search')"
+              >
+                Search
+              </button>
+              <button
+                type="button"
+                class="fn-studio-tab"
+                :disabled="!dbExploreEnabled()"
+                :title="dbExploreEnabled() ? 'Read-only tenant data explorer' : 'Virtual DB bridge is off — set SANDBOX_DB_BRIDGE_ENABLED=true'"
+                @click="setWorkspaceTab('exploreDb')"
+              >
+                Explore DB
+              </button>
+              <button
+                type="button"
+                class="fn-studio-tab"
+                @click="setWorkspaceTab('secrets')"
+              >
+                Secrets
+              </button>
+            </nav>
+          </div>
+          <div class="fn-studio-bar-group">
+            <button
+              type="button"
+              class="fn-studio-ghost"
               @click="openExampleGallery()"
               title="Browse runnable starter functions and drop one into the editor"
             >
-              ✨ Start from example
+              <span aria-hidden="true">✨</span> Example
             </button>
+            <button
+              type="button"
+              class="fn-studio-ghost"
+              x-show="selectedWorkspaceServer()?.transport === 'code'"
+              :disabled="state.exportingServer"
+              @click="exportServer()"
+              title="Download a runnable FastMCP project (.zip) with all of this server's tools wired up"
+              x-text="state.exportingServer ? 'Packaging…' : '⬇ Export'"
+            ></button>
+            <button
+              type="button"
+              class="fn-studio-ghost"
+              @click="resetServerForm()"
+              title="Discard unsaved changes"
+            >
+              Reset
+            </button>
+            <span class="fn-studio-divider" aria-hidden="true"></span>
+            <button
+              type="submit"
+              class="btn-primary fn-studio-save"
+              :disabled="!canSaveServer()"
+              :title="saveBlockedReason() || 'Save (Cmd/Ctrl+S)'"
+              x-text="state.serverComposerMode === 'edit' ? 'Save' : 'Save server'"
+            ></button>
           </div>
-        </div>
-
-        <template x-if="alwaysIncludedCount() > recommendedAlwaysIncludedMax">
-          <div class="lint-hints lint-hints-advisory">
-            <div class="lint-title">
-              <span>Always-included tools</span>
-              <span class="lint-count" x-text="alwaysIncludedCount()"></span>
-            </div>
-            <ul>
-              <li class="lint-item-warn">
-                <span class="lint-dot lint-dot-warn" aria-hidden="true"></span>
-                <span
-                  x-text="`Each always-included tool is pinned into every search result and spends the agent's context budget on every call. Recommended max is ${recommendedAlwaysIncludedMax}.`"
-                ></span>
-              </li>
-            </ul>
+        </header>
+        <template x-if="!canSaveServer() && saveBlockedReason()">
+          <div class="fn-studio-blocked">
+            <span aria-hidden="true">⚠</span>
+            <span x-text="saveBlockedReason()"></span>
           </div>
         </template>
-
-        <div class="contract-card">
-          <div class="contract-head">
-            <span class="contract-title">Sandbox contract</span>
-            <span class="contract-sub"
-              >Checked automatically — what you see here is what Save
-              enforces.</span
-            >
-          </div>
-          <ul class="contract-grid">
-            <li>
-              <span class="contract-key">Exceptions &amp; builtins</span>
-              <span class="contract-val"
-                >No import needed —
-                <code>raise ValueError("bad input")</code>,
-                <code>len()</code>, <code>dict()</code> all just work.</span
-              >
-            </li>
-            <li>
-              <span class="contract-key">Standard library</span>
-              <span class="contract-val"
-                >Just <code>import</code> it — <code>json</code>,
-                <code>math</code>, <code>datetime</code>, <code>re</code>,
-                <code>statistics</code>… (blocked: <code>os</code>,
-                <code>sys</code>, <code>subprocess</code>,
-                <code>socket</code>, …).</span
-              >
-            </li>
-            <li>
-              <span class="contract-key">Third-party packages</span>
-              <span class="contract-val">
-                <template x-if="(codePolicy().effective || []).length">
-                  <span
-                    >Allowed for this tenant:
-                    <template
-                      x-for="(name, i) in codePolicy().effective"
-                      :key="name"
-                    >
-                      <span
-                        ><code x-text="name"></code
-                        ><span
-                          x-show="i < codePolicy().effective.length - 1"
-                          >, </span
-                        ></span
-                      > </template
-                    >. Pin each in <em>Requirements</em> as
-                    <code>package==1.2.3</code> (one per line). No network at
-                    runtime.</span
-                  >
-                </template>
-                <template x-if="!(codePolicy().effective || []).length">
-                  <span
-                    >No third-party packages are allowed for this tenant yet —
-                    <strong>standard library only</strong>.<button
-                      type="button"
-                      class="ei-link ml-1"
-                      x-show="state.whoami?.is_platform_admin"
-                      @click="openCodePkgPolicy(state.whoami?.tenant_id)"
-                    >
-                      Allow packages</button
-                    ><span x-show="!state.whoami?.is_platform_admin"
-                      >&nbsp;A platform admin can allow packages.</span
-                    ></span
-                  >
-                </template>
-              </span>
-            </li>
-            <li>
-              <span class="contract-key">Network / egress</span>
-              <span class="contract-val">
-                <template x-if="!httpPolicy().enabled">
-                  <span
-                    >No network — <code>context.http</code> is off for this
-                    deployment. Code is fully network-isolated.</span
-                  >
-                </template>
-                <template
-                  x-if="httpPolicy().enabled && (httpPolicy().effective || []).length"
-                >
-                  <span
-                    ><code>context.http</code> may reach (https only,
-                    deny-by-default):
-                    <template
-                      x-for="(host, i) in httpPolicy().effective"
-                      :key="host"
-                    >
-                      <span
-                        ><code x-text="host"></code
-                        ><span
-                          x-show="i < httpPolicy().effective.length - 1"
-                          >, </span
-                        ></span
-                      > </template
-                    >. Use
-                    <code>context.http.get(url, auth="ENV_KEY")</code> — the
-                    secret is injected host-side and never enters your
-                    code.</span
-                  >
-                </template>
-                <template
-                  x-if="httpPolicy().enabled && !(httpPolicy().effective || []).length"
-                >
-                  <span
-                    >Outbound HTTP is <strong>deny-by-default</strong> — no host
-                    is allowlisted for this tenant yet. A tenant admin can add
-                    hosts to the egress allowlist before
-                    <code>context.http</code> can reach them.</span
-                  >
-                </template>
-              </span>
-            </li>
-            <li>
-              <span class="contract-key">Your function</span>
-              <span class="contract-val"
-                >Name must equal the tool name, take the input-schema fields as
-                arguments, and <code>return</code> JSON-serializable data. 64KB
-                max source.</span
-              >
-            </li>
-          </ul>
-        </div>
-
+        <div class="fn-studio-body">
         <div class="fn-workbench">
           <aside class="fn-rail">
             <div class="fn-rail-head">
@@ -1687,21 +1608,111 @@
                       >
                     </template>
                   </div>
-                  <button
-                    type="button"
-                    class="icon-btn icon-btn-danger"
-                    @click="removeToolFromServer(tool.local_id)"
-                    :disabled="forms.server.tools.length <= 1"
-                    title="Delete function"
-                  >
-                    Delete
-                  </button>
+                  <div class="fn-pane-actions">
+                    <button
+                      type="button"
+                      class="fn-tool-btn"
+                      @click="openContextHelp('overview')"
+                      title="See what the context object gives your code"
+                    >
+                      <span aria-hidden="true">✦</span> Context
+                    </button>
+                    <button
+                      type="button"
+                      class="fn-tool-btn"
+                      :class="!dbExploreEnabled() ? 'is-disabled' : (tool.explore_open ? 'is-active' : '')"
+                      :disabled="!dbExploreEnabled()"
+                      :title="dbExploreEnabled() ? 'Browse tenant collections and build a context.db snippet' : 'Virtual DB bridge is off — set SANDBOX_DB_BRIDGE_ENABLED=true to explore tenant data'"
+                      @click="toggleExplore(tool)"
+                    >
+                      <span aria-hidden="true">🗄️</span> Explore DB
+                    </button>
+                    <button
+                      type="button"
+                      class="fn-tool-btn"
+                      :class="tool.tools_open ? 'is-active' : ''"
+                      @click="toggleToolPalette(tool)"
+                      title="Call another tool in this tenant from your code"
+                    >
+                      <span aria-hidden="true">🧩</span> Call a tool
+                    </button>
+                    <span class="fn-pane-actions-sep" aria-hidden="true"></span>
+                    <button
+                      type="button"
+                      class="fn-tool-btn"
+                      :class="state.fnInspectorOpen ? 'is-active' : ''"
+                      :aria-pressed="state.fnInspectorOpen"
+                      @click="toggleFnInspector()"
+                      title="Toggle function settings"
+                    >
+                      <span aria-hidden="true">⚙</span> Settings
+                    </button>
+                    <button
+                      type="button"
+                      class="fn-tool-btn"
+                      :class="state.fnDock === 'test' ? 'is-active' : ''"
+                      :aria-pressed="state.fnDock === 'test'"
+                      @click="setFnDock('test')"
+                      title="Run this function in the sandbox"
+                    >
+                      <span aria-hidden="true">▶</span> Test
+                    </button>
+                    <button
+                      type="button"
+                      class="fn-tool-btn"
+                      :class="state.fnDock === 'problems' ? 'is-active' : ''"
+                      :aria-pressed="state.fnDock === 'problems'"
+                      @click="setFnDock('problems')"
+                      title="Validation problems"
+                    >
+                      Problems
+                      <template
+                        x-if="(toolErrorCount(tool) + toolWarningCount(tool)) > 0"
+                      >
+                        <span
+                          class="fn-tool-badge"
+                          :class="toolErrorCount(tool) > 0 ? 'fn-tool-badge-err' : 'fn-tool-badge-warn'"
+                          x-text="toolErrorCount(tool) + toolWarningCount(tool)"
+                        ></span>
+                      </template>
+                    </button>
+                    <button
+                      type="button"
+                      class="icon-btn icon-btn-danger"
+                      @click="removeToolFromServer(tool.local_id)"
+                      :disabled="forms.server.tools.length <= 1"
+                      title="Delete function"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
 
             <div class="fn-body">
-              <div class="grid gap-6 md:grid-cols-12">
-                <!-- Config Column -->
-                <div class="md:col-span-4 space-y-4">
+              <div class="fn-pane-row">
+                <aside
+                  class="fn-inspector"
+                  x-show="state.fnInspectorOpen"
+                  x-transition:enter="fn-trans-right"
+                  x-transition:enter-start="fn-trans-right-from"
+                  x-transition:enter-end="fn-trans-right-to"
+                  x-transition:leave="fn-trans-right"
+                  x-transition:leave-start="fn-trans-right-to"
+                  x-transition:leave-end="fn-trans-right-from"
+                >
+                  <div class="fn-inspector-scroll">
+                  <div class="fn-inspector-head">
+                    <span class="fn-inspector-title">Settings</span>
+                    <button
+                      type="button"
+                      class="fn-inspector-close"
+                      @click="toggleFnInspector()"
+                      title="Hide settings"
+                      aria-label="Hide settings"
+                    >
+                      ✕
+                    </button>
+                  </div>
                   <div>
                     <label class="field-label">Function name</label
                     ><input
@@ -1856,10 +1867,6 @@
                       </template>
                     </p>
                   </div>
-                </div>
-
-                <!-- Code & Test Column -->
-                <div class="md:col-span-8 flex flex-col gap-4">
                   <div>
                     <label class="field-label">Description</label
                     ><input
@@ -1868,94 +1875,171 @@
                       placeholder="What this function does"
                     />
                   </div>
-
-                  <div class="flex flex-col flex-1 min-h-[300px]">
-                    <div class="flex items-end justify-between mb-1.5">
-                      <label class="field-label !mb-0">Python source</label>
-                      <div class="flex items-center gap-2">
-                        <button
-                          type="button"
-                          class="schema-sync"
-                          @click="openContextHelp('overview')"
-                          title="See what the context object gives your code"
-                        >
-                          ✦ What is context?
-                        </button>
-                        <button
-                          type="button"
-                          class="schema-sync"
-                          :class="!dbExploreEnabled() ? 'schema-sync-disabled' : ''"
-                          :disabled="!dbExploreEnabled()"
-                          :title="dbExploreEnabled() ? 'Browse tenant collections and build a context.db snippet' : 'Virtual DB bridge is off — set SANDBOX_DB_BRIDGE_ENABLED=true to explore tenant data'"
-                          @click="toggleExplore(tool)"
-                          x-text="tool.explore_open ? 'Hide DB explorer' : 'Explore database'"
-                        ></button>
-                        <button
-                          type="button"
-                          class="schema-sync"
-                          @click="toggleToolPalette(tool)"
-                          title="Call another tool in this tenant from your code"
-                          x-text="tool.tools_open ? 'Hide tool palette' : '🧩 Call a tool'"
-                        ></button>
-                        <span class="field-hint">Cmd/Ctrl+S to save</span>
-                      </div>
-                    </div>
-                    <p class="studio-cap-note" x-show="!dbExploreEnabled()">
-                      <span aria-hidden="true">🗄️</span>
+                  <template
+                    x-if="alwaysIncludedCount() > recommendedAlwaysIncludedMax"
+                  >
+                    <div class="fn-inspector-note fn-inspector-note-warn">
                       <span
-                        >DB explorer is off — <code>context.db</code> needs the
-                        virtual DB bridge. Set
-                        <code>SANDBOX_DB_BRIDGE_ENABLED=true</code> to browse
-                        collections here.</span
-                      >
-                    </p>
+                        class="lint-dot lint-dot-warn"
+                        aria-hidden="true"
+                      ></span>
+                      <span
+                        x-text="`${alwaysIncludedCount()} always-included tools — each is pinned into every search result and spends the agent's context budget on every call. Recommended max is ${recommendedAlwaysIncludedMax}.`"
+                      ></span>
+                    </div>
+                  </template>
+                  <details class="fn-contract">
+                    <summary class="fn-contract-summary">
+                      <span aria-hidden="true">🔒</span>
+                      <span>Sandbox contract</span>
+                      <span class="fn-contract-hint">what Save enforces</span>
+                    </summary>
+                    <ul class="contract-grid">
+                      <li>
+                        <span class="contract-key">Exceptions &amp; builtins</span>
+                        <span class="contract-val"
+                          >No import needed —
+                          <code>raise ValueError("bad input")</code>,
+                          <code>len()</code>, <code>dict()</code> all just
+                          work.</span
+                        >
+                      </li>
+                      <li>
+                        <span class="contract-key">Standard library</span>
+                        <span class="contract-val"
+                          >Just <code>import</code> it — <code>json</code>,
+                          <code>math</code>, <code>datetime</code>,
+                          <code>re</code>, <code>statistics</code>… (blocked:
+                          <code>os</code>, <code>sys</code>,
+                          <code>subprocess</code>, <code>socket</code>,
+                          …).</span
+                        >
+                      </li>
+                      <li>
+                        <span class="contract-key">Third-party packages</span>
+                        <span class="contract-val">
+                          <template x-if="(codePolicy().effective || []).length">
+                            <span
+                              >Allowed for this tenant:
+                              <template
+                                x-for="(name, i) in codePolicy().effective"
+                                :key="name"
+                              >
+                                <span
+                                  ><code x-text="name"></code
+                                  ><span
+                                    x-show="i < codePolicy().effective.length - 1"
+                                    >, </span
+                                  ></span
+                                > </template
+                              >. Pin each in <em>Requirements</em> as
+                              <code>package==1.2.3</code> (one per line). No
+                              network at runtime.</span
+                            >
+                          </template>
+                          <template
+                            x-if="!(codePolicy().effective || []).length"
+                          >
+                            <span
+                              >No third-party packages are allowed for this tenant
+                              yet — <strong>standard library only</strong>.<button
+                                type="button"
+                                class="ei-link ml-1"
+                                x-show="state.whoami?.is_platform_admin"
+                                @click="openCodePkgPolicy(state.whoami?.tenant_id)"
+                              >
+                                Allow packages</button
+                              ><span x-show="!state.whoami?.is_platform_admin"
+                                >&nbsp;A platform admin can allow packages.</span
+                              ></span
+                            >
+                          </template>
+                        </span>
+                      </li>
+                      <li>
+                        <span class="contract-key">Network / egress</span>
+                        <span class="contract-val">
+                          <template x-if="!httpPolicy().enabled">
+                            <span
+                              >No network — <code>context.http</code> is off for
+                              this deployment. Code is fully
+                              network-isolated.</span
+                            >
+                          </template>
+                          <template
+                            x-if="httpPolicy().enabled && (httpPolicy().effective || []).length"
+                          >
+                            <span
+                              ><code>context.http</code> may reach (https only,
+                              deny-by-default):
+                              <template
+                                x-for="(host, i) in httpPolicy().effective"
+                                :key="host"
+                              >
+                                <span
+                                  ><code x-text="host"></code
+                                  ><span
+                                    x-show="i < httpPolicy().effective.length - 1"
+                                    >, </span
+                                  ></span
+                                > </template
+                              >. Use
+                              <code>context.http.get(url, auth="ENV_KEY")</code> —
+                              the secret is injected host-side and never enters
+                              your code.</span
+                            >
+                          </template>
+                          <template
+                            x-if="httpPolicy().enabled && !(httpPolicy().effective || []).length"
+                          >
+                            <span
+                              >Outbound HTTP is
+                              <strong>deny-by-default</strong> — no host is
+                              allowlisted for this tenant yet. A tenant admin can
+                              add hosts to the egress allowlist before
+                              <code>context.http</code> can reach them.</span
+                            >
+                          </template>
+                        </span>
+                      </li>
+                      <li>
+                        <span class="contract-key">Your function</span>
+                        <span class="contract-val"
+                          >Name must equal the tool name, take the input-schema
+                          fields as arguments, and <code>return</code>
+                          JSON-serializable data. 64KB max source.</span
+                        >
+                      </li>
+                    </ul>
+                  </details>
+                  </div>
+                </aside>
+
+                <div class="fn-stage">
+                  <div class="fn-stage-editor">
                     <div
-                      class="code-editor-host field-input flex-1 !p-0"
+                      class="code-editor-host field-input !p-0"
                       :data-code-editor-host="tool.local_id"
                     ></div>
                     <textarea
-                      class="field-input font-mono text-sm flex-1"
+                      class="field-input font-mono text-sm"
                       rows="12"
                       x-model="tool.raw_code"
                       :data-code-editor-fallback="tool.local_id"
                       placeholder="def get_weather(city: str) -> dict:&#10;    ..."
                       style="display: none"
                     ></textarea>
-                    <p class="editor-imports">
-                      <span class="ei-key">Imports</span>
-                      <span
-                        >Builtins &amp; exceptions need
-                        <strong>no import</strong> —
-                        <code>raise ValueError("…")</code></span
-                      >
-                      <span class="ei-sep">·</span>
-                      <span
-                        >Standard library: just
-                        <code>import json</code>, <code>math</code>,
-                        <code>datetime</code>…</span
-                      >
-                      <span class="ei-sep">·</span>
-                      <span
-                        >Third-party → add to
-                        <strong>Requirements</strong> (e.g.
-                        <code>httpx==0.27.0</code>)</span
-                      >
-                      <span class="ei-sep">·</span>
-                      <span
-                        ><strong>context:</strong>
-                        <code>context.db</code> &amp;
-                        <code>context.env</code> —
-                        <button
-                          type="button"
-                          class="ei-link"
-                          @click="openContextHelp('overview')"
-                        >
-                          see the magic</button
-                        >.</span
-                      >
-                    </p>
 
-                    <div class="explore-drawer" x-show="tool.tools_open" x-transition.opacity>
+                    <div
+                      class="explore-drawer fn-slideover"
+                      x-show="tool.tools_open"
+                      x-transition:enter="fn-trans-up"
+                      x-transition:enter-start="fn-trans-up-from"
+                      x-transition:enter-end="fn-trans-up-to"
+                      x-transition:leave="fn-trans-up"
+                      x-transition:leave-start="fn-trans-up-to"
+                      x-transition:leave-end="fn-trans-up-from"
+                    >
                       <div class="explore-head">
                         <span class="explore-title">🧩 Callable tools</span>
                         <span class="field-hint"
@@ -2039,7 +2123,16 @@
                       </div>
                     </div>
 
-                    <div class="explore-drawer" x-show="tool.explore_open" x-transition.opacity>
+                    <div
+                      class="explore-drawer fn-slideover"
+                      x-show="tool.explore_open"
+                      x-transition:enter="fn-trans-up"
+                      x-transition:enter-start="fn-trans-up-from"
+                      x-transition:enter-end="fn-trans-up-to"
+                      x-transition:leave="fn-trans-up"
+                      x-transition:leave-start="fn-trans-up-to"
+                      x-transition:leave-end="fn-trans-up-from"
+                    >
                       <div class="explore-head">
                         <span class="explore-title">Explore Database</span>
                         <span
@@ -2162,6 +2255,53 @@
                     </div>
                   </div>
 
+                  <div
+                    class="fn-dock"
+                    x-show="!!state.fnDock"
+                    x-transition:enter="fn-trans-up"
+                    x-transition:enter-start="fn-trans-up-from"
+                    x-transition:enter-end="fn-trans-up-to"
+                    x-transition:leave="fn-trans-up"
+                    x-transition:leave-start="fn-trans-up-to"
+                    x-transition:leave-end="fn-trans-up-from"
+                  >
+                    <div class="fn-dock-tabs">
+                      <button
+                        type="button"
+                        class="fn-dock-tab"
+                        :class="state.fnDock === 'test' ? 'fn-dock-tab-active' : ''"
+                        @click="state.fnDock = 'test'"
+                      >
+                        <span aria-hidden="true">▶</span> Test
+                      </button>
+                      <button
+                        type="button"
+                        class="fn-dock-tab"
+                        :class="state.fnDock === 'problems' ? 'fn-dock-tab-active' : ''"
+                        @click="state.fnDock = 'problems'"
+                      >
+                        Problems
+                        <template
+                          x-if="(toolErrorCount(tool) + toolWarningCount(tool)) > 0"
+                        >
+                          <span
+                            class="fn-tool-badge"
+                            :class="toolErrorCount(tool) > 0 ? 'fn-tool-badge-err' : 'fn-tool-badge-warn'"
+                            x-text="toolErrorCount(tool) + toolWarningCount(tool)"
+                          ></span>
+                        </template>
+                      </button>
+                      <button
+                        type="button"
+                        class="fn-dock-close"
+                        @click="state.fnDock = null"
+                        title="Hide panel"
+                        aria-label="Hide panel"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div class="fn-dock-panel" x-show="state.fnDock === 'test'">
                   <div class="grid gap-4 md:grid-cols-2">
                     <div>
                       <div class="flex items-end justify-between mb-1.5">
@@ -2325,9 +2465,11 @@
                       </template>
                     </div>
                   </div>
-                </div>
-              </div>
-
+                    </div>
+                    <div
+                      class="fn-dock-panel fn-dock-panel-problems"
+                      x-show="state.fnDock === 'problems'"
+                    >
               <template x-if="toolIssues(tool).length > 0">
                 <div
                   class="lint-hints"
@@ -2392,15 +2534,27 @@
                   ready to save.
                 </div>
               </template>
+              <template
+                x-if="toolIssues(tool).length === 0 && !(tool.raw_code || '').trim()"
+              >
+                <div class="fn-dock-empty">
+                  No problems yet — start writing your function.
+                </div>
+              </template>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
               </article>
             </template>
           </div>
         </div>
+        </div>
       </div>
     </template>
 
-    <div class="save-bar">
+    <div class="save-bar" x-show="!serverKindIsCode()">
       <div class="flex items-center gap-2">
         <button
           type="submit"
