@@ -1837,6 +1837,20 @@ textarea.field-input {
   transform: translateY(-1px);
 }
 
+/* "Draft with AI" gets a filled-accent treatment so it reads as the primary
+   authoring affordance among the toolbar's ghost buttons. Mirrors .btn-primary's
+   tokens so contrast stays correct in both themes. */
+.schema-sync-ai {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: var(--btn-primary-text);
+}
+
+.schema-sync-ai:hover {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  filter: brightness(1.05);
+}
+
 .lint-ok {
   display: flex;
   align-items: center;
@@ -3325,6 +3339,54 @@ textarea.field-input {
   line-height: 1.55;
   color: var(--text-primary);
   tab-size: 2;
+}
+
+/* ---- Draft with AI modal --------------------------------------------- */
+/* The generated prompt is long; cap it and scroll instead of stretching the
+   modal. Wrap so long host/package lines stay readable. */
+.ai-prompt-pre {
+  max-height: 22rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-constraints {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin: 0.4rem 0 0.9rem;
+}
+
+.ai-constraint-row {
+  display: grid;
+  grid-template-columns: 9.5rem 1fr;
+  gap: 0.6rem;
+  align-items: start;
+}
+
+.ai-constraint-key {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-top: 0.18rem;
+}
+
+.ai-constraint-val,
+.ai-chip-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 1rem;
 }
 
 .spec-table {
