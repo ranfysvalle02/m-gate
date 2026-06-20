@@ -128,6 +128,10 @@ class CodeToolTestResponse(BaseModel):
     result: dict[str, Any] | None = None
     elapsed_ms: float | None = None
     error: str | None = None
+    # Captured sandbox console streams, so the workbench can show print()/log
+    # output and diagnostics for an easy debug loop. Capped server-side.
+    stdout: str | None = None
+    stderr: str | None = None
 
 
 class CodeToolValidateRequest(BaseModel):
@@ -493,6 +497,22 @@ class HttpEgressPolicySummary(BaseModel):
     default_deny: bool = True
 
 
+class SandboxBridgesSummary(BaseModel):
+    """Which host-mediated sandbox bridges are enabled for this deployment.
+
+    Lets the Functions Studio gate affordances on the *real* server flag instead
+    of discovering a disabled bridge only after a failed call: e.g. the DB
+    explorer is shown disabled (not broken) when ``db_bridge_enabled`` is false.
+    """
+
+    # context.db / the read-only Explore Database surface.
+    db_bridge_enabled: bool = False
+    # context.tools cross-tool composition.
+    tool_bridge_enabled: bool = False
+    # context.http outbound egress (mirrors http_egress.enabled for convenience).
+    http_bridge_enabled: bool = False
+
+
 class WhoAmIResponse(BaseModel):
     tenant_id: str
     user_id: str
@@ -514,6 +534,9 @@ class WhoAmIResponse(BaseModel):
         default_factory=CodeRequirementsPolicySummary
     )
     http_egress: HttpEgressPolicySummary = Field(default_factory=HttpEgressPolicySummary)
+    # Which sandbox bridges this deployment enables, so the Studio can disable
+    # (and explain) capability-off affordances up front instead of failing late.
+    sandbox: SandboxBridgesSummary = Field(default_factory=SandboxBridgesSummary)
     auth_mode: Literal["hs256", "jwks"]
 
 

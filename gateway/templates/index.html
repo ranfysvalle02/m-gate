@@ -468,6 +468,8 @@
         type="button"
         class="workspace-tab"
         :class="workspaceTabIs('exploreDb') ? 'workspace-tab-active' : ''"
+        :disabled="!dbExploreEnabled()"
+        :title="dbExploreEnabled() ? 'Read-only tenant data explorer' : 'Virtual DB bridge is off — set SANDBOX_DB_BRIDGE_ENABLED=true to explore tenant data'"
         @click="setWorkspaceTab('exploreDb')"
       >
         Explore DB
@@ -560,7 +562,20 @@
       <p class="text-sm text-slate-500">
         Queries run against the active tenant and selected server workspace.
       </p>
-      <template x-if="state.workspaceExplore">
+      <template x-if="!dbExploreEnabled()">
+        <div class="studio-cap-banner">
+          <span aria-hidden="true">🗄️</span>
+          <div>
+            <div class="studio-cap-banner-title">DB explorer is off</div>
+            <div class="studio-cap-banner-sub">
+              The read-only data explorer uses the virtual DB bridge. Set
+              <code>SANDBOX_DB_BRIDGE_ENABLED=true</code> on the gateway to
+              browse collections and build <code>context.db</code> snippets.
+            </div>
+          </div>
+        </div>
+      </template>
+      <template x-if="dbExploreEnabled() &amp;&amp; state.workspaceExplore">
         <div class="explore-drawer">
           <div class="explore-head">
             <span class="explore-title">Database Explorer</span>
@@ -1299,6 +1314,7 @@
         <input
           class="field-input"
           x-model="forms.server.server"
+          @input="forms.server.server = (forms.server.server || '').toLowerCase().replace(/\s+/g, '-')"
           placeholder="my-tools"
           required
         />
@@ -1355,6 +1371,36 @@
 
     <template x-if="serverKindIsCode()">
       <div class="studio-panel space-y-4">
+        <ol class="studio-steps" aria-label="How to build a virtual MCP tool">
+          <li class="studio-step">
+            <span class="studio-step-num">1</span>
+            <span class="studio-step-text"
+              >Name the server <span class="studio-step-sub">above</span></span
+            >
+          </li>
+          <li class="studio-step-arrow" aria-hidden="true">→</li>
+          <li class="studio-step">
+            <span class="studio-step-num">2</span>
+            <span class="studio-step-text"
+              >Write &amp; test a function
+              <button
+                type="button"
+                class="studio-step-link"
+                @click="openExampleGallery()"
+              >
+                start from an example</button
+              ></span
+            >
+          </li>
+          <li class="studio-step-arrow" aria-hidden="true">→</li>
+          <li class="studio-step">
+            <span class="studio-step-num">3</span>
+            <span class="studio-step-text"
+              >Save to expose it as a real MCP tool</span
+            >
+          </li>
+        </ol>
+
         <div class="builder-head">
           <div>
             <div class="builder-title">Tools in this server</div>
@@ -1367,7 +1413,8 @@
             <button
               type="button"
               class="btn-secondary"
-              @click="loadExampleTool()"
+              @click="openExampleGallery()"
+              title="Browse runnable starter functions and drop one into the editor"
             >
               ✨ Start from example
             </button>
@@ -1837,6 +1884,9 @@
                         <button
                           type="button"
                           class="schema-sync"
+                          :class="!dbExploreEnabled() ? 'schema-sync-disabled' : ''"
+                          :disabled="!dbExploreEnabled()"
+                          :title="dbExploreEnabled() ? 'Browse tenant collections and build a context.db snippet' : 'Virtual DB bridge is off — set SANDBOX_DB_BRIDGE_ENABLED=true to explore tenant data'"
                           @click="toggleExplore(tool)"
                           x-text="tool.explore_open ? 'Hide DB explorer' : 'Explore database'"
                         ></button>
@@ -1850,6 +1900,15 @@
                         <span class="field-hint">Cmd/Ctrl+S to save</span>
                       </div>
                     </div>
+                    <p class="studio-cap-note" x-show="!dbExploreEnabled()">
+                      <span aria-hidden="true">🗄️</span>
+                      <span
+                        >DB explorer is off — <code>context.db</code> needs the
+                        virtual DB bridge. Set
+                        <code>SANDBOX_DB_BRIDGE_ENABLED=true</code> to browse
+                        collections here.</span
+                      >
+                    </p>
                     <div
                       class="code-editor-host field-input flex-1 !p-0"
                       :data-code-editor-host="tool.local_id"
@@ -2156,14 +2215,23 @@
                           :class="getToolTestResult(tool.local_id).ok ? 'test-ok' : 'test-fail'"
                         >
                           <template x-if="getToolTestResult(tool.local_id).ok">
-                            <div class="space-y-0.5">
+                            <div class="space-y-1">
                               <div class="flex justify-between items-center">
                                 <div class="test-title text-xs">Passed</div>
-                                <div
-                                  class="text-[10px] opacity-70"
-                                  x-show="getToolTestResult(tool.local_id).elapsed_ms != null"
-                                  x-text="`${Number(getToolTestResult(tool.local_id).elapsed_ms).toFixed(1)}ms`"
-                                ></div>
+                                <div class="flex items-center gap-2">
+                                  <span
+                                    class="text-[10px] opacity-70"
+                                    x-show="getToolTestResult(tool.local_id).elapsed_ms != null"
+                                    x-text="`${Number(getToolTestResult(tool.local_id).elapsed_ms).toFixed(1)}ms`"
+                                  ></span>
+                                  <button
+                                    type="button"
+                                    class="schema-sync"
+                                    @click="copyText(JSON.stringify(getToolTestResult(tool.local_id).result || {}, null, 2), 'result', $event)"
+                                  >
+                                    Copy
+                                  </button>
+                                </div>
                               </div>
                               <pre
                                 class="test-output !mt-0 !bg-transparent !border-0 !p-0 !max-h-24 !text-[11px]"
@@ -2172,12 +2240,58 @@
                             </div>
                           </template>
                           <template x-if="!getToolTestResult(tool.local_id).ok">
-                            <div class="space-y-0.5">
-                              <div class="test-title text-xs">Failed</div>
-                              <div
-                                class="text-[11px]"
+                            <div class="space-y-1">
+                              <div class="flex justify-between items-center">
+                                <div class="test-title text-xs">Failed</div>
+                                <button
+                                  type="button"
+                                  class="schema-sync"
+                                  @click="copyText(getToolTestResult(tool.local_id).error || 'Unknown error', 'error', $event)"
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                              <pre
+                                class="test-output test-error-output !mt-0 !bg-transparent !border-0 !p-0 !max-h-32 !text-[11px]"
                                 x-text="getToolTestResult(tool.local_id).error || 'Unknown error'"
-                              ></div>
+                              ></pre>
+                            </div>
+                          </template>
+
+                          <template x-if="getToolTestResult(tool.local_id).stdout">
+                            <div class="console-block">
+                              <div class="console-head">
+                                <span class="console-cap">stdout</span>
+                                <button
+                                  type="button"
+                                  class="schema-sync"
+                                  @click="copyText(getToolTestResult(tool.local_id).stdout, 'stdout', $event)"
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                              <pre
+                                class="console-stream"
+                                x-text="getToolTestResult(tool.local_id).stdout"
+                              ></pre>
+                            </div>
+                          </template>
+                          <template x-if="getToolTestResult(tool.local_id).stderr">
+                            <div class="console-block">
+                              <div class="console-head">
+                                <span class="console-cap console-cap-err">stderr</span>
+                                <button
+                                  type="button"
+                                  class="schema-sync"
+                                  @click="copyText(getToolTestResult(tool.local_id).stderr, 'stderr', $event)"
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                              <pre
+                                class="console-stream console-stream-err"
+                                x-text="getToolTestResult(tool.local_id).stderr"
+                              ></pre>
                             </div>
                           </template>
                         </div>
@@ -3655,6 +3769,80 @@
         </div>
       </div>
     </template>
+  </div>
+</div>
+
+<div
+  class="modal-overlay"
+  x-show="state.exampleGalleryOpen"
+  x-cloak
+  @click.self="closeExampleGallery()"
+  @keydown.escape.window="closeExampleGallery()"
+  x-transition:enter="modal-overlay-enter-active"
+  x-transition:enter-start="modal-overlay-enter-from"
+  x-transition:enter-end="modal-overlay-enter-to"
+  x-transition:leave="modal-overlay-leave-active"
+  x-transition:leave-start="modal-overlay-leave-from"
+  x-transition:leave-end="modal-overlay-leave-to"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="example-gallery-title"
+>
+  <div class="modal-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-eyebrow">Functions Studio</div>
+        <h2 class="modal-title" id="example-gallery-title">
+          Start from an example
+        </h2>
+        <p class="modal-subtitle">
+          Each starter is a complete, sandbox-safe function — drop one in, press
+          <strong>Run</strong>, then <strong>Save</strong> to expose it as a real
+          MCP tool. Examples that need a capability your gateway hasn't enabled
+          are dimmed.
+        </p>
+      </div>
+      <button
+        type="button"
+        class="modal-close"
+        @click="closeExampleGallery()"
+        aria-label="Close"
+      >
+        ✕
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="example-grid">
+        <template x-for="example in exampleLibrary()" :key="example.id">
+          <button
+            type="button"
+            class="example-card"
+            :class="!exampleAvailable(example) ? 'example-card-disabled' : ''"
+            :disabled="!exampleAvailable(example)"
+            :title="exampleAvailable(example) ? 'Add this function to the editor' : exampleNeedLabel(example)"
+            @click="applyExample(example.id)"
+          >
+            <div class="example-card-head">
+              <code class="example-card-name" x-text="example.tool.name"></code>
+              <span
+                class="action-badge"
+                :class="`action-${example.tool.action_type || 'read'}`"
+                x-text="example.tool.action_type || 'read'"
+              ></span>
+            </div>
+            <div class="example-card-label" x-text="example.label"></div>
+            <p class="example-card-blurb" x-text="example.blurb"></p>
+            <div
+              class="example-card-need"
+              :class="exampleAvailable(example) ? 'example-need-ok' : 'example-need-off'"
+            >
+              <span aria-hidden="true" x-text="exampleAvailable(example) ? '✓' : '🔒'"></span>
+              <span x-text="exampleNeedLabel(example)"></span>
+            </div>
+          </button>
+        </template>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

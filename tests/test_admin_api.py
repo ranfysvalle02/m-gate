@@ -385,6 +385,8 @@ async def test_test_code_tool_endpoint_executes_and_returns_payload(patch_mongo,
     class _Result:
         payload = {"ok": True, "echo": "Lisbon"}
         elapsed_ms = 8.4
+        stdout = "debugging Lisbon\n"
+        stderr = ""
 
     class _Executor:
         async def run(self, request):
@@ -411,6 +413,9 @@ async def test_test_code_tool_endpoint_executes_and_returns_payload(patch_mongo,
     )
     assert response.ok is True
     assert response.result == {"ok": True, "echo": "Lisbon"}
+    # Console streams are surfaced for the debug loop; empty streams collapse to None.
+    assert response.stdout == "debugging Lisbon\n"
+    assert response.stderr is None
 
 
 @pytest.mark.asyncio
@@ -1643,6 +1648,32 @@ async def test_whoami_http_egress_defaults_disabled_when_bridge_off(patch_mongo,
 
 
 @pytest.mark.asyncio
+async def test_whoami_reports_enabled_sandbox_bridges(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    monkeypatch.setattr(admin.settings, "sandbox_db_bridge_enabled", True, raising=False)
+    monkeypatch.setattr(admin.settings, "sandbox_tool_bridge_enabled", True, raising=False)
+    monkeypatch.setattr(admin.settings, "sandbox_http_bridge_enabled", True, raising=False)
+    response = await admin.who_am_i(_Req(tenant_id="tenant-a", roles=["admin"]))
+    assert response.sandbox.db_bridge_enabled is True
+    assert response.sandbox.tool_bridge_enabled is True
+    assert response.sandbox.http_bridge_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_whoami_sandbox_bridges_default_disabled(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    monkeypatch.setattr(admin.settings, "sandbox_db_bridge_enabled", False, raising=False)
+    monkeypatch.setattr(admin.settings, "sandbox_tool_bridge_enabled", False, raising=False)
+    monkeypatch.setattr(admin.settings, "sandbox_http_bridge_enabled", False, raising=False)
+    response = await admin.who_am_i(_Req(tenant_id="tenant-a", roles=["admin"]))
+    assert response.sandbox.db_bridge_enabled is False
+    assert response.sandbox.tool_bridge_enabled is False
+    assert response.sandbox.http_bridge_enabled is False
+
+
+@pytest.mark.asyncio
 async def test_register_server_blocked_by_global_allowlist(patch_mongo, monkeypatch):
     import gateway.routers.admin as admin
     import services.egress_policy as egress_policy
@@ -2016,6 +2047,8 @@ async def test_test_code_tool_injects_effective_allowlist(patch_mongo, monkeypat
     class _Result:
         payload = {"sum": 3}
         elapsed_ms = 1.0
+        stdout = ""
+        stderr = ""
 
     seen = {}
 

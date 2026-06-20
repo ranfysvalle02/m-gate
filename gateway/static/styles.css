@@ -4285,3 +4285,274 @@ textarea.field-input {
     scroll-behavior: auto !important;
   }
 }
+
+/* --------------------------------------------------------------------------- */
+/*  Functions Studio: capability-off affordances                              */
+/* --------------------------------------------------------------------------- */
+
+/* A studio pill button (schema-sync) shown but disabled when its host bridge
+   is off — reads as intentional, not broken. */
+.schema-sync-disabled,
+.schema-sync:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(0.4);
+}
+
+.schema-sync-disabled:hover,
+.schema-sync:disabled:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  transform: none;
+}
+
+.workspace-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* One-line inline note under the editor toolbar explaining a disabled bridge. */
+.studio-cap-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0.1rem 0 0.4rem;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.studio-cap-note code {
+  font-size: 0.7rem;
+}
+
+/* Full disabled-state banner inside the Explore DB panel. */
+.studio-cap-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+  border-radius: var(--radius-sm);
+  padding: 0.8rem 0.95rem;
+}
+
+.studio-cap-banner-title {
+  font-weight: 700;
+  font-size: 0.86rem;
+  color: var(--text-primary);
+}
+
+.studio-cap-banner-sub {
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+/* --------------------------------------------------------------------------- */
+/*  Functions Studio: 3-step guide strip                                      */
+/* --------------------------------------------------------------------------- */
+.studio-steps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.8rem;
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-soft) 30%, transparent);
+}
+
+.studio-step {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+}
+
+.studio-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  flex: none;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--surface);
+  background: var(--accent);
+}
+
+.studio-step-sub {
+  color: var(--text-secondary);
+}
+
+.studio-step-arrow {
+  color: color-mix(in srgb, var(--accent) 70%, var(--text-secondary));
+  font-weight: 700;
+}
+
+.studio-step-link {
+  margin-left: 0.3rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-primary));
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.studio-step-link:hover {
+  color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------- */
+/*  Example gallery (Start from example)                                      */
+/* --------------------------------------------------------------------------- */
+.example-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.8rem;
+}
+
+.example-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  text-align: left;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.example-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.example-card-disabled,
+.example-card:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: grayscale(0.5);
+}
+
+.example-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.example-card .example-card-name {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+.example-card-label {
+  font-size: 0.84rem;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.example-card .example-card-blurb {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.example-card-need {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: auto;
+  padding-top: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.example-need-ok {
+  color: color-mix(in srgb, var(--success) 74%, var(--text-primary));
+}
+
+.example-need-off {
+  color: color-mix(in srgb, var(--warning) 80%, var(--text-primary));
+}
+
+/* --------------------------------------------------------------------------- */
+/*  Sandbox test: console output + error block                                */
+/* --------------------------------------------------------------------------- */
+.test-error-output {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  color: color-mix(in srgb, var(--danger) 84%, var(--text-primary));
+}
+
+.console-block {
+  margin-top: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-elevated);
+  overflow: hidden;
+}
+
+.console-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent-soft) 25%, transparent);
+}
+
+.console-cap {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.console-cap-err {
+  color: color-mix(in srgb, var(--danger) 82%, var(--text-primary));
+}
+
+.console-stream {
+  margin: 0;
+  max-height: 8rem;
+  overflow: auto;
+  padding: 0.5rem 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+
+.console-stream-err {
+  color: color-mix(in srgb, var(--danger) 78%, var(--text-primary));
+}

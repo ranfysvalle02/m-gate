@@ -148,6 +148,8 @@ window.adminConsole = function adminConsole(config) {
       legalOpen: false,
       contextHelpOpen: false,
       contextHelpTab: "overview",
+      // Example-gallery picker for "Start from example" in the Functions Studio.
+      exampleGalleryOpen: false,
       toolTestResults: {},
       toolValidation: {},
       tenantConnectOpen: false,
@@ -1278,6 +1280,24 @@ window.adminConsole = function adminConsole(config) {
       );
     },
 
+    // Which host-mediated sandbox bridges this deployment enables. Lets the
+    // Studio disable (and explain) capability-off affordances up front rather
+    // than discovering a disabled bridge only after a failed call.
+    sandboxCaps() {
+      return (
+        this.state.whoami?.sandbox || {
+          db_bridge_enabled: false,
+          tool_bridge_enabled: false,
+          http_bridge_enabled: false,
+        }
+      );
+    },
+
+    // The read-only Explore Database surface only works when the DB bridge is on.
+    dbExploreEnabled() {
+      return Boolean(this.sandboxCaps().db_bridge_enabled);
+    },
+
     // PEP 503 distribution-name normalization, mirroring the server so a chip's
     // verdict matches exactly what the runtime install enforces.
     _normalizeReqName(spec) {
@@ -2125,6 +2145,12 @@ window.adminConsole = function adminConsole(config) {
 
     async toggleExplore(tool) {
       if (!tool) return;
+      // The drawer only works when the host DB bridge is on; the button is
+      // already disabled in that state, but guard the action defensively.
+      if (!this.dbExploreEnabled()) {
+        tool.explore_open = false;
+        return;
+      }
       tool.explore_open = !tool.explore_open;
       tool.explore_error = "";
       if (!tool.explore_open) return;
@@ -2337,35 +2363,237 @@ window.adminConsole = function adminConsole(config) {
       this.notify(`Inserted call to ${entry.server}.${entry.name}.`, "success");
     },
 
-    // One-click "see the magic": drop in a complete, sandbox-safe function the
-    // operator can immediately run in the sandbox and save as a real MCP tool.
-    loadExampleTool() {
-      const example = this.emptyToolForm();
-      example.name = "word_count";
-      example.description = "Count the words and characters in a string.";
-      example.action_type = "read";
-      example.scopes = "utilities, readonly";
-      example.input_schema = JSON.stringify(
+    // A curated set of complete, sandbox-safe starters — each one runnable in
+    // the sandbox and savable as a real MCP tool. Mirrors the snippets in the
+    // "What is context?" modal so the two stay in sync. `needs` ties a card to a
+    // host capability so the gallery can grey out examples that can't run here.
+    exampleLibrary() {
+      return [
         {
-          type: "object",
-          properties: {
-            text: { type: "string", description: "Text to analyze" },
+          id: "word_count",
+          label: "Word count",
+          blurb:
+            "Pure standard-library text stats. The simplest possible tool — no context, no network.",
+          needs: "none",
+          tool: {
+            name: "word_count",
+            description: "Count the words and characters in a string.",
+            action_type: "read",
+            scopes: "utilities, readonly",
+            input_schema: {
+              type: "object",
+              properties: {
+                text: { type: "string", description: "Text to analyze" },
+              },
+              required: ["text"],
+            },
+            raw_code: [
+              "def word_count(text: str) -> dict:",
+              '    """Count the words and characters in the given text."""',
+              "    words = [w for w in text.split() if w]",
+              '    return {"words": len(words), "characters": len(text)}',
+              "",
+            ].join("\n"),
+            test_arguments: { text: "hello brave new world" },
           },
-          required: ["text"],
         },
-        null,
-        2,
-      );
-      example.raw_code = [
-        "def word_count(text: str) -> dict:",
-        '    """Count the words and characters in the given text."""',
-        "    words = [w for w in text.split() if w]",
-        '    return {"words": len(words), "characters": len(text)}',
-        "",
-      ].join("\n");
-      example.test_arguments = JSON.stringify({
-        text: "hello brave new world",
-      });
+        {
+          id: "find_by_id",
+          label: "Look up by id",
+          blurb:
+            "Read a single document with context.db.find_one and build a BSON id with context.db.ObjectId.",
+          needs: "db",
+          tool: {
+            name: "by_id",
+            description: "Look up a single user document by its string id.",
+            action_type: "read",
+            scopes: "users, readonly",
+            input_schema: {
+              type: "object",
+              properties: {
+                user_id: {
+                  type: "string",
+                  description: "The user's _id as a 24-char hex string",
+                },
+              },
+              required: ["user_id"],
+            },
+            raw_code: [
+              "def by_id(user_id: str) -> dict:",
+              '    """Look up a single user document by its string id."""',
+              "    # context.db.ObjectId builds the BSON id — it lives on the db handle.",
+              '    found = context.db.users.find_one({"_id": context.db.ObjectId(user_id)})',
+              "    return found or {}",
+              "",
+            ].join("\n"),
+            test_arguments: { user_id: "656f1f77bcf86cd799439011" },
+          },
+        },
+        {
+          id: "top_targets",
+          label: "Aggregate top targets",
+          blurb:
+            "Group, sort, and limit with context.db.aggregate — the read-side of a real reporting tool.",
+          needs: "db",
+          tool: {
+            name: "top_targets",
+            description: "Return the most-clicked targets, highest first.",
+            action_type: "read",
+            scopes: "analytics, readonly",
+            input_schema: {
+              type: "object",
+              properties: {
+                limit: {
+                  type: "integer",
+                  description: "How many targets to return (1-25)",
+                  default: 5,
+                },
+              },
+            },
+            raw_code: [
+              "def top_targets(limit: int = 5) -> dict:",
+              '    """Return the most-clicked targets, highest first."""',
+              "    rows = context.db.clicks.aggregate([",
+              '        {"$group": {"_id": "$target", "count": {"$sum": 1}}},',
+              '        {"$sort": {"count": -1}},',
+              '        {"$limit": max(1, min(int(limit), 25))},',
+              "    ])",
+              '    return {"top": [{"target": r["_id"], "count": r["count"]} for r in rows]}',
+              "",
+            ].join("\n"),
+            test_arguments: { limit: 5 },
+          },
+        },
+        {
+          id: "track_and_report",
+          label: "Compose sibling tools",
+          blurb:
+            "Call other tools in your tenant with context.tools, then combine their results into one answer.",
+          needs: "tools",
+          tool: {
+            name: "track_and_report",
+            description:
+              "Record a click via a sibling tool, then return the current leaderboard.",
+            action_type: "write",
+            scopes: "analytics",
+            input_schema: {
+              type: "object",
+              properties: {
+                target: { type: "string", description: "What was clicked" },
+                source: {
+                  type: "string",
+                  description: "Attribution source",
+                  default: "web",
+                },
+              },
+              required: ["target"],
+            },
+            raw_code: [
+              'def track_and_report(target: str, source: str = "web") -> dict:',
+              '    """Record a click via a sibling tool, then return the leaderboard."""',
+              "    # Each call is relayed to the host, re-authorized as you, and sandboxed.",
+              "    recorded = context.tools.analytics.track_click(target=target, source=source)",
+              "    stats = context.tools.analytics.get_click_stats(limit=5)",
+              '    return {"recorded": recorded, "leaderboard": stats.get("top_targets", [])}',
+              "",
+            ].join("\n"),
+            test_arguments: { target: "home", source: "web" },
+          },
+        },
+        {
+          id: "fx_rate",
+          label: "Call an HTTP API",
+          blurb:
+            "Reach an allowlisted upstream with context.http — no sockets, no secrets in your code.",
+          needs: "http",
+          tool: {
+            name: "fx_rate",
+            description: "Fetch a currency rate table from an allowlisted upstream.",
+            action_type: "read",
+            scopes: "fx, readonly",
+            input_schema: {
+              type: "object",
+              properties: {
+                base: {
+                  type: "string",
+                  description: "Base currency code",
+                  default: "USD",
+                },
+              },
+            },
+            raw_code: [
+              'def fx_rate(base: str = "USD") -> dict:',
+              '    """Fetch a currency rate table from an allowlisted upstream."""',
+              "    # The host screens the URL against the egress allowlist and pins the IP.",
+              '    resp = context.http.get("https://api.example.com/rates", params={"base": base})',
+              "    if not resp.ok:",
+              '        raise ValueError(f"upstream {resp.status}")',
+              "    return resp.json()",
+              "",
+            ].join("\n"),
+            test_arguments: { base: "USD" },
+          },
+        },
+      ];
+    },
+
+    // True when the host capability an example needs is enabled. Stdlib-only
+    // examples (`needs: "none"`) are always available.
+    exampleAvailable(example) {
+      const caps = this.sandboxCaps();
+      switch (example?.needs) {
+        case "db":
+          return Boolean(caps.db_bridge_enabled);
+        case "tools":
+          return Boolean(caps.tool_bridge_enabled);
+        case "http":
+          return Boolean(caps.http_bridge_enabled);
+        default:
+          return true;
+      }
+    },
+
+    // Human label + the env flag that unlocks a gated example, for the card hint.
+    exampleNeedLabel(example) {
+      switch (example?.needs) {
+        case "db":
+          return "Needs the DB bridge (SANDBOX_DB_BRIDGE_ENABLED)";
+        case "tools":
+          return "Needs the tool bridge (SANDBOX_TOOL_BRIDGE_ENABLED)";
+        case "http":
+          return "Needs HTTP egress (SANDBOX_HTTP_BRIDGE_ENABLED)";
+        default:
+          return "Standard library only — runs anywhere";
+      }
+    },
+
+    openExampleGallery() {
+      this.state.exampleGalleryOpen = true;
+    },
+
+    closeExampleGallery() {
+      this.state.exampleGalleryOpen = false;
+    },
+
+    // One-click "see the magic": drop a complete, sandbox-safe function into the
+    // editor the operator can immediately run and save as a real MCP tool.
+    applyExample(id) {
+      const entry = this.exampleLibrary().find((e) => e.id === id);
+      if (!entry) return;
+      if (!this.exampleAvailable(entry)) {
+        this.notify(this.exampleNeedLabel(entry), "warning");
+        return;
+      }
+      const spec = entry.tool;
+      const example = this.emptyToolForm();
+      example.name = spec.name;
+      example.description = spec.description;
+      example.action_type = spec.action_type || "read";
+      example.scopes = spec.scopes || "";
+      example.requirements = spec.requirements || "";
+      example.input_schema = JSON.stringify(spec.input_schema || {}, null, 2);
+      example.raw_code = spec.raw_code || "";
+      example.test_arguments = JSON.stringify(spec.test_arguments || {}, null, 2);
       example.expanded = true;
 
       const tools = this.forms.server.tools || [];
@@ -2384,7 +2612,15 @@ window.adminConsole = function adminConsole(config) {
         this.forms.server.server = "my-tools";
       }
       this.forms.server.transport = "code";
+      this.closeExampleGallery();
+      this.scheduleToolValidate(example);
       this.$nextTick(() => this.refreshCodeEditors());
+    },
+
+    // Back-compat entry point: the studio button now opens the picker so the
+    // operator can choose which example to start from.
+    loadExampleTool() {
+      this.openExampleGallery();
     },
 
     removeToolFromServer(localId) {

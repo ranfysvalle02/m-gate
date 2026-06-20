@@ -35,6 +35,19 @@ from services.tenant_pip_policy import (
 from . import _common as c
 from ._common import _require_tenant_admin, _resolve_target_tenant, router, settings
 
+# Keep returned console streams small: the workbench shows them for debugging,
+# not for bulk data transfer, and the sandbox already caps total output bytes.
+_MAX_TEST_CONSOLE_CHARS = 8000
+
+
+def _cap_console(text: str | None) -> str | None:
+    """Trim captured stdout/stderr to a UI-friendly size with a clear marker."""
+    if not text:
+        return None
+    if len(text) <= _MAX_TEST_CONSOLE_CHARS:
+        return text
+    return text[:_MAX_TEST_CONSOLE_CHARS] + "\n… (output truncated)"
+
 
 def _pip_policy_issues(decision: PipPolicyDecision) -> list[CodeToolValidationIssue]:
     """Turn a blocked-requirement decision into authoring-time error issues.
@@ -185,7 +198,13 @@ async def test_code_tool(
             ),
             timeout=timeout_seconds,
         )
-        return CodeToolTestResponse(ok=True, result=result.payload, elapsed_ms=result.elapsed_ms)
+        return CodeToolTestResponse(
+            ok=True,
+            result=result.payload,
+            elapsed_ms=result.elapsed_ms,
+            stdout=_cap_console(result.stdout),
+            stderr=_cap_console(result.stderr),
+        )
     except TimeoutError:
         return CodeToolTestResponse(
             ok=False,

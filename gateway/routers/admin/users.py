@@ -15,6 +15,7 @@ from models.admin import (
     DemoUserCreateResponse,
     HttpEgressPolicySummary,
     PasswordChangeRequest,
+    SandboxBridgesSummary,
     UserCreateRequest,
     UserListResponse,
     UserResponse,
@@ -85,6 +86,11 @@ async def who_am_i(request: Request) -> WhoAmIResponse:
         global_ceiling=egress_ceiling,
         global_restricted=bool(egress_ceiling),
     )
+    sandbox = SandboxBridgesSummary(
+        db_bridge_enabled=bool(settings.sandbox_db_bridge_enabled),
+        tool_bridge_enabled=bool(settings.sandbox_tool_bridge_enabled),
+        http_bridge_enabled=bool(settings.sandbox_http_bridge_enabled),
+    )
     return WhoAmIResponse(
         tenant_id=tenant_id,
         user_id=user_id,
@@ -98,6 +104,7 @@ async def who_am_i(request: Request) -> WhoAmIResponse:
         confirmation=await get_tenant_confirmation(tenant_id),
         code_requirements=code_requirements,
         http_egress=http_egress,
+        sandbox=sandbox,
         auth_mode=settings.auth_mode,
     )
 
