@@ -1713,6 +1713,29 @@
                       ✕
                     </button>
                   </div>
+                  <div class="fn-checklist" aria-label="Readiness checklist">
+                    <div class="fn-checklist-head">
+                      <span class="fn-checklist-title">Looks good?</span>
+                      <span
+                        class="fn-checklist-count"
+                        :class="toolChecklistDone(tool) === toolChecklist(tool).length ? 'is-done' : ''"
+                        x-text="`${toolChecklistDone(tool)}/${toolChecklist(tool).length}`"
+                      ></span>
+                    </div>
+                    <template x-for="item in toolChecklist(tool)" :key="item.key">
+                      <div
+                        class="fn-checklist-item"
+                        :class="item.ok ? 'is-ok' : ''"
+                      >
+                        <span
+                          class="fn-check-dot"
+                          aria-hidden="true"
+                          x-text="item.ok ? '✓' : '○'"
+                        ></span>
+                        <span x-text="item.label"></span>
+                      </div>
+                    </template>
+                  </div>
                   <div>
                     <label class="field-label">Function name</label
                     ><input
@@ -1723,24 +1746,84 @@
                     />
                   </div>
                   <div>
-                    <label class="field-label">Action type</label>
-                    <select
-                      class="field-input"
-                      x-model="tool.action_type"
-                      @change="scheduleToolValidate(tool)"
-                    >
-                      <option value="read">read</option>
-                      <option value="write">write</option>
-                      <option value="destructive">destructive</option>
-                    </select>
+                    <div class="flex items-center justify-between mb-1.5">
+                      <label class="field-label !mb-0">Action type</label>
+                      <button
+                        type="button"
+                        class="seg-help"
+                        @click="tool.contract_open = !tool.contract_open"
+                        :aria-expanded="tool.contract_open ? 'true' : 'false'"
+                        title="What each action type allows — opens the Sandbox contract"
+                        aria-label="What does action type mean?"
+                      >
+                        ?
+                      </button>
+                    </div>
+                    <div class="seg-control" role="group" aria-label="Action type">
+                      <template
+                        x-for="opt in ['read', 'write', 'destructive']"
+                        :key="opt"
+                      >
+                        <button
+                          type="button"
+                          class="seg-option"
+                          :class="`seg-${opt} ${tool.action_type === opt ? 'is-active' : ''}`"
+                          :aria-pressed="tool.action_type === opt ? 'true' : 'false'"
+                          @click="setActionType(tool, opt)"
+                          x-text="opt"
+                        ></button>
+                      </template>
+                    </div>
+                    <p
+                      class="field-hint seg-hint"
+                      x-text="actionTypeHint(tool.action_type)"
+                    ></p>
                   </div>
                   <div>
-                    <label class="field-label">Scopes (comma-separated)</label
-                    ><input
-                      class="field-input"
-                      x-model="tool.scopes"
-                      placeholder="weather, readonly"
-                    />
+                    <label class="field-label">Access tags</label>
+                    <p class="field-hint -mt-1 mb-1.5">
+                      Who can call this tool and how it's grouped for search.
+                    </p>
+                    <div class="chips-field">
+                      <template x-for="chip in scopeChips(tool)" :key="chip">
+                        <span class="chip">
+                          <span x-text="chip"></span>
+                          <button
+                            type="button"
+                            class="chip-x"
+                            @click="removeScope(tool, chip)"
+                            :aria-label="`Remove ${chip}`"
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      </template>
+                      <input
+                        class="chips-input"
+                        x-model="tool._scope_input"
+                        @keydown.enter.prevent="addScopeFromInput(tool)"
+                        @keydown="if ($event.key === ',') { $event.preventDefault(); addScopeFromInput(tool); }"
+                        @blur="addScopeFromInput(tool)"
+                        placeholder="Add a tag…"
+                        aria-label="Add an access tag"
+                      />
+                    </div>
+                    <div class="chip-suggest" x-show="scopeSuggestions(tool).length">
+                      <span class="chip-suggest-label">Suggestions:</span>
+                      <template
+                        x-for="s in scopeSuggestions(tool)"
+                        :key="`sg-${s}`"
+                      >
+                        <button
+                          type="button"
+                          class="chip chip-ghost"
+                          @click="addScope(tool, s)"
+                        >
+                          + <span x-text="s"></span>
+                        </button>
+                      </template>
+                    </div>
+                    <p class="field-hint who-can-call" x-text="whoCanCallHint(tool)"></p>
                   </div>
                   <div class="flex items-center gap-2 mt-1">
                     <input
@@ -1772,24 +1855,135 @@
                   </p>
                   <div>
                     <div class="flex items-center justify-between mb-1.5">
-                      <label class="field-label !mb-0"
-                        >Input schema
-                        <span class="field-hint">(JSON)</span></label
+                      <label class="field-label !mb-0">Input schema</label>
+                      <div
+                        class="schema-mode"
+                        role="group"
+                        aria-label="Schema editor mode"
                       >
-                      <template x-if="canSyncSchema(tool)">
                         <button
                           type="button"
-                          class="schema-sync"
-                          @click="applySuggestedSchema(tool)"
-                          title="Generate properties & required from your function signature"
+                          class="schema-mode-btn"
+                          :class="!tool.schema_json_mode ? 'is-active' : ''"
+                          @click="setSchemaMode(tool, 'fields')"
                         >
-                          ✦ Sync from signature
+                          Fields
                         </button>
-                      </template>
+                        <button
+                          type="button"
+                          class="schema-mode-btn"
+                          :class="tool.schema_json_mode ? 'is-active' : ''"
+                          @click="setSchemaMode(tool, 'json')"
+                        >
+                          JSON
+                        </button>
+                      </div>
+                    </div>
+                    <template x-if="canSyncSchema(tool)">
+                      <button
+                        type="button"
+                        class="schema-drift"
+                        @click="applySuggestedSchema(tool)"
+                        title="Generate properties & required from your function signature"
+                      >
+                        <span class="schema-drift-icon" aria-hidden="true">✦</span>
+                        <span
+                          x-text="`Your signature changed — sync schema (${schemaSyncFieldCount(tool)} field${schemaSyncFieldCount(tool) === 1 ? '' : 's'})`"
+                        ></span>
+                      </button>
+                    </template>
+                    <div
+                      x-show="!tool.schema_json_mode"
+                      x-init="ensureSchemaRows(tool)"
+                    >
+                      <div
+                        class="schema-table"
+                        x-show="(tool.schema_rows || []).length"
+                      >
+                        <div class="schema-row schema-row-head">
+                          <span>Name</span>
+                          <span>Type</span>
+                          <span title="Required">Req</span>
+                          <span>Default</span>
+                          <span>Description</span>
+                          <span></span>
+                        </div>
+                        <template
+                          x-for="(row, idx) in tool.schema_rows"
+                          :key="idx"
+                        >
+                          <div class="schema-row">
+                            <input
+                              class="field-input schema-cell"
+                              x-model="row.name"
+                              @input="writeSchemaFromRows(tool)"
+                              placeholder="city"
+                              :aria-label="`Field ${idx + 1} name`"
+                            />
+                            <select
+                              class="field-input schema-cell"
+                              x-model="row.type"
+                              @change="writeSchemaFromRows(tool)"
+                              :aria-label="`Field ${idx + 1} type`"
+                            >
+                              <template
+                                x-for="t in schemaTypeOptions()"
+                                :key="t"
+                              >
+                                <option :value="t" x-text="t"></option>
+                              </template>
+                            </select>
+                            <input
+                              type="checkbox"
+                              class="schema-cell-req"
+                              x-model="row.required"
+                              @change="writeSchemaFromRows(tool)"
+                              :aria-label="`Field ${idx + 1} required`"
+                            />
+                            <input
+                              class="field-input schema-cell"
+                              x-model="row.default"
+                              @input="writeSchemaFromRows(tool)"
+                              placeholder="—"
+                              :aria-label="`Field ${idx + 1} default`"
+                            />
+                            <input
+                              class="field-input schema-cell"
+                              x-model="row.description"
+                              @input="writeSchemaFromRows(tool)"
+                              placeholder="What this field is"
+                              :aria-label="`Field ${idx + 1} description`"
+                            />
+                            <button
+                              type="button"
+                              class="schema-del"
+                              @click="removeSchemaField(tool, idx)"
+                              :aria-label="`Remove field ${idx + 1}`"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </template>
+                      </div>
+                      <p
+                        class="field-hint schema-empty"
+                        x-show="!(tool.schema_rows || []).length"
+                      >
+                        No input fields yet — add one, or sync from your function
+                        signature.
+                      </p>
+                      <button
+                        type="button"
+                        class="schema-add"
+                        @click="addSchemaField(tool)"
+                      >
+                        + Add field
+                      </button>
                     </div>
                     <textarea
+                      x-show="tool.schema_json_mode"
                       class="field-input font-mono text-xs"
-                      rows="5"
+                      rows="6"
                       x-model="tool.input_schema"
                       @input="scheduleToolValidate(tool)"
                       placeholder='{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}'
@@ -1888,7 +2082,11 @@
                       ></span>
                     </div>
                   </template>
-                  <details class="fn-contract">
+                  <details
+                    class="fn-contract"
+                    :open="tool.contract_open"
+                    @toggle="tool.contract_open = $event.target.open"
+                  >
                     <summary class="fn-contract-summary">
                       <span aria-hidden="true">🔒</span>
                       <span>Sandbox contract</span>
@@ -2172,7 +2370,7 @@
                           />
                         </div>
                       </div>
-                      <div class="flex items-center gap-2">
+                      <div class="flex items-center gap-2 flex-wrap">
                         <button
                           type="button"
                           class="btn-secondary !py-1 !px-2.5 !text-xs"
@@ -2186,6 +2384,15 @@
                           @click="runExploreQuery(tool)"
                         >
                           Run query
+                        </button>
+                        <button
+                          type="button"
+                          class="btn-primary !py-1 !px-2.5 !text-xs explore-generate"
+                          @click="generateToolFromCollection(tool)"
+                          :disabled="!canGenerateFromCollection(tool)"
+                          :title="canGenerateFromCollection(tool) ? 'Scaffold a read function + schema from this collection' : 'Load a sample first to enable generation'"
+                        >
+                          ✦ Generate a tool for this collection
                         </button>
                       </div>
                       <template x-if="tool.explore_mode === 'find'">
@@ -3966,6 +4173,26 @@
       </button>
     </div>
     <div class="modal-body">
+      <div class="starter-pack">
+        <div class="starter-pack-text">
+          <div class="starter-pack-title">
+            <span aria-hidden="true">⚡</span> Utilities starter pack
+          </div>
+          <p class="starter-pack-blurb">
+            Five standard-library, read-only helpers —
+            <code>now</code>, <code>slugify</code>, <code>json_pretty</code>,
+            <code>regex_extract</code>, <code>word_count</code>. Load them all into
+            the composer, then Run and Save.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="btn-primary starter-pack-btn"
+          @click="installUtilitiesPack()"
+        >
+          Load the pack
+        </button>
+      </div>
       <div class="example-grid">
         <template x-for="example in exampleLibrary()" :key="example.id">
           <button

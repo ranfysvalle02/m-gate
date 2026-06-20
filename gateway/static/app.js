@@ -1826,6 +1826,10 @@ window.adminConsole = function adminConsole(config) {
         raw_code: "",
         scopes: "",
         input_schema: "{}",
+        schema_json_mode: false,
+        schema_rows: [],
+        contract_open: false,
+        _scope_input: "",
         test_arguments: "{}",
         expanded: true,
         explore_open: false,
@@ -1864,6 +1868,10 @@ window.adminConsole = function adminConsole(config) {
         raw_code: tool.raw_code || "",
         scopes,
         input_schema: JSON.stringify(tool.input_schema || {}, null, 2),
+        schema_json_mode: false,
+        schema_rows: this._schemaToRows(tool.input_schema || {}),
+        contract_open: false,
+        _scope_input: "",
         test_arguments: "{}",
         expanded: false,
         explore_open: false,
@@ -2634,6 +2642,7 @@ window.adminConsole = function adminConsole(config) {
       example.scopes = spec.scopes || "";
       example.requirements = spec.requirements || "";
       example.input_schema = JSON.stringify(spec.input_schema || {}, null, 2);
+      example.schema_rows = this._schemaToRows(spec.input_schema || {});
       example.raw_code = spec.raw_code || "";
       example.test_arguments = JSON.stringify(spec.test_arguments || {}, null, 2);
       example.expanded = true;
@@ -3258,12 +3267,441 @@ window.adminConsole = function adminConsole(config) {
       if (!suggested) return;
       const merged = this._mergeSchema(this._parsedInputSchema(tool), suggested);
       tool.input_schema = JSON.stringify(merged, null, 2);
+      tool.schema_rows = this._schemaToRows(merged);
       const count = Object.keys(merged.properties || {}).length;
       this.notify(
         `Input schema synced from signature (${count} field${count === 1 ? "" : "s"}).`,
         "success",
       );
       this.scheduleToolValidate(tool);
+    },
+
+    // Promoted drift banner: the signature implies a schema the author hasn't
+    // applied yet. Reuses canSyncSchema; the count is the suggested field total.
+    schemaSyncFieldCount(tool) {
+      const suggested = this.toolSuggestedSchema(tool);
+      return suggested ? Object.keys(suggested.properties || {}).length : 0;
+    },
+
+    // ---- Visual schema builder ---------------------------------------------
+    // The input schema is edited as a field table by default; the raw JSON
+    // textarea is a power-user escape hatch. `tool.input_schema` (a JSON string)
+    // stays the single source of truth that buildCodeTools() reads — the rows are
+    // a view that rewrites that string on every edit.
+    schemaTypeOptions() {
+      return ["string", "integer", "number", "boolean", "object", "array"];
+    },
+
+    _schemaToRows(schema) {
+      const parsed =
+        typeof schema === "string"
+          ? this._parsedInputSchema({ input_schema: schema })
+          : schema || {};
+      const props = (parsed && parsed.properties) || {};
+      const required = Array.isArray(parsed && parsed.required) ? parsed.required : [];
+      return Object.entries(props).map(([name, def]) => {
+        const d = def || {};
+        let defValue = "";
+        if (d.default !== undefined) {
+          defValue = typeof d.default === "string" ? d.default : JSON.stringify(d.default);
+        }
+        return {
+          name,
+          type: typeof d.type === "string" ? d.type : "string",
+          required: required.includes(name),
+          description: typeof d.description === "string" ? d.description : "",
+          default: defValue,
+        };
+      });
+    },
+
+    _rowsToSchema(rows) {
+      const types = this.schemaTypeOptions();
+      const properties = {};
+      const required = [];
+      for (const row of rows || []) {
+        const name = String(row?.name || "").trim();
+        if (!name) continue;
+        const type = types.includes(row.type) ? row.type : "string";
+        const def = { type };
+        const description = String(row?.description || "").trim();
+        if (description) def.description = description;
+        const rawDefault = String(row?.default ?? "").trim();
+        if (rawDefault !== "") def.default = this._coerceDefault(rawDefault, type);
+        properties[name] = def;
+        if (row.required) required.push(name);
+      }
+      const schema = { type: "object", properties };
+      if (required.length) schema.required = required;
+      return schema;
+    },
+
+    _coerceDefault(raw, type) {
+      if (type === "integer" || type === "number") {
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : raw;
+      }
+      if (type === "boolean") return raw === "true" || raw === "1";
+      if (type === "object" || type === "array") {
+        try {
+          return JSON.parse(raw);
+        } catch (_) {
+          return raw;
+        }
+      }
+      return raw;
+    },
+
+    ensureSchemaRows(tool) {
+      if (!tool) return [];
+      if (!Array.isArray(tool.schema_rows)) {
+        tool.schema_rows = this._schemaToRows(tool.input_schema);
+      }
+      return tool.schema_rows;
+    },
+
+    // Rewrite the canonical JSON string from the current rows on every edit.
+    writeSchemaFromRows(tool) {
+      if (!tool) return;
+      tool.input_schema = JSON.stringify(this._rowsToSchema(tool.schema_rows || []), null, 2);
+      this.scheduleToolValidate(tool);
+    },
+
+    addSchemaField(tool) {
+      this.ensureSchemaRows(tool);
+      tool.schema_rows.push({
+        name: "",
+        type: "string",
+        required: false,
+        description: "",
+        default: "",
+      });
+      this.writeSchemaFromRows(tool);
+    },
+
+    removeSchemaField(tool, index) {
+      this.ensureSchemaRows(tool);
+      tool.schema_rows.splice(index, 1);
+      this.writeSchemaFromRows(tool);
+    },
+
+    setSchemaMode(tool, mode) {
+      if (!tool) return;
+      const json = mode === "json";
+      // Leaving the JSON editor: re-derive rows so the table reflects manual edits.
+      if (!json) tool.schema_rows = this._schemaToRows(tool.input_schema);
+      tool.schema_json_mode = json;
+    },
+
+    schemaFieldCount(tool) {
+      return Object.keys(this._parsedInputSchema(tool).properties || {}).length;
+    },
+
+    // ---- Access tags (scopes as chips) -------------------------------------
+    // tool.scopes stays the canonical comma string; chips are a view over it.
+    scopeChips(tool) {
+      return String(tool?.scopes || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    },
+
+    addScope(tool, value) {
+      const chip = String(value || "").trim().replace(/,/g, "");
+      if (!chip) return;
+      const chips = this.scopeChips(tool);
+      if (!chips.includes(chip)) chips.push(chip);
+      tool.scopes = chips.join(", ");
+      tool._scope_input = "";
+      this.scheduleToolValidate(tool);
+    },
+
+    addScopeFromInput(tool) {
+      this.addScope(tool, tool?._scope_input);
+    },
+
+    removeScope(tool, chip) {
+      tool.scopes = this.scopeChips(tool)
+        .filter((c) => c !== chip)
+        .join(", ");
+      this.scheduleToolValidate(tool);
+    },
+
+    // Suggestions = this server name + presets + the tenant's existing catalog
+    // scopes, minus what's already applied (no backend endpoint for scopes).
+    scopeSuggestions(tool) {
+      const present = new Set(this.scopeChips(tool));
+      const pool = new Set(["readonly", "internal"]);
+      const server = String(this.forms.server?.server || "").trim();
+      if (server) pool.add(server);
+      for (const item of this.state.catalog?.items || []) {
+        for (const scope of item.scopes || []) {
+          const s = String(scope || "").trim();
+          if (s) pool.add(s);
+        }
+      }
+      const typed = String(tool?._scope_input || "").trim().toLowerCase();
+      return [...pool]
+        .filter((s) => !present.has(s))
+        .filter((s) => !typed || s.toLowerCase().includes(typed))
+        .sort()
+        .slice(0, 8);
+    },
+
+    whoCanCallHint(tool) {
+      const chips = this.scopeChips(tool);
+      if (!chips.length) {
+        return "Empty — any caller that can reach this server can call it.";
+      }
+      return `Only callers holding ${chips.map((c) => `“${c}”`).join(" or ")} can call it.`;
+    },
+
+    // ---- action_type segmented control -------------------------------------
+    actionTypeHint(type) {
+      switch (type) {
+        case "write":
+          return "Reads plus inserts/updates (context.db insert & update, HTTP POST/PUT/PATCH).";
+        case "destructive":
+          return "Reads, writes, and deletes — routed through approval before it runs.";
+        case "read":
+        default:
+          return "Query-only: context.db reads and HTTP GET. Cannot modify data.";
+      }
+    },
+
+    setActionType(tool, type) {
+      if (!tool) return;
+      tool.action_type = type;
+      this.scheduleToolValidate(tool);
+    },
+
+    // ---- Generate a tool from an explored collection -----------------------
+    canGenerateFromCollection(tool) {
+      return Boolean(
+        tool &&
+          String(tool.explore_collection || "").trim() &&
+          (tool.explore_sample_docs || []).length > 0,
+      );
+    },
+
+    generateToolFromCollection(tool) {
+      const collection = String(tool?.explore_collection || "").trim();
+      if (!collection) {
+        this.notify("Choose a collection and load a sample first.", "warning");
+        return;
+      }
+      // Mirror the backend _COLLECTION_RE so generated code only ever subscripts a
+      // name the sandbox DB bridge will accept.
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(collection)) {
+        this.notify(
+          `Collection '${collection}' can't be referenced safely in generated code.`,
+          "warning",
+        );
+        return;
+      }
+      const base = collection.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase();
+      const fnName = base && /^[A-Za-z_]/.test(base) ? `list_${base}` : "list_documents";
+      const code = [
+        `def ${fnName}(limit: int = 20) -> dict:`,
+        `    """Return up to \`limit\` documents from the ${collection} collection."""`,
+        "    capped = max(1, min(int(limit), 100))",
+        `    docs = context.db[${JSON.stringify(collection)}].aggregate([{"$limit": capped}])`,
+        '    return {"items": [dict(doc) for doc in docs]}',
+        "",
+      ].join("\n");
+      const schema = {
+        type: "object",
+        properties: {
+          limit: {
+            type: "integer",
+            description: "Maximum documents to return (1-100)",
+            default: 20,
+          },
+        },
+      };
+      tool.name = fnName;
+      tool.action_type = "read";
+      if (!String(tool.description || "").trim()) {
+        tool.description = `List documents from the ${collection} collection.`;
+      }
+      tool.raw_code = code;
+      tool.input_schema = JSON.stringify(schema, null, 2);
+      tool.schema_rows = this._schemaToRows(schema);
+      tool.schema_json_mode = false;
+      if (!this.scopeChips(tool).length) tool.scopes = `${collection}, readonly`;
+      tool.explore_open = false;
+      this.scheduleToolValidate(tool);
+      this.$nextTick(() => this.refreshCodeEditors());
+      this.notify(`Generated a read tool for '${collection}'. Review, Run, then Save.`, "success");
+    },
+
+    // ---- Readiness checklist -----------------------------------------------
+    // Derived entirely from existing validation/test state; green means the
+    // author can Save with confidence.
+    toolChecklist(tool) {
+      if (!tool) return [];
+      const name = String(tool.name || "").trim();
+      const description = String(tool.description || "").trim();
+      const result = this.getToolTestResult(tool.local_id);
+      return [
+        { key: "name", label: "Named function", ok: Boolean(name) },
+        { key: "description", label: "Has a description", ok: description.length >= 3 },
+        { key: "schema", label: "Schema matches signature", ok: !this.canSyncSchema(tool) },
+        { key: "test", label: "Passed a test run", ok: Boolean(result && result.ok) },
+      ];
+    },
+
+    toolChecklistDone(tool) {
+      return this.toolChecklist(tool).filter((item) => item.ok).length;
+    },
+
+    // ---- Utilities starter pack --------------------------------------------
+    // A small, stdlib-only, read-only set the author can load into the composer
+    // and Save as one "utilities" server (subject to the normal tier cap on save).
+    utilitiesPack() {
+      return [
+        {
+          name: "now",
+          description: "Return the current UTC time as ISO 8601 and epoch seconds.",
+          action_type: "read",
+          scopes: "utilities, readonly",
+          input_schema: { type: "object", properties: {} },
+          raw_code: [
+            "def now() -> dict:",
+            '    """Return the current UTC time in ISO 8601 and epoch seconds."""',
+            "    import datetime",
+            "    moment = datetime.datetime.now(datetime.timezone.utc)",
+            '    return {"utc": moment.isoformat(), "epoch": int(moment.timestamp())}',
+            "",
+          ].join("\n"),
+          test_arguments: {},
+        },
+        {
+          name: "slugify",
+          description: "Convert arbitrary text into a URL-safe slug.",
+          action_type: "read",
+          scopes: "utilities, readonly",
+          input_schema: {
+            type: "object",
+            properties: { text: { type: "string", description: "Text to slugify" } },
+            required: ["text"],
+          },
+          raw_code: [
+            "def slugify(text: str) -> dict:",
+            '    """Convert text into a lowercase, URL-safe slug."""',
+            "    import re",
+            '    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")',
+            '    return {"slug": slug}',
+            "",
+          ].join("\n"),
+          test_arguments: { text: "Hello, Brave New World!" },
+        },
+        {
+          name: "json_pretty",
+          description: "Pretty-print a JSON object with sorted keys.",
+          action_type: "read",
+          scopes: "utilities, readonly",
+          input_schema: {
+            type: "object",
+            properties: {
+              data: { type: "object", description: "Object to format" },
+              indent: { type: "integer", description: "Indent width", default: 2 },
+            },
+            required: ["data"],
+          },
+          raw_code: [
+            "def json_pretty(data: dict, indent: int = 2) -> dict:",
+            '    """Return a pretty-printed JSON string for the given object."""',
+            "    import json",
+            '    return {"pretty": json.dumps(data, indent=int(indent), sort_keys=True)}',
+            "",
+          ].join("\n"),
+          test_arguments: { data: { b: 2, a: 1 }, indent: 2 },
+        },
+        {
+          name: "regex_extract",
+          description: "Return all regex matches found in a string.",
+          action_type: "read",
+          scopes: "utilities, readonly",
+          input_schema: {
+            type: "object",
+            properties: {
+              text: { type: "string", description: "Text to search" },
+              pattern: { type: "string", description: "Regular expression pattern" },
+            },
+            required: ["text", "pattern"],
+          },
+          raw_code: [
+            "def regex_extract(text: str, pattern: str) -> dict:",
+            '    """Return all non-overlapping matches of a regex pattern in text."""',
+            "    import re",
+            "    matches = re.findall(pattern, text)",
+            '    return {"matches": matches, "count": len(matches)}',
+            "",
+          ].join("\n"),
+          test_arguments: { text: "call 555-1234 or 555-9876", pattern: "\\d{3}-\\d{4}" },
+        },
+        {
+          name: "word_count",
+          description: "Count the words and characters in a string.",
+          action_type: "read",
+          scopes: "utilities, readonly",
+          input_schema: {
+            type: "object",
+            properties: { text: { type: "string", description: "Text to analyze" } },
+            required: ["text"],
+          },
+          raw_code: [
+            "def word_count(text: str) -> dict:",
+            '    """Count the words and characters in the given text."""',
+            "    words = [w for w in text.split() if w]",
+            '    return {"words": len(words), "characters": len(text)}',
+            "",
+          ].join("\n"),
+          test_arguments: { text: "hello brave new world" },
+        },
+      ];
+    },
+
+    _specToToolForm(spec) {
+      const form = this.emptyToolForm();
+      form.name = spec.name;
+      form.description = spec.description;
+      form.action_type = spec.action_type || "read";
+      form.scopes = spec.scopes || "";
+      form.requirements = spec.requirements || "";
+      form.input_schema = JSON.stringify(spec.input_schema || {}, null, 2);
+      form.schema_rows = this._schemaToRows(spec.input_schema || {});
+      form.raw_code = spec.raw_code || "";
+      form.test_arguments = JSON.stringify(spec.test_arguments || {}, null, 2);
+      form.expanded = false;
+      return form;
+    },
+
+    // Load the whole pack into the composer as a single "utilities" server for
+    // review + Save. Save still enforces the tier cap and surfaces its message.
+    installUtilitiesPack() {
+      const tools = this.utilitiesPack().map((spec) => this._specToToolForm(spec));
+      if (!tools.length) return;
+      this._teardownCodeEditors();
+      this.forms.server = {
+        server: "utilities",
+        transport: "code",
+        endpoint: "",
+        command: "",
+        metadata: '{"domain":"utility","runtime":"wasm"}',
+        tools,
+      };
+      this.state.toolTestResults = {};
+      this.state.toolValidation = {};
+      this._ensureSingleActiveTool(tools[0].local_id);
+      this.closeExampleGallery();
+      for (const tool of tools) this.scheduleToolValidate(tool);
+      this.$nextTick(() => this.refreshCodeEditors());
+      this.notify(
+        `Loaded the Utilities starter pack (${tools.length} tools) — review, Run, then Save.`,
+        "success",
+      );
     },
 
     // ---- Test-argument seeding ---------------------------------------------

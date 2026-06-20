@@ -28,6 +28,18 @@ MAX_RAW_CODE_BYTES = 64 * 1024
 
 ALLOWED_ACTION_TYPES = frozenset({"read", "write", "destructive"})
 
+# Ranking so a drift check can compare "what the code needs" vs "what's declared".
+_ACTION_RANK = {"read": 0, "write": 1, "destructive": 2}
+
+# context.db / context.http operations that demand a higher action_type than
+# "read". The runtime source of truth is services/sandbox_db_bridge.py
+# (_WRITE_OPS / _DESTRUCTIVE_OPS) and services/sandbox_http_bridge.py
+# (_METHODS_BY_ACTION); these are mirrored here as method NAMES so authoring-time
+# linting can warn before the sandbox blocks the call at runtime.
+_DB_WRITE_OPS = frozenset({"insert_one", "insert_many", "update_one", "update_many"})
+_DB_DESTRUCTIVE_OPS = frozenset({"delete_one", "delete_many"})
+_HTTP_WRITE_VERBS = frozenset({"post", "put", "patch", "delete"})
+
 # Modules that have no business inside a user tool and signal an escape attempt
 # or host-level access. (The sandbox will enforce the real boundary; this keeps
 # the obvious cases out of storage.)
@@ -317,7 +329,12 @@ def suggest_input_schema(raw_code: str, tool_name: str) -> dict[str, Any] | None
     return schema
 
 
-def _source_issues(raw_code: str, tool_name: str, input_schema: Any = None) -> list[dict[str, Any]]:
+def _source_issues(
+    raw_code: str,
+    tool_name: str,
+    input_schema: Any = None,
+    action_type: Any = None,
+) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     if len(raw_code.encode("utf-8")) > MAX_RAW_CODE_BYTES:
         issues.append(_issue(f"Code exceeds the maximum size of {MAX_RAW_CODE_BYTES // 1024} KB."))
@@ -364,6 +381,78 @@ def _source_issues(raw_code: str, tool_name: str, input_schema: Any = None) -> l
         )
     else:
         issues.extend(_signature_issues(tree, tool_name, input_schema))
+
+    issues.extend(_action_type_drift_issues(tree, action_type))
+    return issues
+
+
+def _context_namespace(value: ast.AST) -> str | None:
+    """Return ``"db"`` / ``"http"`` if ``value`` is an attribute/subscript chain
+    rooted at ``context.db`` / ``context.http``; otherwise ``None``.
+
+    Handles both ``context.db.coll.insert_one`` and
+    ``context.db["coll"].insert_one`` shapes.
+    """
+    attrs: list[str] = []
+    cur: ast.AST | None = value
+    while cur is not None:
+        if isinstance(cur, ast.Attribute):
+            attrs.append(cur.attr)
+            cur = cur.value
+        elif isinstance(cur, ast.Subscript):
+            cur = cur.value
+        elif isinstance(cur, ast.Call):
+            cur = cur.func
+        else:
+            break
+    if isinstance(cur, ast.Name) and cur.id == "context":
+        if "db" in attrs:
+            return "db"
+        if "http" in attrs:
+            return "http"
+    return None
+
+
+def _action_type_drift_issues(tree: ast.Module, action_type: Any) -> list[dict[str, Any]]:
+    """Warn when the code uses sandbox operations the declared ``action_type`` forbids.
+
+    The DB/HTTP bridges block, at runtime, any write/destructive op on a tool whose
+    ``action_type`` is too low (e.g. ``insert_one`` on a ``read`` tool). Surfacing
+    it here — as a *warning*, never blocking Save — turns a confusing runtime
+    failure into an authoring-time nudge to bump the action type.
+    """
+    declared = action_type if action_type in _ACTION_RANK else "read"
+    declared_rank = _ACTION_RANK[declared]
+    issues: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        op = node.func.attr
+        namespace = _context_namespace(node.func.value)
+        if namespace == "db" and op in _DB_DESTRUCTIVE_OPS:
+            needed = "destructive"
+        elif namespace == "db" and op in _DB_WRITE_OPS:
+            needed = "write"
+        elif namespace == "http" and op in _HTTP_WRITE_VERBS:
+            needed = "write"
+        else:
+            continue
+        if _ACTION_RANK[needed] <= declared_rank:
+            continue
+        key = (op, node.lineno)
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append(
+            _issue(
+                f"This calls context.{namespace}.{op}(), which needs action_type "
+                f"'{needed}', but it's set to '{declared}'. The sandbox will block "
+                f"this at runtime — set the action type to '{needed}'.",
+                severity="warning",
+                line=node.lineno,
+            )
+        )
     return issues
 
 
@@ -390,16 +479,18 @@ def validate_code_tool(tool: dict[str, Any]) -> list[dict[str, Any]]:
     author sees while typing is exactly what the server enforces on save.
     """
     tool_name = (tool.get("name") or "").strip()
+    metadata = tool.get("metadata") or {}
+    action_type = metadata.get("action_type")
     issues: list[dict[str, Any]] = []
     raw_code = tool.get("raw_code")
     if not isinstance(raw_code, str) or not raw_code.strip():
         issues.append(_issue("Function requires non-empty 'raw_code'."))
     else:
-        issues.extend(_source_issues(raw_code, tool_name, tool.get("input_schema")))
+        issues.extend(
+            _source_issues(raw_code, tool_name, tool.get("input_schema"), action_type)
+        )
     issues.extend(_requirement_issues(list(tool.get("requirements") or [])))
 
-    metadata = tool.get("metadata") or {}
-    action_type = metadata.get("action_type")
     if action_type is not None and action_type not in ALLOWED_ACTION_TYPES:
         issues.append(
             _issue(

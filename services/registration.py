@@ -237,6 +237,14 @@ async def register_self_service_user(
     # and role hydration work on the very first request with the minted token.
     await users_service.sync_session_context(user)
 
+    # Give the fresh tenant a runnable starter tool so its /mcp endpoint is never
+    # empty on first connect. Best-effort and fail-soft (seed_starter_server never
+    # raises): a seeding/embedding hiccup must not break a successful sign-up.
+    if settings.seed_starter_tools_on_register:
+        from services.starter_seed import seed_starter_server
+
+        await seed_starter_server(tenant_id, settings=settings)
+
     token, expires_in = _mint_token(
         email=normalized, tenant_id=tenant_id, scopes=scopes, settings=settings
     )

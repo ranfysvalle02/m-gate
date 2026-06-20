@@ -285,6 +285,11 @@ class Settings(BaseSettings):
     # random suffix; never derived from the email so the address never leaks into a
     # database name.
     self_registration_tenant_prefix: str = "selfsvc-"
+    # Seed a brand-new tenant with a single stdlib-only "utilities" starter tool so
+    # its /mcp endpoint is never empty on first connect. Fail-soft: a seeding or
+    # embedding hiccup never blocks an otherwise-successful sign-up. One tool keeps
+    # it inside the unconfirmed 1-server/1-tool cap and fully editable by the owner.
+    seed_starter_tools_on_register: bool = True
 
     # --- Account confirmation tiers ------------------------------------------
     # A self-registered tenant starts ``unconfirmed`` (instantly active but tightly

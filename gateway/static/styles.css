@@ -5619,3 +5619,500 @@ textarea.field-input {
     box-shadow: var(--shadow-lg);
   }
 }
+
+/* --------------------------------------------------------------------------- */
+/*  Tool authoring: readiness checklist, action segments, access tags,         */
+/*  visual schema builder, starter pack. Motion is covered by the global       */
+/*  prefers-reduced-motion guard above.                                        */
+/* --------------------------------------------------------------------------- */
+
+/* Readiness checklist ------------------------------------------------------- */
+.fn-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.fn-checklist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.15rem;
+}
+
+.fn-checklist-title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.fn-checklist-count {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.fn-checklist-count.is-done {
+  color: color-mix(in srgb, var(--success) 80%, var(--text-primary));
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.fn-checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.fn-checklist-item.is-ok {
+  color: var(--text-primary);
+}
+
+.fn-check-dot {
+  flex: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 800;
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.fn-checklist-item.is-ok .fn-check-dot {
+  background: color-mix(in srgb, var(--success) 22%, transparent);
+  border-color: color-mix(in srgb, var(--success) 50%, transparent);
+  color: color-mix(in srgb, var(--success) 88%, var(--text-primary));
+  transform: scale(1.04);
+}
+
+/* Action-type segmented control -------------------------------------------- */
+.seg-control {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.seg-option {
+  text-transform: capitalize;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.4rem 0.4rem;
+  border-radius: calc(var(--radius-md) - 0.28rem);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.seg-option:hover {
+  color: var(--text-primary);
+  background: var(--surface);
+  transform: translateY(-1px);
+}
+
+.seg-read.is-active {
+  color: color-mix(in srgb, var(--accent) 84%, var(--text-primary));
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.seg-write.is-active {
+  color: color-mix(in srgb, var(--warning) 86%, var(--text-primary));
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 42%, transparent);
+}
+
+.seg-destructive.is-active {
+  color: color-mix(in srgb, var(--danger) 86%, var(--text-primary));
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 44%, transparent);
+}
+
+.seg-hint {
+  margin-top: 0.4rem;
+}
+
+.seg-help {
+  flex: none;
+  width: 1.3rem;
+  height: 1.3rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.seg-help:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  transform: scale(1.08);
+}
+
+/* Access tags (scopes as chips) -------------------------------------------- */
+.chips-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.chips-field:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  box-shadow: var(--ring);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.16rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-primary));
+  animation: popIn var(--dur-fast) var(--ease-out);
+}
+
+.chip-x {
+  display: grid;
+  place-items: center;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 0.62rem;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.chip-x:hover {
+  opacity: 1;
+}
+
+.chips-input {
+  flex: 1 1 6rem;
+  min-width: 6rem;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  padding: 0.15rem 0.1rem;
+  outline: none;
+}
+
+.chips-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+.chip-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.45rem;
+}
+
+.chip-suggest-label {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.chip-ghost {
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-secondary);
+  cursor: pointer;
+  animation: none;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.chip-ghost:hover {
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-primary));
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  transform: translateY(-1px);
+}
+
+.who-can-call {
+  margin-top: 0.45rem;
+  font-style: italic;
+}
+
+/* Schema editor: mode toggle, drift banner, field table -------------------- */
+.schema-mode {
+  display: inline-flex;
+  gap: 0.15rem;
+  padding: 0.15rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+.schema-mode-btn {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.12rem 0.6rem;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.schema-mode-btn.is-active {
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-primary));
+}
+
+.schema-drift {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  margin-bottom: 0.55rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: color-mix(in srgb, var(--accent) 84%, var(--text-primary));
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.schema-drift:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  transform: translateY(-1px);
+}
+
+.schema-drift-icon {
+  flex: none;
+  font-size: 0.85rem;
+}
+
+.schema-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.schema-table .schema-row-head {
+  display: none;
+}
+
+.schema-row {
+  display: grid;
+  grid-template-columns: 1fr 5.4rem 1.5rem;
+  grid-template-areas:
+    "name type req"
+    "default default del"
+    "desc desc desc";
+  gap: 0.3rem 0.4rem;
+  align-items: center;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.schema-row > :nth-child(1) {
+  grid-area: name;
+}
+.schema-row > :nth-child(2) {
+  grid-area: type;
+}
+.schema-row > :nth-child(3) {
+  grid-area: req;
+  justify-self: center;
+}
+.schema-row > :nth-child(4) {
+  grid-area: default;
+}
+.schema-row > :nth-child(5) {
+  grid-area: desc;
+}
+.schema-row > :nth-child(6) {
+  grid-area: del;
+}
+
+.schema-cell {
+  font-size: 0.76rem;
+  padding: 0.3rem 0.45rem;
+}
+
+.schema-cell-req {
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.schema-del {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.schema-del:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  color: color-mix(in srgb, var(--danger) 84%, var(--text-primary));
+}
+
+.schema-empty {
+  margin-bottom: 0.5rem;
+}
+
+.schema-add {
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 0.32rem 0.7rem;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.schema-add:hover {
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-primary));
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  transform: translateY(-1px);
+}
+
+/* Explore "Generate a tool" + gallery starter pack ------------------------- */
+.explore-generate:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.starter-pack {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.1rem;
+  padding: 0.9rem 1.1rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent) 14%, transparent),
+    transparent 78%
+  );
+  box-shadow: var(--shadow-sm);
+}
+
+.starter-pack-text {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.starter-pack-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.starter-pack-blurb {
+  margin-top: 0.3rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.starter-pack-blurb code {
+  font-size: 0.74rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+}
+
+.starter-pack-btn {
+  flex: none;
+}
