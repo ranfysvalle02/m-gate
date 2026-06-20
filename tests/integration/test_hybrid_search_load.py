@@ -21,10 +21,15 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.load, pytest.mark.asyncio]
 
-# Generous ceilings: a warm Atlas Local + local Ollama should be well under
-# these. They exist to catch order-of-magnitude regressions, not to micro-tune.
-P95_LATENCY_BUDGET_S = 5.0
-MEAN_LATENCY_BUDGET_S = 3.0
+# Generous ceilings: they exist to catch *order-of-magnitude* regressions, not
+# to micro-tune. With single-flight embedding coalescing a healthy run is ~2-4s
+# mean even for 50 concurrent searches over a single local Ollama; a structural
+# regression (e.g. losing coalescing -> a 50-way embed stampede) pushes mean to
+# ~15s. The thresholds sit in that gap with enough headroom to stay stable under
+# real machine-load variance (a busy dev laptop or a shared CI runner) while
+# still failing hard on the regression class.
+P95_LATENCY_BUDGET_S = 12.0
+MEAN_LATENCY_BUDGET_S = 8.0
 
 QUERIES = [
     "weather forecast for a city",

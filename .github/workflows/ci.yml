@@ -44,6 +44,10 @@ jobs:
       AUTH_MODE: hs256
       JWT_SECRET: ci-integration-jwt-secret
       FUSION_STRATEGY: rank_fusion
+      # Turn a missing/unhealthy engine into a HARD FAILURE instead of a silent
+      # skip. The whole point of this job is to reproduce the cloud gate; a
+      # skipped-green tier just hides real infra breakage until later.
+      INTEGRATION_STRICT: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -57,8 +61,9 @@ jobs:
         run: python scripts/fetch_python_wasm.py
       - name: Pre-pull the pinned Atlas Local image
         # Keep in lockstep with tests/integration/conftest.py ATLAS_LOCAL_IMAGE
-        # and docker-compose.yml; $rankFusion needs 8.1+.
-        run: docker pull mongodb/mongodb-atlas-local:8.3
+        # and docker-compose.yml; $rankFusion needs 8.1+. Pinned to a patch-level
+        # build (not floating :8.3) for deterministic, drift-free runs.
+        run: docker pull mongodb/mongodb-atlas-local:8.3.2-20260618T112243Z
       - name: Install and warm Ollama (embeddings provider)
         run: |
           curl -fsSL https://ollama.com/install.sh | sh

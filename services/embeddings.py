@@ -33,6 +33,17 @@ class EmbeddingUnavailableError(RuntimeError):
     pass
 
 
+def _consume_future_outcome(fut: asyncio.Future[Any]) -> None:
+    """Mark a single-flight future's outcome as retrieved.
+
+    Attached as a done-callback so a leader request that fails without any
+    followers does not leave an unretrieved exception on the future (which asyncio
+    logs as a warning at GC time). A no-op for successful or cancelled futures.
+    """
+    if not fut.cancelled():
+        fut.exception()
+
+
 class EmbeddingService(Protocol):
     @property
     def model_id(self) -> str: ...
@@ -111,6 +122,26 @@ class BaseHttpEmbeddingService:
         self._state_lock = Lock()
         self._circuit_open_until = 0.0
         self._consecutive_failures = 0
+        # Single-flight de-duplication for concurrent identical embeds. Without
+        # it, a burst of N identical queries (e.g. a 50-way hybrid-search fan-out
+        # over a handful of distinct strings) stampedes the provider with N calls
+        # instead of one — saturating a local Ollama and blowing tail latency.
+        # Keyed by text; the tuple pins the owning loop so a stale future from a
+        # finished loop is never awaited cross-loop.
+        self._inflight: dict[str, tuple[Any, asyncio.Future[list[float]]]] = {}
+
+    def reset_circuit_breaker(self) -> None:
+        """Clear transient health state: the open-circuit timer, the failure
+        counter, and any in-flight single-flight entries.
+
+        Used for recovery and, crucially, for test isolation: the service is a
+        process-wide singleton, so a breaker tripped by one test (e.g. a load
+        burst) must not leak into the next.
+        """
+        with self._state_lock:
+            self._circuit_open_until = 0.0
+            self._consecutive_failures = 0
+            self._inflight.clear()
 
     # --- identity (provided by subclasses) -------------------------------------
     @property
@@ -126,12 +157,43 @@ class BaseHttpEmbeddingService:
         cached = self._cache.get(text)
         if cached is not None:
             return cached
-        vectors = await self.embed_texts([text])
-        if not vectors:
-            raise ValueError("No embedding returned for input text.")
-        vector = vectors[0]
-        self._cache.set(text, vector)
-        return vector
+
+        loop = asyncio.get_running_loop()
+        with self._state_lock:
+            existing = self._inflight.get(text)
+            if existing is not None and existing[0] is loop and not existing[1].done():
+                # A request for the same text is already in flight on this loop;
+                # ride along instead of issuing a duplicate provider call.
+                follower = existing[1]
+            else:
+                follower = None
+                future: asyncio.Future[list[float]] = loop.create_future()
+                # Always "retrieve" the eventual result/exception so a leader that
+                # fails with zero followers never triggers an "exception was never
+                # retrieved" warning when the future is garbage-collected.
+                future.add_done_callback(_consume_future_outcome)
+                self._inflight[text] = (loop, future)
+        if follower is not None:
+            return await follower
+
+        try:
+            vectors = await self.embed_texts([text])
+            if not vectors:
+                raise ValueError("No embedding returned for input text.")
+            vector = vectors[0]
+            self._cache.set(text, vector)
+            if not future.done():
+                future.set_result(vector)
+            return vector
+        except Exception as exc:
+            if not future.done():
+                future.set_exception(exc)
+            raise
+        finally:
+            with self._state_lock:
+                current = self._inflight.get(text)
+                if current is not None and current[1] is future:
+                    del self._inflight[text]
 
     async def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
         now = time.monotonic()

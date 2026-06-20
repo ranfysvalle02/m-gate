@@ -50,12 +50,17 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Pinned Atlas Local image. A fixed minor tag keeps the engine deterministic;
-# bump deliberately, never float on :latest/:preview. Must match the runtime
+# Pinned Atlas Local image. A fixed *patch-level build* keeps the engine fully
+# deterministic; a floating minor tag (`:8.3`) silently rolls forward (8.3.2 ->
+# 8.3.4 -> …) and can drift away from the Dockerfile's crypt_shared 8.3.2,
+# reintroducing the very startup races this harness guards against. Bump
+# deliberately, never float on :8.3/:latest/:preview. Must match the runtime
 # (docker-compose.yml + the Dockerfile's crypt_shared 8.3.2): native $rankFusion
 # is 8.1+, so 8.0 silently exercised the app-side fallback instead of the real
-# server-side stage these tests claim to cover.
-ATLAS_LOCAL_IMAGE = os.environ.get("INTEGRATION_ATLAS_IMAGE", "mongodb/mongodb-atlas-local:8.3")
+# server-side stage these tests claim to cover. Overridable for CI/local bumps.
+ATLAS_LOCAL_IMAGE = os.environ.get(
+    "INTEGRATION_ATLAS_IMAGE", "mongodb/mongodb-atlas-local:8.3.2-20260618T112243Z"
+)
 # A unique DB per run so the suite is fully self-contained and never collides
 # with application data on a shared cluster.
 INTEGRATION_DB_NAME = f"itest_{uuid.uuid4().hex[:10]}"
@@ -89,8 +94,14 @@ def _verify_atlas_search(uri: str, *, timeout_ms: int = 2500) -> None:
     comes up *after* ``mongod`` accepts connections, so index *creation* can
     still fail with "Error connecting to Search Index Management service"
     (code 125) for a few seconds. We therefore verify the full write path:
-    create a throwaway search index and drop it. Only when that succeeds is the
-    engine truly ready for the suite's DDL.
+    create a throwaway search index. Only when that succeeds is the engine truly
+    ready for the suite's DDL.
+
+    We deliberately do NOT drop the probe collection here: a collection drop
+    forces mongot to process a namespace-removal event, opening a brief window in
+    which the very next create_search_index (the real bootstrap) can again hit
+    code 125. The probe collection is cleaned up wholesale by the session
+    teardown's drop_database(INTEGRATION_DB_NAME).
     """
     from pymongo import MongoClient
     from pymongo.operations import SearchIndexModel
@@ -100,7 +111,7 @@ def _verify_atlas_search(uri: str, *, timeout_ms: int = 2500) -> None:
         client.admin.command("ping")
         coll = client[INTEGRATION_DB_NAME]["__readiness_probe__"]
         list(coll.list_search_indexes())  # Atlas discriminator (read path)
-        # Write path: a real index create/drop exercises the mongot service.
+        # Write path: a real index create exercises the mongot service.
         coll.insert_one({"_probe": 1})
         coll.create_search_index(
             model=SearchIndexModel(
@@ -109,7 +120,9 @@ def _verify_atlas_search(uri: str, *, timeout_ms: int = 2500) -> None:
                 definition={"mappings": {"dynamic": True}},
             )
         )
-        coll.drop()  # cleans up the probe collection + its index
+        # Non-disruptive cleanup: empty the probe docs but keep the collection so
+        # mongot has no drop event to process before the real bootstrap DDL.
+        coll.delete_many({})
     finally:
         client.close()
 
@@ -244,17 +257,18 @@ async def _wait_for_search_results(settings, attempts: int = 60) -> None:
     search = HybridSearchService(
         settings=settings, embedding_service=get_embedding_service(settings)
     )
+    last_reason = "query returned no results (index empty or not yet reflecting seed)"
     for _ in range(attempts):
         try:
             results = await search.search_tools(query="weather forecast", mode="hybrid", limit=5)
             if results:
                 return
-        except Exception:  # noqa: BLE001 - index still warming up
-            pass
+        except Exception as exc:  # noqa: BLE001 - index still warming up
+            last_reason = f"{type(exc).__name__}: {str(exc)[:200]}"
         await asyncio.sleep(1)
     raise RuntimeError(
         "Seeded catalog never became searchable; the Atlas search index did not "
-        "warm up within the timeout."
+        f"warm up within {attempts}s. Last failure: {last_reason}"
     )
 
 
@@ -333,3 +347,20 @@ async def live_search(live_db, live_embeddings, settings):
     from services.hybrid_search import HybridSearchService
 
     return HybridSearchService(settings=settings, embedding_service=live_embeddings)
+
+
+@pytest.fixture(autouse=True)
+def _reset_embedding_breaker_between_tests():
+    """Keep the process-wide embedding breaker from leaking across tests.
+
+    The embedding provider service is a singleton, so a circuit tripped by one
+    test (e.g. the concurrency load burst saturating a local Ollama) would
+    otherwise stay open into the next test and cause spurious
+    "Embedding circuit breaker is open" failures. Reset before and after each test
+    so every test starts from a clean, healthy provider state.
+    """
+    from services.embedding_config import reset_embedding_circuit_breakers
+
+    reset_embedding_circuit_breakers()
+    yield
+    reset_embedding_circuit_breakers()

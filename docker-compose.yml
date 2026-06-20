@@ -9,10 +9,11 @@ services:
     restart: "no"
 
   mongodb:
-    # 8.3 (>= 8.1) is required for the $rankFusion hybrid-search stage used by
-    # tools/search mode=hybrid. The QE crypt_shared lib in the Dockerfile must
-    # match (MONGODB_CRYPT_VERSION) so client-side query analysis recognizes it.
-    image: mongodb/mongodb-atlas-local:8.3
+    # 8.3.x (>= 8.1) is required for the $rankFusion hybrid-search stage used by
+    # tools/search mode=hybrid. Pinned to a patch-level build (not floating :8.3)
+    # so the server stays in lockstep with the Dockerfile's crypt_shared 8.3.2 —
+    # client-side QE query analysis needs the lib to match the server.
+    image: mongodb/mongodb-atlas-local:8.3.2-20260618T112243Z
     container_name: mdb-gateway-mongodb
     ports:
       - "27017:27017"

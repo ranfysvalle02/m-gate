@@ -8,11 +8,18 @@ from pymongo.errors import OperationFailure
 from pymongo.operations import SearchIndexModel
 
 from config.settings import get_settings
-from database.errors import is_index_already_exists
+from database.errors import is_index_already_exists, is_search_mgmt_unavailable
 from database.mongo import get_tenant_database
 
 VECTOR_INDEX_NAME = "hybrid-vector-search"
 TEXT_INDEX_NAME = "hybrid-full-text-search"
+
+# A just-started Atlas engine can briefly reject search-index DDL with code 125
+# ("Error connecting to Search Index Management service") while mongot warms up.
+# That is transient, so retry with a bounded budget before giving up; a genuinely
+# broken cluster surfaces a different (non-retryable) error and still fails fast.
+_SEARCH_MGMT_RETRY_ATTEMPTS = 12
+_SEARCH_MGMT_RETRY_SLEEP_SECONDS = 2.0
 
 
 async def upsert_search_index(
@@ -23,11 +30,16 @@ async def upsert_search_index(
     index_type: str,
 ) -> None:
     model = SearchIndexModel(name=name, type=index_type, definition=definition)
-    try:
-        await collection.create_search_index(model=model)
-        return
-    except OperationFailure as exc:
-        if not is_index_already_exists(exc):
+    for attempt in range(_SEARCH_MGMT_RETRY_ATTEMPTS):
+        try:
+            await collection.create_search_index(model=model)
+            return
+        except OperationFailure as exc:
+            if is_index_already_exists(exc):
+                break
+            if is_search_mgmt_unavailable(exc) and attempt < _SEARCH_MGMT_RETRY_ATTEMPTS - 1:
+                await asyncio.sleep(_SEARCH_MGMT_RETRY_SLEEP_SECONDS)
+                continue
             raise
 
     # Index exists. Update in place.

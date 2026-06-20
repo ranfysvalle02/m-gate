@@ -129,8 +129,9 @@ fusion was computed:
 ```
 
 > **Versions / notes.** `$rankFusion` is native to MongoDB 8.1+. This repo runs
-> `mongodb/mongodb-atlas-local:8.3` in Compose (with a matching `crypt_shared`
-> 8.3.2 in the image) and in the integration tier. If you need score-based (not
+> `mongodb/mongodb-atlas-local:8.3.2-20260618T112243Z` (a pinned patch-level
+> build, not the floating `:8.3` tag) in Compose — with a matching `crypt_shared`
+> 8.3.2 in the image — and in the integration tier. If you need score-based (not
 > rank-based) fusion with normalization, MongoDB also offers `$scoreFusion`. The
 > gateway degrades to the semantic arm if the fusion stage is unavailable, so
 > search never hard-fails.

@@ -287,10 +287,11 @@ fusion algorithm…"*).
 `$rankFusion` is **8.1+** on both the server and the QE `crypt_shared` lib. The repo now
 pins:
 
-- `docker-compose.yml` → `mongodb/mongodb-atlas-local:8.3` (server; FCV `8.3`)
+- `docker-compose.yml` → `mongodb/mongodb-atlas-local:8.3.2-20260618T112243Z` (server,
+  pinned patch-level build; FCV `8.3`)
 - `Dockerfile` → `MONGODB_CRYPT_VERSION=8.3.2` (the `crypt_shared` library)
 
-Keep these two **aligned on the same minor**. A server that supports `$rankFusion` paired
+Keep these two **aligned on the same patch**. A server that supports `$rankFusion` paired
 with an older `crypt_shared` will still fail analysis with
 `Unrecognized pipeline stage name: '$rankFusion'`. After a version change, start from a
 clean data volume (or bump FCV) so the cluster's feature‑compatibility version actually

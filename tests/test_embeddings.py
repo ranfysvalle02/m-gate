@@ -100,6 +100,66 @@ async def test_circuit_breaker_opens_after_consecutive_failures():
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_concurrent_identical_embeds_coalesce_to_one_call():
+    import asyncio
+
+    # A slow responder so all 20 callers pile up while the first request is still
+    # in flight — single-flight should collapse them into ONE provider call.
+    async def _slow(request):
+        await asyncio.sleep(0.05)
+        return httpx.Response(200, json={"embeddings": [[0.5, 0.6, 0.7]]})
+
+    route = respx.post(EMBED_URL).mock(side_effect=_slow)
+    svc = OllamaEmbeddingService(settings=_settings())
+
+    results = await asyncio.gather(*[svc.embed_text("same") for _ in range(20)])
+
+    assert all(r == [0.5, 0.6, 0.7] for r in results)
+    assert route.call_count == 1  # 20 concurrent callers, one upstream embed
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_concurrent_failure_propagates_to_all_followers():
+    import asyncio
+
+    async def _slow_fail(request):
+        await asyncio.sleep(0.05)
+        return httpx.Response(500, json={"error": "down"})
+
+    respx.post(EMBED_URL).mock(side_effect=_slow_fail)
+    svc = OllamaEmbeddingService(settings=_settings(embedding_retry_attempts=1))
+
+    results = await asyncio.gather(
+        *[svc.embed_text("same") for _ in range(5)], return_exceptions=True
+    )
+    assert all(isinstance(r, EmbeddingUnavailableError) for r in results)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_reset_circuit_breaker_clears_open_state():
+    respx.post(EMBED_URL).mock(return_value=httpx.Response(500, json={"error": "down"}))
+    svc = OllamaEmbeddingService(
+        settings=_settings(embedding_retry_attempts=1, embedding_circuit_failures=1)
+    )
+    with pytest.raises(EmbeddingUnavailableError):
+        await svc.embed_text("a")
+    # Breaker open now.
+    with pytest.raises(EmbeddingUnavailableError, match="circuit breaker"):
+        await svc.embed_text("b")
+
+    svc.reset_circuit_breaker()
+
+    # After reset the breaker is closed: the call reaches the provider again
+    # (and fails for the provider reason, not the fast breaker path).
+    with pytest.raises(EmbeddingUnavailableError) as excinfo:
+        await svc.embed_text("c")
+    assert "circuit breaker" not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_lru_eviction_respects_max_entries():
     respx.post(EMBED_URL).mock(
         side_effect=lambda req: httpx.Response(200, json={"embeddings": [[0.0, 0.0, 0.0]]})

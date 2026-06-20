@@ -7,6 +7,11 @@ from pymongo.errors import OperationFailure
 _INDEX_ALREADY_EXISTS_CODES = {68}
 _NAMESPACE_NOT_FOUND_CODES = {26}
 _INDEX_NOT_FOUND_CODES = {27}
+# On a freshly-started Atlas Local container, mongod accepts connections before
+# the mongot search runner is reachable. Search-index DDL issued in that window
+# fails with code 125 / "Error connecting to Search Index Management service".
+# This is transient ("not ready yet, retry"), distinct from a hard failure.
+_SEARCH_MGMT_UNAVAILABLE_CODES = {125}
 
 # A freshly-created Atlas vector index passes through several transient states
 # while mongot materializes it. Querying it before it is queryable raises
@@ -49,6 +54,23 @@ def is_index_already_exists(exc: OperationFailure) -> bool:
         return True
     # Fallback for older server variants that omit structured error metadata.
     return "already exists" in str(exc).lower()
+
+
+def is_search_mgmt_unavailable(exc: OperationFailure) -> bool:
+    """True when the Atlas Search Index Management service is not yet reachable.
+
+    Transient and always safe to retry: it means mongot is still starting up
+    (or briefly busy), not that the DDL itself is invalid.
+    """
+    code = _code(exc)
+    if code in _SEARCH_MGMT_UNAVAILABLE_CODES:
+        return True
+    if _code_name(exc) == "CommandFailed":
+        # CommandFailed (125) is generic; require the known message to avoid
+        # treating unrelated command failures as retryable.
+        if "search index management service" in str(exc).lower():
+            return True
+    return "error connecting to search index management service" in str(exc).lower()
 
 
 def is_namespace_not_found(exc: OperationFailure) -> bool:

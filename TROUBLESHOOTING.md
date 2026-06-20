@@ -68,9 +68,9 @@ guesses. Each section includes:
 **How to fix**
 
 - Keep fallback enabled (default behavior is resilient — identical ranking).
-- Ensure server + `crypt_shared` are both 8.1+ and on the same minor (image
-  `mongodb-atlas-local:8.3` + `MONGODB_CRYPT_VERSION=8.3.2`); after a version change,
-  start from a clean data volume so FCV permits the stage.
+- Ensure server + `crypt_shared` are both 8.1+ and on the same patch (image
+  `mongodb-atlas-local:8.3.2-20260618T112243Z` + `MONGODB_CRYPT_VERSION=8.3.2`);
+  after a version change, start from a clean data volume so FCV permits the stage.
 - Verify text and vector indexes are queryable.
 
 **What to watch**

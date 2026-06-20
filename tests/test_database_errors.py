@@ -4,6 +4,7 @@ from database.errors import (
     is_index_already_exists,
     is_index_not_queryable_yet,
     is_namespace_not_found,
+    is_search_mgmt_unavailable,
 )
 
 
@@ -87,8 +88,36 @@ def test_is_index_not_queryable_yet_handles_not_initialized_message():
     assert is_index_not_queryable_yet(exc) is True
 
 
+def test_is_search_mgmt_unavailable_via_code_125():
+    # The canonical mongot-still-warming-up failure on a fresh Atlas Local engine.
+    exc = OperationFailure(
+        "Error connecting to Search Index Management service.",
+        code=125,
+        details={"codeName": "CommandFailed"},
+    )
+    assert is_search_mgmt_unavailable(exc) is True
+
+
+def test_is_search_mgmt_unavailable_message_fallback_without_code():
+    # Older/odd surfaces may omit the structured code; the message is the floor.
+    exc = OperationFailure("Error connecting to Search Index Management service.")
+    assert is_search_mgmt_unavailable(exc) is True
+
+
+def test_is_search_mgmt_unavailable_command_failed_requires_known_message():
+    # A generic CommandFailed without the search-management signature must NOT be
+    # treated as a retryable transient (avoid masking real command errors).
+    exc = OperationFailure(
+        "some other command failed",
+        code=9999,
+        details={"codeName": "CommandFailed"},
+    )
+    assert is_search_mgmt_unavailable(exc) is False
+
+
 def test_predicates_return_false_for_unrelated_error():
     exc = OperationFailure("some unrelated failure", code=11000)
     assert is_index_already_exists(exc) is False
     assert is_namespace_not_found(exc) is False
     assert is_index_not_queryable_yet(exc) is False
+    assert is_search_mgmt_unavailable(exc) is False

@@ -502,6 +502,25 @@ def reset_active_embedding_config() -> None:
         _tenant_services.clear()
 
 
+def reset_embedding_circuit_breakers() -> None:
+    """Clear transient breaker/in-flight state on every live provider instance.
+
+    The provider services are process-wide singletons, so a circuit tripped in
+    one place (a load burst, a flaky provider blip) would otherwise leak into
+    everything that shares the instance — including the next integration test.
+    This resets without rebuilding (cache + detected dimensions are preserved).
+    """
+    with _lock:
+        services: list[object] = []
+        if _active_service is not None:
+            services.append(_active_service)
+        services.extend(_tenant_services.values())
+    for service in services:
+        reset = getattr(service, "reset_circuit_breaker", None)
+        if callable(reset):
+            reset()
+
+
 async def refresh_active_embedding_config(settings: Settings | None = None) -> EmbeddingConfig:
     """Reload the active config from the control DB (env fallback) and rebuild it."""
     settings = settings or get_settings()
@@ -604,6 +623,7 @@ __all__ = [
     "resolve_dimensions",
     "refresh_active_embedding_config",
     "reset_active_embedding_config",
+    "reset_embedding_circuit_breakers",
     "active_embedding_identity",
     "tenant_embedding_identity",
     "invalidate_tenant_embedding",

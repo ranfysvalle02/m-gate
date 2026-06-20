@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Reliability: deterministic strict integration tier (Atlas Search startup race)
+- **Bounded retry for transient Atlas Search Management unavailability.** A
+  freshly-started Atlas Local engine accepts `mongod` connections before `mongot`
+  is reachable, so search-index DDL can briefly fail with code `125`
+  ("Error connecting to Search Index Management service"). `upsert_search_index`
+  now treats that as transient and retries with a bounded budget
+  (`database/errors.py::is_search_mgmt_unavailable` + retry loop in
+  `database/indexes.py`); `IndexAlreadyExists` and genuine errors still fail fast.
+- **Non-disruptive integration readiness probe.** The probe in
+  `tests/integration/conftest.py` no longer `drop()`s its collection (a drop made
+  `mongot` process a namespace-removal event, reopening the code-125 window right
+  before real bootstrap DDL); it now `delete_many({})`s and relies on the
+  session-scoped `drop_database` for cleanup. Search warm-up timeouts now report
+  the last observed failure reason.
+- **CI parity + deterministic image pin.** The CI integration job sets
+  `INTEGRATION_STRICT=1` (a missing/unhealthy engine is now a hard failure, never
+  a silent skip), and the Atlas Local image is pinned to the patch-level build
+  `mongodb/mongodb-atlas-local:8.3.2-20260618T112243Z` (matching `crypt_shared`
+  8.3.2) across the harness, Compose, and CI instead of the floating `:8.3` tag.
+- **Embedding single-flight (cache-stampede guard).** Concurrent identical embed
+  requests now coalesce into a single provider call (`services/embeddings.py`):
+  a 50-way hybrid-search fan-out over a handful of distinct strings no longer
+  stampedes the provider with 50 calls. This cut the integration load benchmark's
+  mean latency ~6x (≈14.7s → ≈2.3s) and stops a local Ollama from being saturated
+  into tripping the embedding circuit breaker under burst load.
+- **Embedding breaker no longer leaks across integration tests.** A new
+  `reset_circuit_breaker()` (+ `reset_embedding_circuit_breakers()` helper) clears
+  the process-wide singleton's transient health state; an autouse integration
+  fixture resets it around every test so a breaker tripped by one test can't fail
+  the next. Load-benchmark budgets were recalibrated to be stable under
+  machine-load variance while still catching order-of-magnitude regressions.
+
 ### Feature: `context.http` — opt-in, host-mediated outbound HTTP for code tools
 - **New `context.http` resource.** Code tools can now make outbound HTTPS calls
   (`context.http.get/head/post/put/patch/delete(url, params=, headers=, auth=, json=)`)
