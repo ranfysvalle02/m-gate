@@ -57,7 +57,7 @@ _GATEWAY_DEMO_HELLO_CODE = """def gateway_hello(name: str = "Cursor") -> dict:
             "Your MCP client opened ONE connection to the gateway and saw a few meta-tools.",
             "search_tools matched this tool by meaning via $rankFusion hybrid search on Atlas.",
             "call_downstream_tool routed the invocation to the 'gateway_demo' virtual server.",
-            "This Python ran inside the gateway's WASM sandbox - no shell, network, or host access.",
+            "This Python ran inside the gateway's WASM sandbox - no shell or host access, and no raw sockets (outbound HTTP only via the opt-in, allowlisted context.http bridge).",
         ],
         "try_next": [
             "search_tools(query='current weather for a city')",

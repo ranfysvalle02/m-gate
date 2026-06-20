@@ -336,6 +336,49 @@ gate blocked the package and who can unblock it.
 - `422` rate on `POST /admin/servers` and `POST /admin/code-tools/validate`.
 - `DownstreamError` on `tools/call` for `transport="code"` servers.
 
+## 13) `context.http` call blocked: egress-denied / SSRF-rejected
+
+**Symptoms**
+
+- A code tool using `context.http` raises `egress_blocked` ("…is not on the tenant
+  egress allowlist. A tenant admin can add it." or "…resolves to disallowed address…"),
+  `http_scheme_forbidden` ("context.http requires https:// URLs"), or `context.http is
+  unavailable: the egress bridge is disabled.`
+- Auth fails with `http_auth_unknown_key` ("auth references env key 'X', which is not
+  set on this server's Secrets").
+- Calls fail with `http_call_limit`, `http_response_too_large`, `http_request_too_large`,
+  `http_timeout`, `http_method_forbidden`, or `http_circuit_open`.
+
+**Why it happens**
+
+`context.http` is opt-in and **always deny-by-default** (independent of
+`EGRESS_ALLOWLIST_ENABLED`). A host is reachable only when it is on the tenant's egress
+allowlist **and** under the platform ceiling `EGRESS_GLOBAL_ALLOWLIST`, resolves to a
+public IP (the SSRF denylist blocks loopback/private/link-local/reserved/CGNAT, re-checked
+on every redirect), and the URL is `https`. Methods follow the tool's `action_type`
+(`read` ⇒ GET/HEAD only). Secrets are referenced by env-key *name* and resolved host-side.
+
+**How to fix**
+
+- `egress_blocked` (allowlist) → a tenant admin adds the host via
+  `PUT /admin/tenants/{id}/egress-allowlist`; a platform operator ensures it is also in
+  `EGRESS_GLOBAL_ALLOWLIST`. The whoami **Network / egress** row shows the effective set.
+- `egress_blocked` (disallowed address) → the host resolves to a private/internal IP;
+  this is intentional SSRF protection and cannot be allowlisted away.
+- `context.http is unavailable` / disabled bridge → set `SANDBOX_HTTP_BRIDGE_ENABLED=true`.
+- `http_scheme_forbidden` → use an `https://` URL.
+- `http_method_forbidden` → author the tool as `write`/`destructive` to use write verbs.
+- `http_auth_unknown_key` → add the secret under the server's **Secrets** tab; pass its
+  exact key name as `auth="KEY"`.
+- `http_call_limit` / `*_too_large` / `http_timeout` → reduce calls or payload, or raise
+  the `SANDBOX_HTTP_*` caps. `http_circuit_open` clears after
+  `SANDBOX_HTTP_BREAKER_RESET_SECONDS` once the upstream recovers.
+
+**What to watch**
+
+- `gateway_egress_blocks_total{stage="connect"}` and `sandbox_http_egress_request`
+  billing events (per host/status/bytes).
+
 ## Quick triage sequence
 
 1. Check gateway process health (`/health/live`).

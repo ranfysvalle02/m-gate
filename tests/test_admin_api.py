@@ -1601,6 +1601,48 @@ async def test_whoami_returns_code_requirements_summary(patch_mongo, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_whoami_returns_http_egress_summary(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    await patch_mongo._control_db["tenants"].insert_one(
+        {
+            "tenant_id": "tenant-a",
+            "db_name": "db",
+            "egress_allowlist": ["api.vendor.com", "outside.example"],
+        }
+    )
+    monkeypatch.setattr(
+        admin.settings,
+        "egress_global_allowlist",
+        "api.vendor.com *.corp.example",
+        raising=False,
+    )
+    monkeypatch.setattr(admin.settings, "sandbox_http_bridge_enabled", True, raising=False)
+
+    response = await admin.who_am_i(_Req(tenant_id="tenant-a", roles=["viewer"]))
+    assert response.http_egress.enabled is True
+    assert response.http_egress.allowlist == ["api.vendor.com", "outside.example"]
+    assert response.http_egress.global_ceiling == ["*.corp.example", "api.vendor.com"]
+    assert response.http_egress.effective == ["api.vendor.com"]
+    assert response.http_egress.global_restricted is True
+    assert response.http_egress.default_deny is True
+
+
+@pytest.mark.asyncio
+async def test_whoami_http_egress_defaults_disabled_when_bridge_off(patch_mongo, monkeypatch):
+    import gateway.routers.admin as admin
+
+    monkeypatch.setattr(admin.settings, "egress_global_allowlist", "", raising=False)
+    monkeypatch.setattr(admin.settings, "sandbox_http_bridge_enabled", False, raising=False)
+    response = await admin.who_am_i(_Req(tenant_id="tenant-a", roles=["admin"]))
+    assert response.http_egress.enabled is False
+    assert response.http_egress.allowlist == []
+    assert response.http_egress.effective == []
+    assert response.http_egress.global_ceiling == []
+    assert response.http_egress.default_deny is True
+
+
+@pytest.mark.asyncio
 async def test_register_server_blocked_by_global_allowlist(patch_mongo, monkeypatch):
     import gateway.routers.admin as admin
     import services.egress_policy as egress_policy

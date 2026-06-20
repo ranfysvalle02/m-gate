@@ -1262,6 +1262,22 @@ window.adminConsole = function adminConsole(config) {
       );
     },
 
+    // Effective outbound-HTTP (context.http) policy for the Sandbox-contract
+    // Network row. Outbound HTTP is always deny-by-default: no host is reachable
+    // unless a tenant admin grants it (and it sits under the platform ceiling).
+    httpPolicy() {
+      return (
+        this.state.whoami?.http_egress || {
+          enabled: false,
+          effective: [],
+          allowlist: [],
+          global_ceiling: [],
+          global_restricted: false,
+          default_deny: true,
+        }
+      );
+    },
+
     // PEP 503 distribution-name normalization, mirroring the server so a chip's
     // verdict matches exactly what the runtime install enforces.
     _normalizeReqName(spec) {

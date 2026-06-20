@@ -123,10 +123,14 @@ Full list with defaults: [`.env.example`](.env.example). Production essentials:
 
 ### Downstream egress allowlist
 
-Restricts which downstream hosts/networks the gateway may connect to (the only
-outbound surface; the code sandbox has no network). Enforced at registration (`422`)
-and, authoritatively, at connect time with DNS re-resolution + IP pinning to defeat
-rebinding. See [`SECURITY.md`](SECURITY.md#network-egress-controls-per-tenant-allowlists).
+Restricts which downstream hosts/networks the gateway may connect to. This covers
+both outbound surfaces: the downstream-server proxy and the opt-in code-tool
+`context.http` bridge (the wasm sandbox itself has no sockets). Enforced at
+registration (`422`) and, authoritatively, at connect time with DNS re-resolution +
+IP pinning to defeat rebinding. **Code egress (`context.http`) is always
+deny-by-default and SSRF-screened, even when `EGRESS_ALLOWLIST_ENABLED=false`** — see
+the `SANDBOX_HTTP_*` row below.
+See [`SECURITY.md`](SECURITY.md#network-egress-controls-per-tenant-allowlists).
 
 | Variable | Default | Prod guidance |
 | --- | --- | --- |
@@ -138,6 +142,25 @@ rebinding. See [`SECURITY.md`](SECURITY.md#network-egress-controls-per-tenant-al
 Per-tenant allowlists are managed at runtime via
 `PUT /admin/tenants/{tenant_id}/egress-allowlist` and intersect with the global
 ceiling. Watch `gateway_egress_blocks_total{stage}` (`register`/`connect`).
+
+#### Code-tool outbound HTTP (`context.http`)
+
+Off by default. When enabled, sandboxed code can make host-mediated HTTPS calls,
+screened by the **same** egress stack as above. Code egress is **always
+deny-by-default and SSRF-screened**, independent of `EGRESS_ALLOWLIST_ENABLED`: a
+tenant reaches a host only if it is on that tenant's egress allowlist **and** under
+`EGRESS_GLOBAL_ALLOWLIST`. Each call emits a `sandbox_http_egress_request` billing
+event.
+
+| Variable | Default | Prod guidance |
+| --- | --- | --- |
+| `SANDBOX_HTTP_BRIDGE_ENABLED` | `false` | Master switch for `context.http`. Leave off unless tenants need outbound HTTP |
+| `SANDBOX_HTTP_TIMEOUT_MS` | `5000` | Per-call timeout |
+| `SANDBOX_HTTP_MAX_CALLS_PER_INVOCATION` | `10` | Per-tool-run call budget |
+| `SANDBOX_HTTP_MAX_RESPONSE_BYTES` | `262144` | Response body cap |
+| `SANDBOX_HTTP_MAX_REQUEST_BYTES` | `131072` | Request body cap (write methods) |
+| `SANDBOX_HTTP_BREAKER_FAILURES` / `SANDBOX_HTTP_BREAKER_RESET_SECONDS` | `5` / `30` | Per-(tenant, host) circuit breaker |
+| `SANDBOX_HTTP_MAX_CONCURRENCY_PER_TENANT` / `SANDBOX_HTTP_MAX_GLOBAL_CONCURRENCY` | `8` / `0` | Outbound concurrency caps (`0` = unlimited global) |
 
 ---
 

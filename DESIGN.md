@@ -231,7 +231,8 @@ section above, so it is bounded by two rules that keep it honest:
 A **virtual server** is a server with `transport="code"`: its tools are Python
 functions you author in Admin Studio, stored (encrypted) in MongoDB, and executed
 inside a **WebAssembly sandbox** (`services/sandbox_executor.py`) — no shell, no
-network, no host filesystem. The seeded `weather`, `orders`, `utilities`,
+raw sockets, no host filesystem (outbound HTTP only via the opt-in, allowlisted
+`context.http` bridge). The seeded `weather`, `orders`, `utilities`,
 `analytics`, and the new `gateway_demo` servers are all virtual.
 
 > **Analogy — food trucks vs. building a restaurant.** A traditional MCP server
@@ -247,18 +248,21 @@ network, no host filesystem. The seeded `weather`, `orders`, `utilities`,
   tool in seconds. No container, no port, no service registration.
 - **Uniform `context`.** Every tool gets the same injected `context`:
   `context.db` (tenant-scoped MongoDB via a host-mediated bridge), `context.env`
-  (per-server encrypted secrets), and `context.tools` (call sibling tools in the
-  same tenant). The tenant is the namespace; small tools compose into workflows
-  with no glue code. See [`CONTEXT.md`](CONTEXT.md).
+  (per-server encrypted secrets), `context.tools` (call sibling tools in the
+  same tenant), and the opt-in `context.http` (host-mediated, allowlisted outbound
+  HTTPS with host-side secret injection). The tenant is the namespace; small tools
+  compose into workflows with no glue code. See [`CONTEXT.md`](CONTEXT.md).
 - **Safe by construction.** An authoring-time lint rejects obvious abuse, and the
   WASM sandbox is the real isolation boundary at runtime.
 
 ### Why *not* / limits
 
-- **The sandbox is intentionally constrained.** No arbitrary network or host
-  access. If your tool *needs* to call an external API, that belongs in a real
-  downstream server (`transport="streamable_http"`, like the seeded `deepwiki`),
-  not a code tool.
+- **The sandbox is intentionally constrained.** No raw sockets or host access.
+  A code tool *can* reach an external REST API via the opt-in `context.http`
+  bridge — but only allowlisted, https, deny-by-default, and host-mediated. For a
+  full protocol surface (SSE, stdio, complex auth flows) a real downstream server
+  (`transport="streamable_http"`, like the seeded `deepwiki`) is still the better
+  fit; `context.http` is for straightforward REST calls from within a function.
 - **CPU/cold-start cost.** Compiling and running Python-on-WASI is not free; the
   gateway keeps a prewarmed worker pool to amortize it. Heavy compute is not the
   sweet spot. Cold start (runtime spawn/compile + in-guest CPython boot) is kept
@@ -403,7 +407,7 @@ and get back:
     "Your MCP client opened ONE connection to the gateway and saw a few meta-tools.",
     "search_tools matched this tool by meaning via $rankFusion hybrid search on Atlas.",
     "call_downstream_tool routed the invocation to the 'gateway_demo' virtual server.",
-    "This Python ran inside the gateway's WASM sandbox - no shell, network, or host access."
+    "This Python ran inside the gateway's WASM sandbox - no shell or host access, and no raw sockets (outbound HTTP only via the opt-in, allowlisted context.http bridge)."
   ],
   "try_next": [
     "search_tools(query='current weather for a city')",

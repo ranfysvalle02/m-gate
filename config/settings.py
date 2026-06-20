@@ -230,6 +230,29 @@ class Settings(BaseSettings):
     sandbox_tool_call_max_depth: int = 3
     # Per-result size ceiling for a relayed cross-tool call response.
     sandbox_tool_max_result_bytes: int = 262_144
+    # Enable the opt-in, host-mediated outbound HTTP bridge (`context.http`) for
+    # code tools. The sandbox itself stays network-isolated (no WASI sockets); a
+    # request is relayed to the host and made through the SAME egress stack as the
+    # downstream proxy -- SSRF denylist + global ceiling intersected with the
+    # tenant egress allowlist + DNS-rebinding-proof IP pinning. Code egress is
+    # ALWAYS deny-by-default (independent of EGRESS_ALLOWLIST_ENABLED): an empty
+    # effective allowlist blocks every host. https-only; write methods require the
+    # tool's action_type to be write/destructive.
+    sandbox_http_bridge_enabled: bool = False
+    # Hard bounds for host-side HTTP egress initiated by a single code-tool run.
+    sandbox_http_timeout_ms: int = 5_000
+    sandbox_http_max_calls_per_invocation: int = 10
+    sandbox_http_max_response_bytes: int = 262_144
+    # Max request body bytes a single context.http write call may send.
+    sandbox_http_max_request_bytes: int = 131_072
+    # Per-(tenant, host) outbound circuit breaker: open after N consecutive
+    # failures, stay open for the reset window (mirrors the embedding breaker).
+    sandbox_http_breaker_failures: int = 5
+    sandbox_http_breaker_reset_seconds: int = 30
+    # Concurrency ceilings for outbound HTTP (mirrors the sandbox semaphores).
+    # 0 == unlimited.
+    sandbox_http_max_concurrency_per_tenant: int = 8
+    sandbox_http_max_global_concurrency: int = 0
     # When a request arrives for a tenant that has never been provisioned, create
     # its database + indexes on first use. Disable in environments where tenant
     # ids come from untrusted callers and provisioning must be an explicit step.

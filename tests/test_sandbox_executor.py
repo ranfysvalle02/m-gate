@@ -621,6 +621,56 @@ async def test_tool_rpc_frame_without_invoker_is_protocol_breach(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_http_rpc_frame_routes_to_http_bridge(monkeypatch):
+    http_frame = b'{"type":"http_rpc","id":1,"method":"GET","url":"https://api.example.com/x"}\n'
+    final_frame = b'{"ok": true, "result": {"done": true}, "stdout": "", "stderr": ""}\n'
+    process = _FakeProcess(stdout=[http_frame, final_frame], returncode=0)
+
+    class _HttpBridge:
+        def __init__(self, **_kwargs):
+            return None
+
+        async def handle(self, frame):
+            assert frame["type"] == "http_rpc"
+            return {
+                "type": "http_rpc_result",
+                "id": frame["id"],
+                "ok": True,
+                "result": {"status": 200, "headers": {}, "text": "ok", "url": frame["url"]},
+            }
+
+    async def _spawn(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spawn)
+    monkeypatch.setattr("services.sandbox_executor.SandboxHttpBridge", _HttpBridge)
+    executor = WasmExecutor(
+        settings=Settings(sandbox_http_bridge_enabled=True), python_bin="python"
+    )
+    result = await executor.run(_request())
+    assert result.payload == {"done": True}
+    assert any(b'"type": "http_rpc_result"' in line for line in process.stdin_writes)
+
+
+@pytest.mark.asyncio
+async def test_http_rpc_returns_structured_error_when_bridge_disabled():
+    # Keep the dispatcher alive via DB bridge; with HTTP bridge disabled an
+    # incoming http_rpc frame must fail as a typed bridge error, not crash.
+    executor = WasmExecutor(
+        settings=Settings(sandbox_db_bridge_enabled=True, sandbox_http_bridge_enabled=False),
+        python_bin="python",
+    )
+    dispatch = executor._bridge_dispatcher(_request())
+    assert dispatch is not None
+    response = await dispatch(
+        {"type": "http_rpc", "id": 7, "method": "GET", "url": "https://api.example.com/x"}
+    )
+    assert response["type"] == "http_rpc_result"
+    assert response["ok"] is False
+    assert response["error"]["type"] == "http_rpc_error"
+
+
+@pytest.mark.asyncio
 async def test_nested_request_gets_independent_tenant_semaphore():
     executor = WasmExecutor(
         settings=Settings(sandbox_max_concurrency_per_tenant=1), python_bin="python"
@@ -661,4 +711,27 @@ def test_job_payload_reflects_tool_bridge_state():
     assert enabled["tool_bridge"] is True
     assert disabled["tool_bridge"] is False
     # The blocked parent gets headroom for nested sandbox latency.
+    assert enabled["db_rpc_wait_ms"] > disabled["db_rpc_wait_ms"]
+
+
+def test_job_payload_reflects_http_bridge_state():
+    executor = WasmExecutor(
+        settings=Settings(
+            sandbox_http_bridge_enabled=True, sandbox_http_max_calls_per_invocation=3
+        ),
+        python_bin="python",
+    )
+    limits = executor._resolve_limits(None)
+    enabled = executor._job_payload(_request(), [], limits)
+    assert enabled["http_bridge"] is True
+    assert enabled["db_rpc_wait_ms"] >= limits.wall_timeout_ms + (
+        3 * executor.settings.sandbox_http_timeout_ms
+    )
+
+    executor_disabled = WasmExecutor(
+        settings=Settings(sandbox_http_bridge_enabled=False),
+        python_bin="python",
+    )
+    disabled = executor_disabled._job_payload(_request(), [], limits)
+    assert disabled["http_bridge"] is False
     assert enabled["db_rpc_wait_ms"] > disabled["db_rpc_wait_ms"]

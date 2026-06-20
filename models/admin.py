@@ -471,6 +471,28 @@ class CodeRequirementsPolicySummary(BaseModel):
     execution_enabled: bool = False
 
 
+class HttpEgressPolicySummary(BaseModel):
+    """Compact effective outbound-HTTP (``context.http``) policy for the tenant.
+
+    Drives the Sandbox-contract "Network / egress" row: the UI shows whether the
+    bridge is enabled and which hosts the tenant's code may reach. Outbound HTTP
+    is always deny-by-default — an empty effective set blocks every host.
+    """
+
+    # Whether the host-mediated context.http bridge is enabled at all.
+    enabled: bool = False
+    # Effective reachable hosts: tenant egress allowlist ∩ global ceiling.
+    effective: list[str] = Field(default_factory=list)
+    # The tenant's curated egress allowlist (may include entries outside the ceiling).
+    allowlist: list[str] = Field(default_factory=list)
+    # The operator ceiling (EGRESS_GLOBAL_ALLOWLIST).
+    global_ceiling: list[str] = Field(default_factory=list)
+    # True when the operator ceiling is non-empty.
+    global_restricted: bool = False
+    # Always True for code egress: every reachable host is an explicit grant.
+    default_deny: bool = True
+
+
 class WhoAmIResponse(BaseModel):
     tenant_id: str
     user_id: str
@@ -491,6 +513,7 @@ class WhoAmIResponse(BaseModel):
     code_requirements: CodeRequirementsPolicySummary = Field(
         default_factory=CodeRequirementsPolicySummary
     )
+    http_egress: HttpEgressPolicySummary = Field(default_factory=HttpEgressPolicySummary)
     auth_mode: Literal["hs256", "jwks"]
 
 

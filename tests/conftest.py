@@ -117,6 +117,12 @@ def patch_mongo(monkeypatch, fake_db):
 
     tenant_pip_policy.reset_tenant_pip_policy_cache()
 
+    # The context.http bridge's circuit-breaker + concurrency state is process-global;
+    # clear it so a tripped breaker / changed cap never leaks across tests.
+    import services.sandbox_http_bridge as sandbox_http_bridge
+
+    sandbox_http_bridge.reset_http_egress_state()
+
     # The active embedding config/service is process-global; reset it so tests that
     # exercise provisioning/identity start from the env defaults backed by the fake.
     import services.embedding_config as embedding_config

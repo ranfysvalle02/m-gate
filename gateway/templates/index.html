@@ -1430,6 +1430,50 @@
               </span>
             </li>
             <li>
+              <span class="contract-key">Network / egress</span>
+              <span class="contract-val">
+                <template x-if="!httpPolicy().enabled">
+                  <span
+                    >No network — <code>context.http</code> is off for this
+                    deployment. Code is fully network-isolated.</span
+                  >
+                </template>
+                <template
+                  x-if="httpPolicy().enabled && (httpPolicy().effective || []).length"
+                >
+                  <span
+                    ><code>context.http</code> may reach (https only,
+                    deny-by-default):
+                    <template
+                      x-for="(host, i) in httpPolicy().effective"
+                      :key="host"
+                    >
+                      <span
+                        ><code x-text="host"></code
+                        ><span
+                          x-show="i < httpPolicy().effective.length - 1"
+                          >, </span
+                        ></span
+                      > </template
+                    >. Use
+                    <code>context.http.get(url, auth="ENV_KEY")</code> — the
+                    secret is injected host-side and never enters your
+                    code.</span
+                  >
+                </template>
+                <template
+                  x-if="httpPolicy().enabled && !(httpPolicy().effective || []).length"
+                >
+                  <span
+                    >Outbound HTTP is <strong>deny-by-default</strong> — no host
+                    is allowlisted for this tenant yet. A tenant admin can add
+                    hosts to the egress allowlist before
+                    <code>context.http</code> can reach them.</span
+                  >
+                </template>
+              </span>
+            </li>
+            <li>
               <span class="contract-key">Your function</span>
               <span class="contract-val"
                 >Name must equal the tool name, take the input-schema fields as

@@ -157,11 +157,16 @@ async def test_code_tool(
         scopes=["server:*"],
         roles=["admin"],
     )
-    tool_invoker = c.get_proxy_registry().make_tool_invoker(
+    proxy_registry = c.get_proxy_registry()
+    tool_invoker = proxy_registry.make_tool_invoker(
         tenant_id=target_tenant,
         caller=test_caller,
         call_depth=0,
     )
+    # Load the server's secrets so a workbench "Run" can exercise context.http
+    # secret injection (auth="ENV_KEY") exactly like production. Fail-soft: an
+    # unsaved draft simply has no secrets yet.
+    server_env = await proxy_registry.read_server_env(target_tenant, server_name)
     try:
         result = await asyncio.wait_for(
             executor.run(
@@ -172,7 +177,7 @@ async def test_code_tool(
                     raw_code=payload.raw_code,
                     requirements=requirements,
                     arguments=payload.arguments if isinstance(payload.arguments, dict) else {},
-                    env={},
+                    env=server_env,
                     action_type=payload.action_type,
                     tool_invoker=tool_invoker,
                     allowed_requirements=allowed_requirements,

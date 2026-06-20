@@ -7,8 +7,12 @@ import httpx
 import pytest
 
 from services import egress_transport
-from services.egress_policy import EgressNotAllowed, build_rules
-from services.egress_transport import PinnedEgressTransport, make_egress_client_factory
+from services.egress_policy import EgressNotAllowed, build_code_egress_rules, build_rules
+from services.egress_transport import (
+    PinnedEgressTransport,
+    make_code_egress_client_factory,
+    make_egress_client_factory,
+)
 
 
 def _settings(*, enabled=True, global_allowlist="", default_deny=False):
@@ -116,3 +120,91 @@ async def test_factory_builds_client_with_pinned_transport():
         assert isinstance(client._transport, PinnedEgressTransport)
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_code_egress_transport_pins_allowlisted_host(captured, monkeypatch):
+    monkeypatch.setattr(egress_transport, "resolve_host", lambda *_a, **_k: _ips("93.184.216.34"))
+    rules = build_code_egress_rules(
+        _settings(enabled=False, global_allowlist="*.example.com"),
+        tenant_allowlist=["api.example.com"],
+    )
+    transport = PinnedEgressTransport(rules=rules, code_egress=True)
+
+    request = httpx.Request("GET", "https://api.example.com/data")
+    await transport.handle_async_request(request)
+
+    pinned = captured["request"]
+    assert pinned.url.host == "93.184.216.34"
+    assert pinned.headers["host"] == "api.example.com"
+
+
+@pytest.mark.asyncio
+async def test_code_egress_transport_denies_with_no_tenant_grant(captured, monkeypatch):
+    # Even with the downstream-proxy egress feature OFF, code egress is fail-closed.
+    monkeypatch.setattr(egress_transport, "resolve_host", lambda *_a, **_k: _ips("93.184.216.34"))
+    monkeypatch.setattr(egress_transport, "observe_egress_block", lambda stage: None)
+    rules = build_code_egress_rules(
+        _settings(enabled=False, global_allowlist="*.example.com"), tenant_allowlist=[]
+    )
+    transport = PinnedEgressTransport(rules=rules, code_egress=True)
+
+    request = httpx.Request("GET", "https://api.example.com/data")
+    with pytest.raises(EgressNotAllowed):
+        await transport.handle_async_request(request)
+    assert "request" not in captured
+
+
+@pytest.mark.asyncio
+async def test_code_egress_factory_builds_fail_closed_transport():
+    factory = make_code_egress_client_factory(
+        settings=_settings(global_allowlist="api.example.com"), tenant_id="tenant-a"
+    )
+    client = factory()
+    try:
+        assert isinstance(client, httpx.AsyncClient)
+        transport = client._transport
+        assert isinstance(transport, PinnedEgressTransport)
+        assert transport._code_egress is True
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_redirect_revalidates_each_hop_and_blocks_private_target(monkeypatch):
+    """A redirect target is re-resolved/re-screened before connect."""
+    seen: list[str] = []
+
+    async def _fake_handle(self, request):
+        seen.append(str(request.url))
+        if request.headers.get("host") == "api.example.com":
+            return httpx.Response(
+                302,
+                headers={"location": "https://redirect.example.com/final"},
+                request=request,
+            )
+        return httpx.Response(200, text="ok", request=request)
+
+    def _resolve(host, *_a, **_k):
+        if host == "api.example.com":
+            return _ips("93.184.216.34")
+        if host == "redirect.example.com":
+            # Rebinding-style redirect to private address must be blocked.
+            return _ips("10.0.0.9")
+        return _ips("93.184.216.34")
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", _fake_handle)
+    monkeypatch.setattr(egress_transport, "resolve_host", _resolve)
+    monkeypatch.setattr(egress_transport, "observe_egress_block", lambda stage: None)
+
+    rules = build_rules(_settings(global_allowlist="*.example.com"))
+    transport = PinnedEgressTransport(rules=rules)
+    client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+    try:
+        with pytest.raises(EgressNotAllowed):
+            await client.get("https://api.example.com/start")
+    finally:
+        await client.aclose()
+
+    # First hop reached the underlying transport; second hop was blocked before connect.
+    assert len(seen) == 1

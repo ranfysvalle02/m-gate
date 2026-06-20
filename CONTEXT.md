@@ -9,11 +9,12 @@ Your function runs in a wasm sandbox and can use:
 - Python builtins + standard library (subject to sandbox lint policy)
 - `context` runtime helper object
 
-`context` exposes exactly three resources — nothing else lives on it:
+`context` exposes exactly four resources — nothing else lives on it:
 
 - `context.db` — tenant-scoped database access (host-relayed, no DB creds in sandbox)
 - `context.env` — per-server encrypted environment values
 - `context.tools` — call sibling tools in your tenant namespace (host-relayed, re-authorized)
+- `context.http` — opt-in, host-mediated outbound HTTPS (deny-by-default allowlist, SSRF-screened, host-side secret injection)
 
 For BSON ids, use `context.db.ObjectId("...")` (it belongs to the database). For
 timestamps, use the standard library: `from datetime import datetime, timezone`.
@@ -213,7 +214,8 @@ This is the fastest way to discover query shape while authoring tools.
 
 ## Important Runtime Notes
 
-- The sandbox is network-isolated.
+- The sandbox has no raw network/sockets. Every external interaction (DB, sibling
+  tools, outbound HTTP) is relayed through the trusted host process.
 - DB operations are relayed through the host process and scoped to your tenant.
 - Bridge behavior is controlled by `SANDBOX_DB_BRIDGE_ENABLED` (enabled in local dev examples, opt-in for production).
 - DB limits are controlled by:
@@ -226,6 +228,49 @@ This is the fastest way to discover query shape while authoring tools.
   - `SANDBOX_TOOL_CALL_MAX_DEPTH`
   - `SANDBOX_TOOL_MAX_CALLS_PER_INVOCATION`
   - `SANDBOX_TOOL_MAX_RESULT_BYTES`
+- Outbound HTTP (`context.http`) is controlled by:
+  - `SANDBOX_HTTP_BRIDGE_ENABLED` (opt-in, off by default)
+  - the egress allowlist: `EGRESS_GLOBAL_ALLOWLIST` (platform ceiling) intersected
+    with the per-tenant egress allowlist. **Always deny-by-default** for code —
+    an empty effective allowlist blocks every host, regardless of
+    `EGRESS_ALLOWLIST_ENABLED`.
+  - `SANDBOX_HTTP_TIMEOUT_MS`, `SANDBOX_HTTP_MAX_CALLS_PER_INVOCATION`,
+    `SANDBOX_HTTP_MAX_RESPONSE_BYTES`, `SANDBOX_HTTP_MAX_REQUEST_BYTES`
+  - `SANDBOX_HTTP_BREAKER_FAILURES` / `SANDBOX_HTTP_BREAKER_RESET_SECONDS`
+  - `SANDBOX_HTTP_MAX_CONCURRENCY_PER_TENANT` / `SANDBOX_HTTP_MAX_GLOBAL_CONCURRENCY`
+
+## `context.http` Outbound HTTP
+
+Opt-in (`SANDBOX_HTTP_BRIDGE_ENABLED=true`). The wasm jail still has no sockets;
+each call is relayed to the host and made through the gateway's egress firewall
+(SSRF denylist + global ceiling ∩ tenant allowlist + IP pinning, re-validated on
+every redirect). **https only.**
+
+```python
+def fx(base: str = "USD") -> dict:
+    resp = context.http.get("https://api.example.com/rates", params={"base": base})
+    if not resp.ok:
+        raise ValueError(f"upstream {resp.status}")
+    return resp.json()
+```
+
+Secrets are injected host-side — pass the *name* of a per-server secret, never
+the value:
+
+```python
+# attaches "Authorization: Bearer <EXAMPLE_TOKEN>" on the host; the value never
+# enters your code, the URL, logs, or the response.
+context.http.get("https://api.example.com/me", auth="EXAMPLE_TOKEN")
+# custom header: auth={"key": "EXAMPLE_TOKEN", "header": "X-Api-Key", "scheme": ""}
+```
+
+Methods follow the tool's `action_type`: `read` tools may use `get`/`head`;
+`write`/`destructive` tools may also `post`/`put`/`patch`/`delete` (send a body
+with `json=` or `data=`). The response exposes `.status`, `.ok`, `.headers`,
+`.text`, `.content`, and `.json()`. Blocked calls raise a typed error
+(`egress_blocked`, `http_scheme_forbidden`, `http_method_forbidden`,
+`http_auth_unknown_key`, `http_response_too_large`, `http_call_limit`,
+`http_timeout`, …) you can `try/except`.
 
 ## Authoring Checklist
 

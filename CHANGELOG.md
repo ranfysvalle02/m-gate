@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Feature: `context.http` — opt-in, host-mediated outbound HTTP for code tools
+- **New `context.http` resource.** Code tools can now make outbound HTTPS calls
+  (`context.http.get/head/post/put/patch/delete(url, params=, headers=, auth=, json=)`)
+  returning a small response object (`.status`, `.ok`, `.headers`, `.text`,
+  `.content`, `.json()`). The wasm sandbox still has **no sockets**; each call is
+  relayed over the existing `/job/rpc` file bridge to a new host-side
+  `services/sandbox_http_bridge.py`. Off by default (`SANDBOX_HTTP_BRIDGE_ENABLED`).
+- **Reuses the egress firewall, always fail-closed.** The host makes the call
+  through `PinnedEgressTransport` in a new code-egress mode
+  (`services/egress_policy.py::build_code_egress_rules`) that forces
+  `enabled=True` + `default_deny=True` + `require_tenant_allowlist=True`
+  **regardless of `EGRESS_ALLOWLIST_ENABLED`** — SSRF denylist + `EGRESS_GLOBAL_ALLOWLIST`
+  (platform ceiling) intersected with the per-tenant egress allowlist + DNS-rebinding-proof
+  IP pinning, re-validated on every redirect hop. An empty effective allowlist
+  (`tenant ∩ global = ∅`) blocks every host. **https only.**
+- **Server-side secret injection.** `auth="ENV_KEY"` resolves the value from the
+  server's encrypted env on the host and attaches it (default
+  `Authorization: Bearer …`, or a custom header); the secret never enters the
+  function source, the URL, logs, or the response. Unknown keys raise
+  `http_auth_unknown_key`.
+- **Write methods gated by `action_type`.** `read` tools may use `get`/`head`;
+  `write`/`destructive` tools may also `post`/`put`/`patch`/`delete` with a
+  request body (size-capped).
+- **Bounded + metered.** Per-invocation call budget, per-call timeout,
+  request/response size caps, a per-`(tenant, host)` circuit breaker, and
+  per-tenant/global outbound concurrency caps (`SANDBOX_HTTP_*`). Each call emits
+  a `sandbox_http_egress_request` billing event. `GET /admin/whoami` returns an
+  `http_egress` summary (enabled flag, effective hosts), surfaced as a
+  "Network / egress" row in the Functions Studio sandbox contract and a new
+  `context.http` tab in the "What is context?" modal.
+- **Docs:** refreshed `CONTEXT.md`, `NETWORK-SECURITY.md`, `SECURITY.md`,
+  `docs/API.md`, `README.md`, `ARCHITECTURE.md`, `DESIGN.md`, `PRODUCTION.md`,
+  `database/seed.py`, `.env.example`, and `TROUBLESHOOTING.md` (new failure mode #13).
+
 ### Feature: per-tenant code-package (pip) policy — BREAKING
 - **Tenant pip allowlist, intersected with the operator ceiling.** What a code
   tool may install is now `SANDBOX_ALLOWED_REQUIREMENTS` (global operator ceiling)

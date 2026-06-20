@@ -13,6 +13,7 @@ from models.admin import (
     DemoScopesResponse,
     DemoUserCreateRequest,
     DemoUserCreateResponse,
+    HttpEgressPolicySummary,
     PasswordChangeRequest,
     UserCreateRequest,
     UserListResponse,
@@ -25,7 +26,9 @@ from models.admin import (
 from services import users as users_service
 from services.account_tier import get_tenant_confirmation
 from services.admin_session import mint_bearer_jwt, mint_session
+from services.egress_policy import effective_code_egress_hosts, global_egress_ceiling
 from services.passwords import verify_password
+from services.tenant_egress import get_tenant_egress_allowlist
 from services.tenant_pip_policy import (
     effective_allowlist,
     get_tenant_pip_allowlist,
@@ -73,6 +76,15 @@ async def who_am_i(request: Request) -> WhoAmIResponse:
         global_restricted=bool(ceiling),
         execution_enabled=bool(settings.code_tool_execution_enabled),
     )
+    egress_allowlist = await get_tenant_egress_allowlist(tenant_id, settings=settings)
+    egress_ceiling = global_egress_ceiling(settings)
+    http_egress = HttpEgressPolicySummary(
+        enabled=bool(settings.sandbox_http_bridge_enabled),
+        effective=effective_code_egress_hosts(egress_allowlist, settings=settings),
+        allowlist=sorted(egress_allowlist),
+        global_ceiling=egress_ceiling,
+        global_restricted=bool(egress_ceiling),
+    )
     return WhoAmIResponse(
         tenant_id=tenant_id,
         user_id=user_id,
@@ -85,6 +97,7 @@ async def who_am_i(request: Request) -> WhoAmIResponse:
         tenant_read_only=await get_tenant_read_only(tenant_id),
         confirmation=await get_tenant_confirmation(tenant_id),
         code_requirements=code_requirements,
+        http_egress=http_egress,
         auth_mode=settings.auth_mode,
     )
 

@@ -8,8 +8,10 @@ import pytest
 from services import egress_policy
 from services.egress_policy import (
     EgressNotAllowed,
+    build_code_egress_rules,
     build_rules,
     check_endpoint_allowed,
+    effective_code_egress_hosts,
     parse_allowlist,
     validate_entries,
     validate_entry,
@@ -157,3 +159,62 @@ async def test_check_endpoint_allowed_permits_listed(monkeypatch):
         tenant_allowlist=[],
         settings=_settings(global_allowlist="*.allowed.example"),
     )
+
+
+# ---- Code egress (context.http) rules: always fail-closed ------------------
+
+
+def test_code_egress_denies_all_even_when_allowlist_feature_off():
+    # The downstream-proxy toggle is OFF and no allowlist is configured, yet code
+    # egress must still be active + deny-by-default (no SSRF bypass for tenant code).
+    rules = build_code_egress_rules(
+        _settings(enabled=False, global_allowlist=""), tenant_allowlist=[]
+    )
+    assert rules.is_active is True
+    with pytest.raises(EgressNotAllowed):
+        rules.evaluate("api.example.com", _ips("93.184.216.34"))
+
+
+def test_code_egress_empty_tenant_blocks_even_within_global_ceiling():
+    # Strict intersect: a permissive global ceiling does NOT grant access on its
+    # own. With no tenant grant the effective set is empty -> deny.
+    rules = build_code_egress_rules(
+        _settings(enabled=False, global_allowlist="*.example.com"), tenant_allowlist=[]
+    )
+    with pytest.raises(EgressNotAllowed):
+        rules.evaluate("api.example.com", _ips("93.184.216.34"))
+
+
+def test_code_egress_allows_tenant_grant_within_ceiling():
+    rules = build_code_egress_rules(
+        _settings(enabled=False, global_allowlist="*.example.com"),
+        tenant_allowlist=["api.example.com"],
+    )
+    rules.evaluate("api.example.com", _ips("93.184.216.34"))
+    # Tenant grant outside the global ceiling stays blocked.
+    rules_outside = build_code_egress_rules(
+        _settings(enabled=False, global_allowlist="*.example.com"),
+        tenant_allowlist=["api.vendor.com"],
+    )
+    with pytest.raises(EgressNotAllowed):
+        rules_outside.evaluate("api.vendor.com", _ips("93.184.216.34"))
+
+
+def test_code_egress_always_screens_ssrf_on_allowlisted_host():
+    rules = build_code_egress_rules(
+        _settings(enabled=False, global_allowlist="api.example.com"),
+        tenant_allowlist=["api.example.com"],
+    )
+    with pytest.raises(EgressNotAllowed):
+        rules.evaluate("api.example.com", _ips("169.254.169.254"))
+
+
+def test_effective_code_egress_hosts_intersects_with_ceiling():
+    settings = _settings(global_allowlist="api.example.com, cdn.example.com")
+    assert effective_code_egress_hosts(
+        ["api.example.com", "api.vendor.com"], settings=settings
+    ) == ["api.example.com"]
+    # No ceiling configured -> tenant grants stand alone.
+    assert effective_code_egress_hosts(
+        ["api.example.com"], settings=_settings(global_allowlist="")
+    ) == ["api.example.com"]

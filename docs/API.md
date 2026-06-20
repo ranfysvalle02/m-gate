@@ -181,9 +181,11 @@ require the `platform-admin` role.
     discoverable via `tools/list`/search. When `CODE_TOOL_EXECUTION_ENABLED=true`,
     `tools/call` executes them in the WebAssembly sandbox runtime (`CODE_EXECUTOR=wasm`);
     when false, the call returns `"code_execution_not_enabled"`. Runtime now
-    supports a tenant-scoped virtual DB bridge (`context.db[...]`) that relays
-    through the host process (sandbox remains network-isolated), with host-side
-    operation allowlists enforced by `metadata.action_type`.
+    supports a tenant-scoped virtual DB bridge (`context.db[...]`) and an opt-in
+    outbound HTTP bridge (`context.http`, `SANDBOX_HTTP_BRIDGE_ENABLED`) that both
+    relay through the host process (the wasm sandbox has no sockets), with host-side
+    operation allowlists enforced by `metadata.action_type` and a deny-by-default,
+    SSRF-screened egress allowlist for HTTP.
   - `GET /admin/explore/collections` — list tenant collections (excluding
     `system.*`) for the code-tool authoring assistant.
   - `POST /admin/explore/sample` — return bounded sample docs + inferred field
@@ -380,6 +382,20 @@ For `transport="code"` catalog entries:
   re-authorized against the original caller's scopes, restricted to
   `transport="code"` servers, refuses confirmation-gated tools, and is bounded
   by `SANDBOX_TOOL_CALL_MAX_DEPTH` + `SANDBOX_TOOL_MAX_CALLS_PER_INVOCATION`.
+- When `SANDBOX_HTTP_BRIDGE_ENABLED=true`, code tools can make outbound HTTPS
+  calls via `context.http.get/head/post/...(url, params=, headers=, auth=, json=)`.
+  The wasm sandbox has no sockets — the host makes the call through the egress
+  firewall (SSRF denylist + `EGRESS_GLOBAL_ALLOWLIST` ∩ per-tenant egress
+  allowlist + IP pinning, re-validated per redirect). **https only**; code egress
+  is **always deny-by-default** (independent of `EGRESS_ALLOWLIST_ENABLED`).
+  Write methods require the tool's `action_type` to be `write`/`destructive`.
+  `auth="ENV_KEY"` injects a per-server secret host-side (the value never enters
+  the guest). Bounded by `SANDBOX_HTTP_MAX_CALLS_PER_INVOCATION`,
+  `SANDBOX_HTTP_TIMEOUT_MS`, `SANDBOX_HTTP_MAX_RESPONSE_BYTES`,
+  `SANDBOX_HTTP_MAX_REQUEST_BYTES`, a per-host circuit breaker, and per-tenant
+  concurrency caps. Each call emits a `sandbox_http_egress_request` billing event.
+  `GET /admin/whoami` returns an `http_egress` summary (enabled flag, effective
+  hosts = tenant ∩ global ceiling).
 - For any tool call, tenant quota is enforced in-band. When exceeded, `tools/call`
   returns JSON-RPC `RATE_LIMITED` (`-32029`) with
   `{"reason":"quota_exceeded","usage":...,"quota":...}`.

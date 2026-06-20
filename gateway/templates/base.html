@@ -570,6 +570,7 @@
             <button type="button" class="modal-tab" :class="state.contextHelpTab === 'db' ? 'modal-tab-active' : ''" @click="state.contextHelpTab = 'db'">🗄️ context.db</button>
             <button type="button" class="modal-tab" :class="state.contextHelpTab === 'env' ? 'modal-tab-active' : ''" @click="state.contextHelpTab = 'env'">🔐 context.env</button>
             <button type="button" class="modal-tab" :class="state.contextHelpTab === 'tools' ? 'modal-tab-active' : ''" @click="state.contextHelpTab = 'tools'">🧩 context.tools</button>
+            <button type="button" class="modal-tab" :class="state.contextHelpTab === 'http' ? 'modal-tab-active' : ''" @click="state.contextHelpTab = 'http'">🌐 context.http</button>
             <button type="button" class="modal-tab" :class="state.contextHelpTab === 'results' ? 'modal-tab-active' : ''" @click="state.contextHelpTab = 'results'">✅ Results &amp; types</button>
           </div>
 
@@ -578,7 +579,7 @@
             <div x-show="state.contextHelpTab === 'overview'">
               <div class="tldr">
                 <span aria-hidden="true">💡</span>
-                <span><strong>In one line:</strong> <code>context</code> hands your function three superpowers — <code>context.db</code>, <code>context.env</code>, and <code>context.tools</code> — with zero credentials and zero network access.</span>
+                <span><strong>In one line:</strong> <code>context</code> hands your function four superpowers — <code>context.db</code>, <code>context.env</code>, <code>context.tools</code>, and opt-in <code>context.http</code> — with zero credentials and no raw sockets.</span>
               </div>
 
               <div class="ctx-grid">
@@ -596,6 +597,11 @@
                   <div class="ctx-card-icon">🧩</div>
                   <div class="ctx-card-title"><code>context.tools</code></div>
                   <p>Call sibling tools in your tenant namespace: <code>context.tools.&lt;server&gt;.&lt;tool&gt;(...)</code>. Re-authorized against you, code-only, depth-bounded.</p>
+                </div>
+                <div class="ctx-card">
+                  <div class="ctx-card-icon">🌐</div>
+                  <div class="ctx-card-title"><code>context.http</code></div>
+                  <p>Opt-in outbound HTTPS, relayed through the host: deny-by-default allowlist, SSRF-screened + IP-pinned, with host-side secret injection via <code>auth="ENV_KEY"</code>.</p>
                 </div>
               </div>
 
@@ -730,6 +736,59 @@ context.call("analytics", "track_click", target="home")  # explicit</pre>
                 <li><strong>Bounded</strong> — depth + per-run call budgets stop runaway or cyclic fan-out; a tool that calls itself fails closed.</li>
               </ul>
               <p>A blocked call raises a clear error you can <code>try/except</code> (<code>forbidden</code>, <code>confirmation_required</code>, <code>tool_not_callable</code>, <code>tool_call_depth_exceeded</code>, …). Enable with <code>SANDBOX_TOOL_BRIDGE_ENABLED</code>.</p>
+            </div>
+
+            <!-- TAB: context.http -->
+            <div x-show="state.contextHelpTab === 'http'">
+              <div class="tldr">
+                <span aria-hidden="true">💡</span>
+                <span>Opt-in outbound HTTPS for code tools — the wasm jail still has <strong>no sockets</strong>. Each call is relayed to the host and made through the same egress firewall the gateway uses: <strong>deny-by-default</strong> allowlist, SSRF denylist, DNS-rebinding-proof IP pinning (re-checked on every redirect).</span>
+              </div>
+
+              <h4>Make a request</h4>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">GET + JSON</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'context.http example')">Copy</button>
+                </div>
+                <pre>def fx_rate(base: str = "USD") -> dict:
+    # Host screens the URL against the egress allowlist, pins a validated IP,
+    # then makes the call. Response body is capped by SANDBOX_HTTP_MAX_RESPONSE_BYTES.
+    resp = context.http.get("https://api.example.com/rates", params={"base": base})
+    if not resp.ok:
+        raise ValueError(f"upstream {resp.status}")
+    return resp.json()</pre>
+              </div>
+
+              <h4>Authenticated calls — the secret never enters your code</h4>
+              <div class="code-block">
+                <div class="code-head">
+                  <span class="code-cap">auth="ENV_KEY"</span>
+                  <button type="button" class="code-copy" @click="copyText($el.closest('.code-block').querySelector('pre').innerText, 'context.http auth example')">Copy</button>
+                </div>
+                <pre>def me() -> dict:
+    # You pass the NAME of a secret (set in Edit → Secrets). The host looks it up
+    # and attaches "Authorization: Bearer &lt;value&gt;" — the value is never in your
+    # source, the URL, logs, or the response you get back.
+    return context.http.get("https://api.example.com/me", auth="EXAMPLE_TOKEN").json()
+    # custom header: auth={"key": "EXAMPLE_TOKEN", "header": "X-Api-Key", "scheme": ""}</pre>
+              </div>
+
+              <h4>Methods &amp; your action type</h4>
+              <ul>
+                <li><strong>read</strong> tools: <code>get</code>, <code>head</code> only.</li>
+                <li><strong>write</strong> / <strong>destructive</strong> tools: also <code>post</code>, <code>put</code>, <code>patch</code>, <code>delete</code> (send a body with <code>json=</code> or <code>data=</code>).</li>
+              </ul>
+              <p>The response exposes <code>.status</code>, <code>.ok</code>, <code>.headers</code>, <code>.text</code>, <code>.content</code>, and <code>.json()</code> (cookies and hop-by-hop headers are stripped).</p>
+
+              <h4>How it stays safe</h4>
+              <ul>
+                <li><strong>https only</strong> — plaintext <code>http://</code> and non-HTTP schemes are rejected.</li>
+                <li><strong>Deny-by-default</strong> — a host is reachable only if a tenant admin adds it to the egress allowlist <em>and</em> it sits under the platform ceiling (<code>EGRESS_GLOBAL_ALLOWLIST</code>). An empty allowlist blocks everything.</li>
+                <li><strong>SSRF-screened</strong> — internal / private / link-local addresses are always denied, even via a redirect or a rebind.</li>
+                <li><strong>Bounded</strong> — per-invocation call budget, per-call timeout, request/response size caps, a per-host circuit breaker, and per-tenant concurrency limits.</li>
+              </ul>
+              <p>A blocked call raises a clear error you can <code>try/except</code> (<code>egress_blocked</code>, <code>http_scheme_forbidden</code>, <code>http_method_forbidden</code>, <code>http_auth_unknown_key</code>, <code>http_response_too_large</code>, <code>http_call_limit</code>, <code>http_timeout</code>, …). Enable with <code>SANDBOX_HTTP_BRIDGE_ENABLED</code>.</p>
             </div>
 
             <!-- TAB: Results & types -->

@@ -107,6 +107,7 @@ try:
     rpc_dir = Path("/job/rpc")
     db_bridge_enabled = bool(job.get("db_bridge"))
     tool_bridge_enabled = bool(job.get("tool_bridge"))
+    http_bridge_enabled = bool(job.get("http_bridge"))
     rpc_state = {"counter": 0}
 
     def _to_extjson(value):
@@ -297,11 +298,97 @@ try:
                 raise AttributeError(server_name)
             return _ServerToolsProxy(server_name)
 
+    class _HttpResponse:
+        # A requests/httpx-flavored, read-only response. The body arrives as
+        # decoded text when it is valid UTF-8, else as base64 (content_b64).
+        def __init__(self, data):
+            self.status_code = int(data.get("status") or 0)
+            self.status = self.status_code
+            self.headers = dict(data.get("headers") or {})
+            self.url = data.get("url")
+            self._text = data.get("text")
+            self._content_b64 = data.get("content_b64")
+
+        @property
+        def ok(self):
+            return 200 <= self.status_code < 400
+
+        @property
+        def text(self):
+            if self._text is not None:
+                return self._text
+            if self._content_b64 is not None:
+                import base64
+                return base64.b64decode(self._content_b64).decode("utf-8", "replace")
+            return ""
+
+        @property
+        def content(self):
+            import base64
+            if self._content_b64 is not None:
+                return base64.b64decode(self._content_b64)
+            if self._text is not None:
+                return self._text.encode("utf-8")
+            return b""
+
+        def json(self):
+            return json.loads(self.text)
+
+        def __repr__(self):
+            return "HttpResponse(status=" + str(self.status_code) + ")"
+
+    class _HttpProxy:
+        # context.http.get(url, ...) -> _HttpResponse. Relayed to the host, which
+        # screens the URL against the egress allowlist + SSRF denylist, pins a
+        # validated IP, and (optionally) injects a secret via auth="ENV_KEY".
+        def _request(self, method, url, *, params=None, headers=None, auth=None,
+                     json=None, data=None):
+            if not http_bridge_enabled:
+                raise RuntimeError("context.http is unavailable: the egress bridge is disabled.")
+            response = _bridge_call(
+                "http",
+                {
+                    "method": str(method),
+                    "url": str(url),
+                    "params": params or {},
+                    "headers": headers or {},
+                    "auth": auth,
+                    "json": json,
+                    "data": data,
+                },
+            )
+            if not response.get("ok"):
+                error = response.get("error") if isinstance(response.get("error"), dict) else {}
+                raise RuntimeError(str(error.get("message") or "HTTP request failed."))
+            return _HttpResponse(response.get("result") or {})
+
+        def get(self, url, **kwargs):
+            return self._request("GET", url, **kwargs)
+
+        def head(self, url, **kwargs):
+            return self._request("HEAD", url, **kwargs)
+
+        def post(self, url, **kwargs):
+            return self._request("POST", url, **kwargs)
+
+        def put(self, url, **kwargs):
+            return self._request("PUT", url, **kwargs)
+
+        def patch(self, url, **kwargs):
+            return self._request("PATCH", url, **kwargs)
+
+        def delete(self, url, **kwargs):
+            return self._request("DELETE", url, **kwargs)
+
+        def request(self, method, url, **kwargs):
+            return self._request(method, url, **kwargs)
+
     class _Context:
         def __init__(self):
             self.db = _DbProxy()
             self.env = dict(job.get("env") or {})
             self.tools = _ToolsProxy()
+            self.http = _HttpProxy()
 
         def call(self, server, tool, **kwargs):
             # Explicit form that works regardless of server/tool naming:
@@ -693,6 +780,18 @@ def _run_wasm(
                         "server": request.get("server"),
                         "tool": request.get("tool"),
                         "arguments": request.get("arguments"),
+                    }
+                elif kind == "http":
+                    rpc_frame = {
+                        "type": "http_rpc",
+                        "id": rpc_id,
+                        "method": request.get("method"),
+                        "url": request.get("url"),
+                        "params": request.get("params"),
+                        "headers": request.get("headers"),
+                        "auth": request.get("auth"),
+                        "json": request.get("json"),
+                        "data": request.get("data"),
                     }
                 else:
                     rpc_frame = {

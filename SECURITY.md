@@ -179,10 +179,12 @@ All references point at the code that implements the control.
 
 ### Network egress controls (per-tenant allowlists)
 
-The gateway's only outbound surface is its proxy to registered downstream MCP servers
-(`streamable_http`/`sse`); the code sandbox has no network at all. Outbound egress to
-those downstreams is governed by a **two-gate allowlist** so an operator can restrict,
-per tenant, exactly which hosts/networks the gateway may reach:
+The gateway has two outbound surfaces: its proxy to registered downstream MCP servers
+(`streamable_http`/`sse`), and the opt-in code-tool egress bridge (`context.http`, off
+unless `SANDBOX_HTTP_BRIDGE_ENABLED=true`). The wasm sandbox itself has **no sockets**;
+`context.http` relays through the host and reuses the exact same allowlist + SSRF +
+IP-pinning stack described below. Outbound egress is governed by a **two-gate allowlist**
+so an operator can restrict, per tenant, exactly which hosts/networks the gateway may reach:
 
 - **Global ceiling** (`EGRESS_GLOBAL_ALLOWLIST`, `config/settings.py`): a deployment-wide
   set of allowed host globs (`*.corp.example`), exact hosts, IP literals, and CIDRs.
@@ -206,6 +208,15 @@ per tenant, exactly which hosts/networks the gateway may reach:
   gates, so they can never drift. Blocked connections are surfaced as protocol-safe
   downstream errors and counted via `gateway_egress_blocks_total{stage}`
   (`register`/`connect`).
+- **Code egress is always fail-closed.** The `context.http` bridge builds its rules via
+  `services/egress_policy.py::build_code_egress_rules`, which forces `enabled=True` +
+  `default_deny=True` and `require_tenant_allowlist=True` regardless of the
+  deployment-wide `EGRESS_ALLOWLIST_ENABLED` toggle. So even on a deployment that leaves
+  the downstream-proxy egress filter off, sandbox code is screened on every call and an
+  empty per-tenant allowlist (the effective set `tenant ∩ global` is `∅`) blocks every
+  host. Secrets are injected **host-side** from the server's encrypted env via
+  `auth="ENV_KEY"`; the value never enters the function source, the request URL, logs,
+  or the response returned to the guest.
 
 ### Code-backed tool sandbox execution
 

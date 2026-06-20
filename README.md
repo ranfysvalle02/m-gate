@@ -210,6 +210,10 @@ This repository now includes a working end-to-end MCP Gateway with:
 - **Tenant-scoped virtual DB bridge** for code tools: `context.db[...]` queries
   relay through the host process (no sandbox network access or DB credentials),
   gated by each tool's `action_type` (`read` / `write` / `destructive`)
+- **Opt-in outbound HTTP bridge** for code tools: `context.http.get(url, auth="ENV_KEY")`
+  relays through the host (the wasm jail has no sockets), screened by a deny-by-default,
+  SSRF-proof, IP-pinned egress allowlist (`tenant ∩ EGRESS_GLOBAL_ALLOWLIST`), with
+  secrets injected host-side. Off by default (`SANDBOX_HTTP_BRIDGE_ENABLED`)
 - **Per-server encrypted runtime env**: code tools read `context.env["KEY"]`; values are managed from Admin Studio Secrets and never returned after write
 - **Explore Database authoring assistant** in Admin Studio: browse tenant
   collections, sample documents, run read-only queries, and insert/copy

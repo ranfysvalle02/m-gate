@@ -77,7 +77,7 @@ behind a TLS-terminating ingress/LB/mesh. The container entrypoint is
 | Embedding provider (Ollama) | `11434` | HTTP/TCP | If using Ollama |
 | Embedding / JWKS / cloud APIs | `443` | HTTPS/TCP | If using a cloud embedding provider or remote JWKS |
 | Downstream MCP servers | per server (`endpoint`) | HTTP/SSE or stdio | Yes (for proxied tools) |
-| Code-tool sandbox worker | none (WASI default) | N/A | No external egress by default |
+| Code-tool sandbox worker (`context.http`) | `443` | HTTPS/TCP | Only if `SANDBOX_HTTP_BRIDGE_ENABLED=true`; deny-by-default per-tenant allowlist |
 
 Registration-time trust boundary:
 
@@ -90,11 +90,16 @@ Registration-time trust boundary:
 Sandbox runtime boundary:
 
 - `transport="code"` tools execute inside a WebAssembly worker subprocess. The WASI
-  runtime exposes no network sockets by default, so sandboxed tools have no direct
-  outbound network path (including Atlas/internal service reachability) unless a future
-  explicit egress allowlist is introduced.
-- Per-tool egress allowlists are deferred to the productionization phase; current
-  behavior is deny-by-default.
+  runtime exposes **no network sockets**, so sandboxed code can never open a
+  connection directly (no Atlas/internal service reachability from inside the jail).
+- Outbound HTTP is available only through the opt-in, host-mediated `context.http`
+  bridge (`SANDBOX_HTTP_BRIDGE_ENABLED=true`). The host makes the call through the
+  same egress stack as the downstream proxy: SSRF denylist + `EGRESS_GLOBAL_ALLOWLIST`
+  (platform ceiling) intersected with the per-tenant egress allowlist + DNS-rebinding-proof
+  IP pinning (re-validated on every redirect hop). https only.
+- Code egress is **always deny-by-default**, independent of `EGRESS_ALLOWLIST_ENABLED`:
+  with no per-tenant grant, every host is blocked. A tenant admin must explicitly
+  allowlist each reachable host, and it must also sit under the platform ceiling.
 
 The bundled NetworkPolicy (`deploy/k8s/networkpolicy.yaml`, `deploy/helm/templates/networkpolicy.yaml`)
 is **default-deny** and allows egress only to DNS (53), `27017`, `11434`, and `443`.

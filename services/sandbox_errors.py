@@ -9,7 +9,7 @@ from __future__ import annotations
 # (relay to a bridge) rather than the worker's final result frame. Both the
 # throwaway executor and the warm pool route on this set so a new bridge kind
 # only has to be added in one place.
-BRIDGE_RPC_FRAME_TYPES = frozenset({"db_rpc", "tool_rpc"})
+BRIDGE_RPC_FRAME_TYPES = frozenset({"db_rpc", "tool_rpc", "http_rpc"})
 
 
 def frame_budget_bytes(max_output_bytes: int) -> int:

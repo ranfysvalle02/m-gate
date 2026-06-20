@@ -20,6 +20,7 @@ from services.sandbox_errors import (
     SandboxProtocolError,
     SandboxTimeoutError,
 )
+from services.sandbox_http_bridge import SandboxHttpBridge
 from services.sandbox_tool_bridge import SandboxToolBridge, ToolInvoker
 from services.tenant_pip_policy import evaluate_requirements, normalize_requirement_name
 
@@ -248,12 +249,16 @@ class WasmExecutor:
         # point). A run without an invoker can never reach a sibling tool.
         return bool(self.settings.sandbox_tool_bridge_enabled) and request.tool_invoker is not None
 
+    def _http_bridge_enabled(self) -> bool:
+        return bool(self.settings.sandbox_http_bridge_enabled)
+
     def _worker_timeout_ms(
         self,
         *,
         wall_timeout_ms: int,
         db_bridge_enabled: bool,
         tool_bridge_enabled: bool = False,
+        http_bridge_enabled: bool = False,
     ) -> int:
         timeout_ms = max(1, int(wall_timeout_ms))
         if db_bridge_enabled:
@@ -266,6 +271,12 @@ class WasmExecutor:
             # guest headroom for that nested latency. The real ceiling on the
             # whole chain stays the caller's asyncio.wait_for over the run.
             timeout_ms += max(1, int(wall_timeout_ms))
+        if http_bridge_enabled:
+            # Outbound HTTP runs on the host while the guest blocks; give the same
+            # headroom (calls * per-call timeout) the DB bridge gets.
+            max_calls = max(0, int(self.settings.sandbox_http_max_calls_per_invocation))
+            per_call = max(0, int(self.settings.sandbox_http_timeout_ms))
+            timeout_ms += max_calls * per_call
         return timeout_ms
 
     def _bridge_dispatcher(
@@ -280,7 +291,8 @@ class WasmExecutor:
         """
         db_enabled = self._db_bridge_enabled()
         tool_enabled = self._tool_bridge_enabled(request)
-        if not db_enabled and not tool_enabled:
+        http_enabled = self._http_bridge_enabled()
+        if not db_enabled and not tool_enabled and not http_enabled:
             return None
 
         db_bridge = (
@@ -301,6 +313,18 @@ class WasmExecutor:
             if tool_enabled and request.tool_invoker is not None
             else None
         )
+        http_bridge = (
+            SandboxHttpBridge(
+                tenant_id=request.tenant_id,
+                action_type=request.action_type,
+                env=request.env,
+                settings=self.settings,
+                server=request.server,
+                tool=request.tool,
+            )
+            if http_enabled
+            else None
+        )
 
         async def _dispatch(frame: dict[str, Any]) -> dict[str, Any]:
             if frame.get("type") == "tool_rpc":
@@ -315,6 +339,18 @@ class WasmExecutor:
                         },
                     }
                 return await tool_bridge.handle(frame)
+            if frame.get("type") == "http_rpc":
+                if http_bridge is None:
+                    return {
+                        "type": "http_rpc_result",
+                        "id": frame.get("id"),
+                        "ok": False,
+                        "error": {
+                            "type": "http_rpc_error",
+                            "message": "HTTP egress bridge is disabled for this run.",
+                        },
+                    }
+                return await http_bridge.handle(frame)
             if db_bridge is None:
                 return {
                     "type": "db_rpc_result",
@@ -430,10 +466,12 @@ class WasmExecutor:
             "action_type": request.action_type,
             "db_bridge": self._db_bridge_enabled(),
             "tool_bridge": self._tool_bridge_enabled(request),
+            "http_bridge": self._http_bridge_enabled(),
             "db_rpc_wait_ms": self._worker_timeout_ms(
                 wall_timeout_ms=limits.wall_timeout_ms,
                 db_bridge_enabled=self._db_bridge_enabled(),
                 tool_bridge_enabled=self._tool_bridge_enabled(request),
+                http_bridge_enabled=self._http_bridge_enabled(),
             ),
             "limits": self._limits_payload(limits),
         }

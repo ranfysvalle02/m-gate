@@ -152,6 +152,16 @@ Isolation model:
 - requirements install is two-gate allowlisted (operator ceiling ∩ tenant policy) and wheel-only
 - per-call temp workspace
 - protocol-framed worker responses with strict validation
+- no sockets in the wasm jail; all external I/O (DB, sibling tools, outbound HTTP)
+  is relayed to the host over the `/job/rpc` file channel and re-validated there
+
+Host bridges (relayed over `/job/rpc`, each opt-in via settings):
+
+- `context.db` — tenant-scoped DB, gated by `action_type`
+- `context.tools` — re-authorized sibling code-tool calls
+- `context.http` — outbound HTTPS through the egress firewall (SSRF denylist +
+  `tenant ∩ global` allowlist + IP pinning); always deny-by-default for code,
+  https-only, write methods gated by `action_type`, host-side secret injection
 
 Pool behavior:
 

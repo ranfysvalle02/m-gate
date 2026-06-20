@@ -26,7 +26,13 @@ from typing import Any
 import httpx
 
 from config.settings import Settings
-from services.egress_policy import EgressNotAllowed, EgressRules, build_rules, resolve_host
+from services.egress_policy import (
+    EgressNotAllowed,
+    EgressRules,
+    build_code_egress_rules,
+    build_rules,
+    resolve_host,
+)
 from services.metrics import observe_egress_block
 from services.tenant_egress import get_tenant_egress_allowlist
 
@@ -45,23 +51,32 @@ class PinnedEgressTransport(httpx.AsyncHTTPTransport):
         rules: EgressRules | None = None,
         settings: Settings | None = None,
         tenant_id: str | None = None,
+        code_egress: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._static_rules = rules
         self._settings = settings
         self._tenant_id = tenant_id
+        # When True, resolve rules with build_code_egress_rules so enforcement is
+        # ALWAYS active + deny-by-default (used by the sandbox context.http
+        # bridge), independent of the deployment-wide EGRESS_ALLOWLIST_ENABLED.
+        self._code_egress = code_egress
 
     async def _resolve_rules(self) -> EgressRules:
         if self._static_rules is not None:
             return self._static_rules
         if self._settings is None:
-            # No policy source configured => nothing to enforce.
+            # No policy source configured => nothing to enforce, unless this is a
+            # code-egress transport, which must still fail closed.
+            if self._code_egress:
+                return build_code_egress_rules(_NULL_SETTINGS, tenant_allowlist=[])
             return build_rules(_NULL_SETTINGS, tenant_allowlist=[])
         tenant_allowlist = await get_tenant_egress_allowlist(
             self._tenant_id or "", settings=self._settings
         )
-        return build_rules(
+        builder = build_code_egress_rules if self._code_egress else build_rules
+        return builder(
             self._settings,
             tenant_allowlist=tenant_allowlist,
             global_allowlist=self._settings.egress_global_allowlist,
@@ -148,6 +163,34 @@ def make_egress_client_factory(
         if auth is not None:
             client_kwargs["auth"] = auth
         return httpx.AsyncClient(**client_kwargs)
+
+    return factory
+
+
+def make_code_egress_client_factory(
+    *,
+    settings: Settings,
+    tenant_id: str,
+):
+    """Build an ``httpx.AsyncClient`` factory for the sandbox ``context.http`` bridge.
+
+    Always fail-closed: the transport resolves rules via
+    :func:`build_code_egress_rules` (forced ``enabled=True`` +
+    ``default_deny=True``), so SSRF screening + the global-ceiling-intersected
+    tenant allowlist + IP pinning are enforced on every call regardless of the
+    deployment-wide ``EGRESS_ALLOWLIST_ENABLED`` toggle.
+    """
+
+    def factory(
+        timeout: httpx.Timeout | None = None,
+        follow_redirects: bool = True,
+    ) -> httpx.AsyncClient:
+        transport = PinnedEgressTransport(settings=settings, tenant_id=tenant_id, code_egress=True)
+        return httpx.AsyncClient(
+            transport=transport,
+            follow_redirects=follow_redirects,
+            timeout=timeout if timeout is not None else httpx.Timeout(10.0),
+        )
 
     return factory
 

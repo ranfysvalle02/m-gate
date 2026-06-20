@@ -489,6 +489,19 @@ class InMemoryFastMCPRegistry:
         observe_usage("sandbox_ms", max(0, int(result.elapsed_ms)))
         return self._validate_result(result.payload)
 
+    async def read_server_env(self, tenant_id: str, server_name: str) -> dict[str, str]:
+        """Public, fail-soft accessor for a code server's decrypted env.
+
+        Used by the Functions Studio workbench so a "Run" exercises
+        ``context.http`` secret injection (``auth="ENV_KEY"``) against the same
+        secrets production would use. Returns ``{}`` when the server has no
+        secrets yet (e.g. an unsaved draft).
+        """
+        try:
+            return await self._read_server_env(tenant_id, server_name)
+        except Exception:  # noqa: BLE001 - a test harness must never hard-fail on env
+            return {}
+
     async def _read_server_env(self, tenant_id: str, server_name: str) -> dict[str, str]:
         doc = await get_tenant_database(tenant_id)["server_secrets"].find_one({"_id": server_name})
         encrypted = doc.get("values", {}) if isinstance(doc, dict) else {}

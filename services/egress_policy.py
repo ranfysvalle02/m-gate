@@ -170,6 +170,11 @@ class EgressRules:
     default_deny: bool
     global_rule: _ParsedList
     tenant_rule: _ParsedList
+    # When True the tenant gate is mandatory: an empty tenant allowlist denies
+    # everything (effective set = tenant INTERSECT global, and ``∅ ∩ x = ∅``)
+    # instead of inheriting the global ceiling. Used for sandbox code egress,
+    # where every reachable host must be an explicit per-tenant grant.
+    require_tenant_allowlist: bool = False
 
     @property
     def has_any_allowlist(self) -> bool:
@@ -204,6 +209,14 @@ class EgressRules:
                     f"Endpoint host '{host}' resolves to disallowed address '{ip}'."
                 )
 
+        if self.require_tenant_allowlist and self.tenant_rule.is_empty:
+            # Strict intersect: with no tenant grant the effective set is empty,
+            # so deny rather than fall through to the global ceiling.
+            raise EgressNotAllowed(
+                f"Egress is deny-by-default for code tools and host '{host}' is not on the "
+                "tenant egress allowlist. A tenant admin can add it."
+            )
+
         if not self.has_any_allowlist:
             # default_deny with nothing allowed => deny everything.
             raise EgressNotAllowed(
@@ -236,6 +249,56 @@ def build_rules(
         global_rule=_parse_list(global_entries),
         tenant_rule=_parse_list(tenant_entries),
     )
+
+
+def build_code_egress_rules(
+    settings: Settings,
+    *,
+    tenant_allowlist: Iterable[str] | None = None,
+    global_allowlist: str | Iterable[str] | None = None,
+) -> EgressRules:
+    """Egress rules for the sandbox ``context.http`` bridge: always fail-closed.
+
+    Unlike :func:`build_rules` (which mirrors the operator's downstream-proxy
+    toggle and can be a no-op when ``EGRESS_ALLOWLIST_ENABLED`` is off), code
+    egress is **always active and deny-by-default**. The SSRF denylist and the
+    allowlist intersection are therefore enforced on every sandbox HTTP call
+    regardless of the deployment-wide egress toggle, so an unconfigured
+    deployment cannot accidentally let tenant code reach arbitrary (or internal)
+    hosts. An empty effective allowlist blocks everything.
+    """
+    raw_global = settings.egress_global_allowlist if global_allowlist is None else global_allowlist
+    global_entries = parse_allowlist(raw_global)
+    tenant_entries = parse_allowlist(tenant_allowlist)
+    return EgressRules(
+        enabled=True,
+        default_deny=True,
+        global_rule=_parse_list(global_entries),
+        tenant_rule=_parse_list(tenant_entries),
+        require_tenant_allowlist=True,
+    )
+
+
+def global_egress_ceiling(settings: Settings) -> list[str]:
+    """The platform-wide egress ceiling (``EGRESS_GLOBAL_ALLOWLIST``), normalized."""
+    return sorted(parse_allowlist(settings.egress_global_allowlist))
+
+
+def effective_code_egress_hosts(
+    tenant_allowlist: Iterable[str] | None, *, settings: Settings
+) -> list[str]:
+    """Best-effort effective host set for display: ``tenant ∩ global ceiling``.
+
+    When no ceiling is configured the tenant grants stand alone. Uses normalized
+    exact-entry intersection (the same approach as the pip policy summary); the
+    runtime :class:`EgressRules` is authoritative and additionally honors glob /
+    CIDR matching + SSRF screening.
+    """
+    tenant = sorted(set(parse_allowlist(tenant_allowlist)))
+    ceiling = set(parse_allowlist(settings.egress_global_allowlist))
+    if not ceiling:
+        return tenant
+    return [host for host in tenant if host in ceiling]
 
 
 def _endpoint_host_port(endpoint: str) -> tuple[str, int]:
