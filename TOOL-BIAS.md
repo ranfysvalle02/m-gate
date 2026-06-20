@@ -2,7 +2,9 @@
 
 ### The search bar was built for human psychology. The tool boundary is built for raw data.
 
-We are currently living in a bit of an illusion. Because AI agents use regular human language to communicate, we treat them like they are tiny people sitting at digital desks. We assume that when an agent uses a search tool, it’s doing the exact same thing you do when you open a browser, head to a search engine, and type in a question.
+We are currently living in a bit of an illusion. Because AI agents use regular human language to communicate, we treat them like they are tiny people sitting at digital desks. We assume that when an agent reaches outside itself—whether through Function Calling to hit an API or Retrieval-Augmented Generation (RAG) to pull documents into context—it’s doing the exact same thing you do when you open a browser, head to a search engine, and type in a question.
+
+(When I say "tools" throughout this piece, that's what I mean: the function calls, database lookups, and RAG retrievals an agent fires off to fetch information it doesn't already hold.)
 
 It isn't. And if we keep designing tools under that assumption, our applications are going to face massive token bills, bizarre systemic biases, and unexpected cognitive crashes.
 
@@ -38,7 +40,7 @@ When the search tool returns a mixed list of results containing articles from co
 
 ## 3. The Compounding Echo Chamber
 
-A single tilted query is one thing. The real damage happens when that tilt gets fed forward. A human who reads a polarized article can catch themselves, feel a flicker of skepticism, and go hunt for the opposing view. An agent has no such reflex unless you build it one—and because each tool call's output becomes the premise for the next, that 3-degree nudge from Section 2 doesn't stay 3 degrees. It compounds.
+A single tilted query is one thing. The real damage happens when that tilt gets fed forward. A human who reads a polarized article can catch themselves, feel a flicker of skepticism, and go hunt for the opposing view. An agent has no such reflex unless you build it one—this is exactly the gap that Critic-Agent loops and Self-Reflection architectures (think Reflexion-style critique passes or a separate adversarial reviewer model) are designed to fill, by forcing the system to interrogate its own output before it acts on it. Without that scaffolding, though, each tool call's output simply becomes the premise for the next, and that 3-degree nudge from Section 2 doesn't stay 3 degrees. It compounds.
 
 Imagine a multi-step agent workflow:
 
