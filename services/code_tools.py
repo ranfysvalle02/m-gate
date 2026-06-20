@@ -486,9 +486,7 @@ def validate_code_tool(tool: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(raw_code, str) or not raw_code.strip():
         issues.append(_issue("Function requires non-empty 'raw_code'."))
     else:
-        issues.extend(
-            _source_issues(raw_code, tool_name, tool.get("input_schema"), action_type)
-        )
+        issues.extend(_source_issues(raw_code, tool_name, tool.get("input_schema"), action_type))
     issues.extend(_requirement_issues(list(tool.get("requirements") or [])))
 
     if action_type is not None and action_type not in ALLOWED_ACTION_TYPES:

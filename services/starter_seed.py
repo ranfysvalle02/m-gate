@@ -93,9 +93,7 @@ async def seed_starter_server(tenant_id: str, *, settings: Settings | None = Non
         logger.info("Seeded starter '%s' server for tenant=%s", STARTER_SERVER_NAME, tenant_id)
         return True
     except Exception:
-        logger.warning(
-            "Starter seed skipped for tenant=%s (non-fatal).", tenant_id, exc_info=True
-        )
+        logger.warning("Starter seed skipped for tenant=%s (non-fatal).", tenant_id, exc_info=True)
         # Best-effort cleanup of a partially-mounted server so nothing dangles.
         try:
             await registry.unmount(STARTER_SERVER_NAME, tenant_id=tenant_id)
