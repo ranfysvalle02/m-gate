@@ -8,7 +8,38 @@
 >
   <h1 class="text-2xl font-semibold">Dashboard</h1>
 
-  <!-- Connect Now: the fastest path from zero to a connected MCP client. -->
+  <!-- Primer first: MCP is just JSON-RPC. Start here if you're new. -->
+  <button type="button" class="learn-cta" @click="openHelp('mcp')">
+    <span class="learn-cta-icon" aria-hidden="true">📡</span>
+    <span class="learn-cta-text">
+      <strong>New to MCP? It's just JSON-RPC.</strong>
+      <span
+        >See how the Model Context Protocol maps onto MongoDB's document model —
+        with copy-paste examples.</span
+      >
+    </span>
+    <span class="learn-cta-go">Open the guide →</span>
+  </button>
+
+  <!-- Build first: turn a Python function into a sandboxed virtual MCP tool. -->
+  <button
+    type="button"
+    class="learn-cta"
+    x-show="canMutate()"
+    @click="activeSection = 'servers'; openServerComposer('code')"
+  >
+    <span class="learn-cta-icon" aria-hidden="true">🛠️</span>
+    <span class="learn-cta-text">
+      <strong>Build your first MCP tool</strong>
+      <span
+        >Paste a Python function and the gateway runs it sandboxed as a virtual
+        MCP — no infra, no deploy. This is the fast path to your first tool.</span
+      >
+    </span>
+    <span class="learn-cta-go">Create a virtual server →</span>
+  </button>
+
+  <!-- Connect Now: connect an MCP client once you have tools to expose. -->
   <section class="connect-now" aria-labelledby="connect-now-title">
     <div class="connect-now-aura" aria-hidden="true"></div>
     <div class="connect-now-head">
@@ -97,17 +128,6 @@
     </p>
   </section>
 
-  <button type="button" class="learn-cta" @click="openHelp('mcp')">
-    <span class="learn-cta-icon" aria-hidden="true">📡</span>
-    <span class="learn-cta-text">
-      <strong>New to MCP?</strong>
-      <span
-        >Learn how the Model Context Protocol and JSON-RPC power this gateway —
-        with copy-paste examples.</span
-      >
-    </span>
-    <span class="learn-cta-go">Open the guide →</span>
-  </button>
   <div class="grid gap-4 md:grid-cols-3">
     <div class="card">
       <div class="card-label">Catalog Version</div>
@@ -1175,12 +1195,13 @@
   <div class="studio-hero">
     <div class="studio-hero-copy">
       <div class="studio-eyebrow">MCP Servers</div>
-      <h2 class="studio-h1">Bundle tools into a server</h2>
+      <h2 class="studio-h1">Build a virtual MCP tool</h2>
       <p class="studio-lede">
-        An MCP server is just a <strong>named bundle of tools</strong> your
-        assistant can call. Spin up a <strong>virtual</strong> server by writing
-        Python — every function is sandboxed and exposed as a real MCP tool — or
-        <strong>connect</strong> a server you already run.
+        Start here: write a <strong>Python function</strong> and the gateway
+        lints it, encrypts it, runs it in a <strong>wasm sandbox</strong>, and
+        exposes it as a real MCP tool — no infra, no deploy. Already run an MCP
+        server? <strong>Connecting an existing one</strong> (like the official
+        GitHub or MongoDB MCP) is the advanced path below.
       </p>
     </div>
     <button type="button" class="studio-learn" @click="openHelp('mcp')">
@@ -1197,11 +1218,17 @@
     <div class="builder-actions">
       <button
         type="button"
-        class="btn-secondary"
+        class="btn-primary"
         @click="openServerComposer('code')"
       >
-        + New virtual server
+        + New virtual server (code)
       </button>
+      <button type="button" class="btn-secondary" @click="loadServers()">
+        Refresh list
+      </button>
+    </div>
+    <div class="mt-3 flex flex-wrap items-center gap-2">
+      <span class="segment-tag">Advanced</span>
       <button
         type="button"
         class="btn-secondary"
@@ -1209,9 +1236,10 @@
       >
         + Connect existing server
       </button>
-      <button type="button" class="btn-secondary" @click="loadServers()">
-        Refresh list
-      </button>
+      <span class="text-sm text-slate-500">
+        Already run an MCP server? Front an official one — e.g. the GitHub or
+        MongoDB MCP — over Streamable HTTP, SSE, or stdio.
+      </span>
     </div>
   </div>
 
@@ -1253,7 +1281,7 @@
           @click="chooseServerKind('connect')"
         >
           <span class="segment-emoji" aria-hidden="true">🔌</span>
-          Connect existing
+          Advanced: connect existing
         </button>
       </div>
       <p

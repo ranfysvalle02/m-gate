@@ -4,10 +4,10 @@ window.adminConsole = function adminConsole(config) {
     loggedInEmail: config.loggedInEmail,
     navItems: [
       { key: "dashboard", label: "Dashboard", icon: "📊" },
+      { key: "servers", label: "MCP Servers", icon: "🧰" },
       { key: "tenants", label: "Tenants", icon: "🏢" },
       { key: "users", label: "Credentials", icon: "🔑" },
       { key: "approvals", label: "Approvals", icon: "✅" },
-      { key: "servers", label: "MCP Servers", icon: "🧰" },
       { key: "catalog", label: "Catalog", icon: "🗂️" },
       { key: "usage", label: "Usage & Quota", icon: "📒" },
       { key: "telemetry", label: "Telemetry", icon: "📈" },

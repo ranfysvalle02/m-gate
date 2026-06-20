@@ -242,7 +242,7 @@
             <div x-show="state.helpTab === 'mcp'">
               <div class="tldr">
                 <span aria-hidden="true">💡</span>
-                <span><strong>In one line:</strong> MCP (Model Context Protocol) is an open standard — think “USB-C for AI” — that lets an AI assistant securely discover and use external tools and data through one common interface.</span>
+                <span><strong>In one line:</strong> MCP (Model Context Protocol) is an open standard — think “USB-C for AI” — that lets an AI assistant securely discover and use external tools and data through one common interface. Under the hood it's just <strong>JSON-RPC</strong>, and with this gateway you can build your own tool in minutes.</span>
               </div>
 
               <h4>The three roles</h4>
@@ -260,12 +260,12 @@
               </ul>
 
               <h4>Where this gateway fits</h4>
-              <p>This is a <strong>multi-tenant MCP front door</strong>. Instead of wiring each assistant to dozens of servers, point it here once. It adds:</p>
+              <p>This is a <strong>multi-tenant MCP front door</strong>. The fastest path from zero to a working tool is to <strong>write one</strong>; connecting servers you already run is the advanced step. It adds:</p>
               <ul>
+                <li><strong>Code tools (start here)</strong> — author a Python function that runs sandboxed in WebAssembly and is instantly exposed as a normal MCP tool. No infra, no deploy.</li>
                 <li><strong>One endpoint</strong> aggregating many MCP servers, with per-tenant isolation and RBAC.</li>
                 <li><strong>Semantic discovery</strong> — <code>tools/search</code> ranks the right tool out of a large catalog.</li>
                 <li><strong>Guardrails &amp; approvals</strong> for sensitive actions, plus full telemetry.</li>
-                <li><strong>Code tools</strong> — author a Python function that runs sandboxed in WebAssembly and is exposed as a normal MCP tool.</li>
               </ul>
             </div>
 

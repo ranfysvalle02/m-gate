@@ -2,11 +2,92 @@
 
 ![](m-gate.png)
 
-> A Smart MCP Gateway that routes AI agents to the right tools by **meaning**, not by a hand-maintained table — powered by **hybrid search on MongoDB Atlas**.
+> Go from **no MCP** to **MCP-gateway magic** in minutes: paste a Python function
+> and the gateway turns it into a real, sandboxed MCP tool behind one endpoint —
+> a hosted, effectively "serverless" virtual MCP. MCP is just **JSON-RPC over the
+> document model**, so it all lives on **MongoDB**; **hybrid search on MongoDB
+> Atlas** is the power-up that keeps routing sharp once your catalog grows.
 
 ---
 
-## The differentiator: Hybrid Search, in one place
+## MCP, demystified: it's just JSON-RPC over the document model
+
+Strip away the launch-day acronyms and the Model Context Protocol is the oldest
+pattern in computing: a client sends a request, a server returns a response.
+Three verbs do the work — `initialize` (handshake), `tools/list` (the menu), and
+`tools/call` (run one) — and every message is a tiny **JSON-RPC 2.0** envelope:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "call-1",
+  "method": "tools/call",
+  "params": { "server": "weather", "name": "get_current_weather",
+              "arguments": { "city": "Montreal", "unit": "celsius" } }
+}
+```
+
+That shape — nested, self-describing, free to differ from its neighbors — is a
+**document**. So the whole protocol (a tool call, a tool definition, an
+embedding, a scope, an audit record) stores natively in MongoDB with no ORM, no
+migration, and no impedance mismatch: the request on the wire *is* the document
+at rest. That is the quiet reason this gateway is one engine instead of four.
+
+## Build a tool in minutes: virtual MCPs via `code_exec`
+
+The fastest way from "no MCP" to "MCP magic" isn't wiring up a server — it's
+**writing a function**. In the admin console you paste a Python function; the
+gateway lints it, encrypts it at rest, runs it sandboxed in WebAssembly, and
+exposes it as a real MCP tool behind one endpoint. No Dockerfile, no deploy, no
+infra to babysit — a "virtual" MCP server that is hosted and effectively
+serverless.
+
+```python
+def word_count(text: str) -> dict:
+    """Count the words and characters in the given text."""
+    words = [w for w in text.split() if w]
+    return {"words": len(words), "characters": len(text)}
+```
+
+Save it and an agent can immediately discover and call `word_count`. The runtime
+([`services/code_tools.py`](services/code_tools.py) + the wasm sandbox) gives
+authored functions a small, safe `context` with everything a useful tool needs —
+and nothing else:
+
+- `context.db` — tenant-scoped MongoDB, host-relayed (no credentials in the
+  sandbox), gated by the tool's `action_type` (`read` / `write` / `destructive`).
+- `context.env` — per-server encrypted secrets, injected at runtime.
+- `context.tools` — call sibling tools in your tenant to compose workflows.
+- `context.http` — opt-in, SSRF-screened outbound HTTPS (the jail has no sockets).
+- **Pinned pip** — declare `package==x.y.z` requirements and they install
+  wheels-only under a deny-by-default, per-tenant allowlist.
+
+The sandbox is network-isolated and fuel/memory/wall-clock bounded, and every
+tool you author can be **exported as a runnable FastMCP project** — so nothing
+you build here is locked in. See [CONTEXT.md](CONTEXT.md) for the full author
+guide.
+
+## One gateway endpoint
+
+Whatever you build or connect, agents reach it through a single front door:
+JSON-RPC at `POST /rpc` and a mounted MCP app at `/mcp`. Discovery is
+identity-scoped and routes by meaning; invocation is authorized, quota-metered,
+and audited. Point Cursor, Claude Desktop, or VS Code at the one URL and every
+tool — virtual or connected — shows up.
+
+## Advanced: connect existing MCP servers (GitHub, MongoDB, …)
+
+When you already run an MCP server — or want to front an official one such as the
+GitHub or MongoDB MCP — register it as a network/stdio downstream
+(`streamable_http`, `sse`, or `stdio`) and the gateway proxies it with the same
+auth, egress allowlisting, resiliency, and audit as everything else. This is the
+"advanced" path; most tools start life as a `code_exec` virtual MCP above.
+
+## Advanced power-up: hybrid search routing, in one place
+
+Once your catalog grows past a handful of tools, handing the agent the whole menu
+every turn burns tokens and degrades tool choice. The upgrade is to treat tool
+selection as **retrieval** — and the retrieval that holds up is hybrid:
 
 Semantic (vector) routing — embed the catalog, hand back the tools a task needs —
 is the well-trodden first step, and it works: it slashes the per-turn token bill.
@@ -14,7 +95,7 @@ But vector-only retrieval has a blind spot: it fumbles the **exact tokens** agen
 constantly use (a tool name, an error code, an order ID), because cosine
 similarity rewards meaning, not spelling.
 
-This gateway's core is the upgrade past that: **hybrid search** — fusing semantic
+The fix is **hybrid search** — fusing semantic
 (vector) and lexical (full-text/BM25) retrieval into one ranked result with
 Reciprocal Rank Fusion, so an agent finds the right tool whether it asks in
 keywords *or* in intent. The interesting part isn't that we do hybrid search;
