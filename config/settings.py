@@ -1,5 +1,6 @@
 import base64
 import binascii
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -7,9 +8,28 @@ from typing import Literal
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Bundled, repo-published dev signing key path. Used as the offline default but
-# rejected in production by the prod-safety validator below.
+# Bundled, repo-published dev keypair. The private half is public (it lives in
+# this repo), so any non-local environment that signs with it or trusts it can
+# have tokens forged. These are usable offline defaults but are rejected by the
+# prod-safety validator below for every environment that is not explicitly dev.
 _DEV_DOWNSTREAM_JWT_PRIVATE_KEY_FILE = "config/dev-private-key.pem"
+_DEV_JWKS_FILE = "config/dev-jwks.json"
+
+# Environments allowed to use the bundled dev keypair. Anything outside this set
+# (staging, uat, preview, prod, or an unrecognized value) is treated as a
+# protected environment and must supply its own keys.
+_DEV_ENVIRONMENTS = {"development", "dev", "local", "test", "testing"}
+
+
+def _points_at_bundled_file(configured: str | None, bundled: str) -> bool:
+    """True when a configured path resolves to one of the repo's bundled dev key
+    files. Tolerates a leading "./" and absolute paths that still end in the
+    bundled relative path (e.g. ``/app/config/dev-jwks.json``)."""
+    if not configured:
+        return False
+    configured_norm = os.path.normpath(configured)
+    bundled_norm = os.path.normpath(bundled)
+    return configured_norm == bundled_norm or configured_norm.endswith(os.sep + bundled_norm)
 
 
 class Settings(BaseSettings):
@@ -437,8 +457,17 @@ class Settings(BaseSettings):
     def _validate_prod_safety(self) -> "Settings":
         env = self.environment.lower()
         is_prod = env in {"prod", "production"}
-        if not is_prod:
-            return self
+        # Any environment that is not an explicit local/dev/test environment is
+        # "protected": it must never sign with or trust the repo's public dev key,
+        # because the private half is published in this repo and forgeable by anyone.
+        is_protected = env not in _DEV_ENVIRONMENTS
+        if is_prod:
+            self._validate_production_safety()
+        if is_protected:
+            self._validate_no_bundled_dev_keys()
+        return self
+
+    def _validate_production_safety(self) -> None:
         if self.auth_mode == "hs256":
             weak = {"dev-secret", "change-me", "secret", "password"}
             if len(self.jwt_secret) < 16 or self.jwt_secret in weak:
@@ -461,16 +490,6 @@ class Settings(BaseSettings):
             session_secret = self.admin_session_secret or ""
             if len(session_secret) < 16 or session_secret in weak:
                 raise ValueError("admin_session_secret is too weak for production.")
-        # The bundled dev keypair is published in this repo; signing downstream
-        # workload tokens with it in production would let anyone forge them.
-        if (
-            self.downstream_jwt_enabled
-            and self.downstream_jwt_private_key_file == _DEV_DOWNSTREAM_JWT_PRIVATE_KEY_FILE
-        ):
-            raise ValueError(
-                "Configure a production DOWNSTREAM_JWT_PRIVATE_KEY(_FILE); the bundled "
-                "dev signing key must not be used in production."
-            )
         if self.qe_enabled:
             if self.kms_provider == "none":
                 raise ValueError("Set KMS_PROVIDER=local or KMS_PROVIDER=aws when QE is enabled.")
@@ -487,7 +506,25 @@ class Settings(BaseSettings):
                     raise ValueError("QE_LOCAL_MASTER_KEY must decode to exactly 96 bytes.")
             if self.kms_provider == "aws" and not self.aws_kms_key_arn:
                 raise ValueError("AWS KMS mode requires AWS_KMS_KEY_ARN or AWS_KMS_KEY_ARN_FILE.")
-        return self
+
+    def _validate_no_bundled_dev_keys(self) -> None:
+        # The bundled dev keypair is published in this repo; signing downstream
+        # workload tokens with it (or trusting it for inbound auth) outside local
+        # development would let anyone forge tokens.
+        if self.downstream_jwt_enabled and _points_at_bundled_file(
+            self.downstream_jwt_private_key_file, _DEV_DOWNSTREAM_JWT_PRIVATE_KEY_FILE
+        ):
+            raise ValueError(
+                "Configure a real DOWNSTREAM_JWT_PRIVATE_KEY(_FILE); the bundled "
+                "dev signing key must not be used outside local development."
+            )
+        if self.auth_mode == "jwks" and _points_at_bundled_file(
+            self.jwks_local_path, _DEV_JWKS_FILE
+        ):
+            raise ValueError(
+                "Refusing to trust the bundled dev JWKS (config/dev-jwks.json) "
+                "outside local development; set JWKS_URI or a real JWKS_LOCAL_PATH."
+            )
 
 
 @lru_cache(maxsize=1)

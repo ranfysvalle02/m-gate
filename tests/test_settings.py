@@ -172,13 +172,22 @@ def test_prod_admin_ui_with_strong_credentials_passes():
 
 
 def test_prod_rejects_bundled_dev_downstream_key():
-    with pytest.raises(ValueError, match="dev signing key must not be used in production"):
+    with pytest.raises(ValueError, match="dev signing key must not be used outside local"):
         Settings(
             environment="production",
             auth_mode="hs256",
             jwt_secret="a-sufficiently-long-secret-value",
             cors_allow_origins="https://app.example.com",
             admin_ui_enabled=False,
+            downstream_jwt_enabled=True,
+        )
+
+
+def test_staging_rejects_bundled_dev_downstream_key():
+    # The bundled-key guard fires for every non-dev environment, not just prod.
+    with pytest.raises(ValueError, match="dev signing key must not be used outside local"):
+        Settings(
+            environment="staging",
             downstream_jwt_enabled=True,
         )
 
@@ -195,6 +204,42 @@ def test_prod_accepts_explicit_downstream_key():
         downstream_jwt_private_key="-----BEGIN PRIVATE KEY-----prod-----END PRIVATE KEY-----",
     )
     assert s.downstream_jwt_enabled is True
+
+
+def test_prod_rejects_bundled_dev_jwks_for_inbound_auth():
+    with pytest.raises(ValueError, match="bundled dev JWKS"):
+        Settings(
+            environment="production",
+            auth_mode="jwks",
+            jwt_issuer="iss",
+            jwt_audience="aud",
+            jwks_local_path="config/dev-jwks.json",
+            cors_allow_origins="https://app.example.com",
+            admin_ui_enabled=False,
+            downstream_jwt_enabled=False,
+        )
+
+
+def test_staging_rejects_bundled_dev_jwks_with_relative_prefix():
+    # The "./" prefix must still be recognized as the bundled file.
+    with pytest.raises(ValueError, match="bundled dev JWKS"):
+        Settings(
+            environment="staging",
+            auth_mode="jwks",
+            jwks_local_path="./config/dev-jwks.json",
+            downstream_jwt_enabled=False,
+        )
+
+
+def test_dev_allows_bundled_keys():
+    # Local development is exempt: the bundled keypair is the intended offline default.
+    s = Settings(
+        environment="development",
+        auth_mode="jwks",
+        jwks_local_path="./config/dev-jwks.json",
+        downstream_jwt_enabled=True,
+    )
+    assert s.environment == "development"
 
 
 def test_prod_qe_rejects_none_kms_provider():

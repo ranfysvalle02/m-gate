@@ -374,7 +374,21 @@ Auth is always enforced (there is no open mode to disable). When
 - `CORS_ALLOW_ORIGINS` is **not** `*`.
 - If the admin UI is enabled: `ADMIN_EMAIL` is set, `ADMIN_PASSWORD` ≥12 chars (not weak),
   `ADMIN_SESSION_SECRET` ≥16 chars (not weak).
-- Downstream JWT brokering is not using the bundled dev signing key.
+
+The bundled dev keypair (`config/dev-private-key.pem` / `config/dev-jwks.json`, kid
+`dev-local-key-1`) is **intentionally published in this repo** for offline local
+development and tests. Because its private half is therefore public, it must **never**
+be trusted by any non-local environment. The following checks are enforced for **every
+environment that is not an explicit local/dev/test value** (so `staging`, `production`,
+and any unrecognized `ENVIRONMENT` fail closed):
+
+- Downstream JWT brokering is not **signing** with the bundled dev key
+  (`DOWNSTREAM_JWT_PRIVATE_KEY_FILE` ≠ `config/dev-private-key.pem`).
+- Inbound `jwks` auth is not **trusting** the bundled dev JWKS
+  (`JWKS_LOCAL_PATH` ≠ `config/dev-jwks.json`).
+
+The bundled downstream demo servers (`servers/orders`, `servers/weather`) enforce the
+same rule independently when `DOWNSTREAM_JWT_VERIFY` is enabled.
 
 ### Container / runtime hardening
 

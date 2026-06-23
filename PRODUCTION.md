@@ -38,9 +38,24 @@ When `ENVIRONMENT=production`, the gateway **refuses to start** unless all of th
 - [ ] `CORS_ALLOW_ORIGINS` is **not** `*` (explicit origin list).
 - [ ] If `ADMIN_UI_ENABLED=true`: `ADMIN_EMAIL` set, `ADMIN_PASSWORD` ≥12 chars (not weak),
       `ADMIN_SESSION_SECRET` ≥16 chars (not weak).
-- [ ] Downstream JWT brokering is not using the bundled dev key
+
+The bundled dev keypair (`config/dev-private-key.pem` / `config/dev-jwks.json`, kid
+`dev-local-key-1`) is **published in this repo**, so its private half is public. The
+following checks therefore apply to **every environment that is not an explicit
+local/dev/test environment** — i.e. `staging`, `production`, and any unrecognized
+`ENVIRONMENT` value all fail closed:
+
+- [ ] Downstream JWT brokering is not signing with the bundled dev key
       (`DOWNSTREAM_JWT_PRIVATE_KEY_FILE` ≠ `config/dev-private-key.pem`), unless
       `DOWNSTREAM_JWT_ENABLED=false`.
+- [ ] Inbound `jwks` auth is not trusting the bundled dev JWKS
+      (`JWKS_LOCAL_PATH` ≠ `config/dev-jwks.json`); point it at your real IdP via
+      `JWKS_URI`/`JWKS_LOCAL_PATH`.
+
+The bundled downstream demo servers (`servers/orders`, `servers/weather`) enforce the
+same rule independently: with `DOWNSTREAM_JWT_VERIFY` enabled they refuse to start
+outside a local/dev environment while `DOWNSTREAM_JWKS_PATH` still points at the
+bundled `config/dev-jwks.json`.
 
 ---
 

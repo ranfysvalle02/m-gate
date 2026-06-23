@@ -609,6 +609,15 @@ Key properties:
 - When the admin UI is enabled, `ADMIN_EMAIL`, a strong `ADMIN_PASSWORD`
   (≥ 12 chars), and a strong `ADMIN_SESSION_SECRET` are required.
 
+The bundled dev keypair (`config/dev-private-key.pem` / `config/dev-jwks.json`,
+kid `dev-local-key-1`) is published in this repo, so for **any environment that is
+not local/dev/test** (e.g. `staging`, `production`) the gateway also rejects:
+
+- signing downstream tokens with the bundled key
+  (`DOWNSTREAM_JWT_PRIVATE_KEY_FILE` = `config/dev-private-key.pem`), and
+- trusting the bundled JWKS for inbound `jwks` auth
+  (`JWKS_LOCAL_PATH` = `config/dev-jwks.json`).
+
 ---
 
 ## Quick recipes

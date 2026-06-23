@@ -38,12 +38,35 @@ mcp_app = mcp.http_app(path="/")
 app = FastAPI(title="weather-server", lifespan=mcp_app.lifespan)
 
 
+_DEV_ENVIRONMENTS = {"development", "dev", "local", "test", "testing"}
+_BUNDLED_DEV_JWKS = "config/dev-jwks.json"
+
+
 def _jwt_verification_enabled() -> bool:
     return os.getenv("DOWNSTREAM_JWT_VERIFY", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _is_dev_environment() -> bool:
+    return os.getenv("ENVIRONMENT", "development").strip().lower() in _DEV_ENVIRONMENTS
+
+
+def _guard_bundled_dev_jwks(jwks_path: str) -> None:
+    """Refuse to verify downstream tokens against the repo's public dev JWKS in any
+    non-local environment: its matching private key is published in this repo, so
+    anyone could forge tokens this server would accept."""
+    normalized = os.path.normpath(jwks_path)
+    bundled = os.path.normpath(_BUNDLED_DEV_JWKS)
+    is_bundled = normalized == bundled or normalized.endswith(os.sep + bundled)
+    if is_bundled and not _is_dev_environment():
+        raise RuntimeError(
+            "Refusing to trust the bundled dev JWKS (config/dev-jwks.json) outside local "
+            "development; set DOWNSTREAM_JWKS_PATH to a real JWKS file."
+        )
+
+
 def _load_jwks_keys() -> dict[str, Any]:
     jwks_path = os.getenv("DOWNSTREAM_JWKS_PATH", "config/dev-jwks.json")
+    _guard_bundled_dev_jwks(jwks_path)
     data = json.loads(Path(jwks_path).read_text(encoding="utf-8"))
     keys: dict[str, Any] = {}
     for jwk in data.get("keys", []):
