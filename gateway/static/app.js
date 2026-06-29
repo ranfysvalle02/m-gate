@@ -1656,6 +1656,9 @@ window.adminConsole = function adminConsole(config) {
         const payload = await this.apiRequest("/admin/servers");
         this.state.servers = payload.items || [];
         if (this.state.servers.length === 0 && !this.state.serverComposerOpen) {
+          // First run: open the studio pre-loaded with the runnable starter so a
+          // brand-new operator lands on real, highlighted code — not a blank box.
+          this.resetServerForm();
           this.state.serverComposerOpen = true;
           this.state.serverComposerMode = "create";
           this.$nextTick(() => this.refreshCodeEditors());
@@ -1913,7 +1916,7 @@ window.adminConsole = function adminConsole(config) {
         endpoint: "",
         command: "",
         metadata: '{"domain":"custom","runtime":"wasm"}',
-        tools: [this.emptyToolForm()],
+        tools: [this._starterToolForm()],
       };
       this.state.toolTestResults = {};
       this.state.toolValidation = {};
@@ -2441,6 +2444,7 @@ window.adminConsole = function adminConsole(config) {
           blurb:
             "Pure standard-library text stats. The simplest possible tool — no context, no network.",
           needs: "none",
+          recommended: true,
           tool: {
             name: "word_count",
             description: "Count the words and characters in a string.",
@@ -2633,6 +2637,85 @@ window.adminConsole = function adminConsole(config) {
       }
     },
 
+    _exampleById(id) {
+      return this.exampleLibrary().find((entry) => entry.id === id) || null;
+    },
+
+    // The "automagic" default: a brand-new code server opens with this complete,
+    // runnable, syntax-highlighted starter already in the editor instead of an
+    // empty box — so the very first thing on screen is real code that Runs and
+    // Saves in one click. We seed the simplest stdlib example (`word_count`) so
+    // it works on every host regardless of which sandbox bridges are enabled.
+    _starterToolForm() {
+      const form = this.emptyToolForm();
+      const entry = this._exampleById("word_count");
+      if (!entry) return form;
+      const spec = entry.tool;
+      form.name = spec.name;
+      form.description = spec.description;
+      form.action_type = spec.action_type || "read";
+      form.scopes = spec.scopes || "";
+      form.requirements = spec.requirements || "";
+      form.input_schema = JSON.stringify(spec.input_schema || {}, null, 2);
+      form.schema_rows = this._schemaToRows(spec.input_schema || {});
+      form.raw_code = spec.raw_code || "";
+      form.test_arguments = JSON.stringify(spec.test_arguments || {}, null, 2);
+      form.expanded = true;
+      // Mark as a pristine auto-seed so picking an example/pack cleanly REPLACES
+      // it (rather than appending a second function). The marker is cleared the
+      // moment the operator edits the code (see _isReplaceablePlaceholder).
+      form.seeded = true;
+      form._seed_code = spec.raw_code || "";
+      return form;
+    },
+
+    // True when the composer holds a single throwaway function we can safely
+    // overwrite when the operator picks an example: either a blank placeholder
+    // or the pristine, unedited auto-seed starter.
+    _isReplaceablePlaceholder() {
+      const tools = this.forms.server.tools || [];
+      if (tools.length !== 1) return false;
+      const tool = tools[0];
+      const name = String(tool.name || "").trim();
+      const code = String(tool.raw_code || "").trim();
+      if (!name && !code) return true;
+      if (tool.seeded && code === String(tool._seed_code || "").trim()) {
+        return true;
+      }
+      return false;
+    },
+
+    _escapeHtml(text) {
+      return String(text == null ? "" : text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    },
+
+    // Lightweight, escape-first Python highlighter for the read-only code
+    // previews in the example gallery. Input is always our own curated example
+    // source (never user input), but we escape first regardless so the x-html
+    // sink stays safe. Colours reuse the shared `tk-*` / --syntax-* palette so
+    // previews match the live CodeMirror editor in both themes.
+    highlightPython(code) {
+      const escaped = this._escapeHtml(code);
+      const tokenRe =
+        /(#[^\n]*)|('''[\s\S]*?'''|"""[\s\S]*?"""|'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*")|\b(def)(\s+)([A-Za-z_]\w*)|\b(\d+(?:\.\d+)?)\b|\b(return|import|from|for|in|if|elif|else|raise|with|as|and|or|not|is|None|True|False|class|while|try|except|finally|lambda|yield|await|async|pass|break|continue|global|nonlocal|del|assert)\b/g;
+      return escaped.replace(
+        tokenRe,
+        (match, comment, str, defKw, defWs, defName, num, kw) => {
+          if (comment) return `<span class="tk-com">${comment}</span>`;
+          if (str) return `<span class="tk-str">${str}</span>`;
+          if (defKw) {
+            return `<span class="tk-key">${defKw}</span>${defWs}<span class="tk-def">${defName}</span>`;
+          }
+          if (num) return `<span class="tk-num">${num}</span>`;
+          if (kw) return `<span class="tk-key">${kw}</span>`;
+          return match;
+        },
+      );
+    },
+
     openExampleGallery() {
       this.state.exampleGalleryOpen = true;
     },
@@ -2664,11 +2747,7 @@ window.adminConsole = function adminConsole(config) {
       example.expanded = true;
 
       const tools = this.forms.server.tools || [];
-      const onlyEmptyStarter =
-        tools.length === 1 &&
-        !String(tools[0].name || "").trim() &&
-        !String(tools[0].raw_code || "").trim();
-      if (onlyEmptyStarter) {
+      if (this._isReplaceablePlaceholder()) {
         this._teardownCodeEditor(tools[0].local_id);
         this.forms.server.tools = [example];
       } else {

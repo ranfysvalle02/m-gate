@@ -4200,11 +4200,14 @@
           <button
             type="button"
             class="example-card"
-            :class="!exampleAvailable(example) ? 'example-card-disabled' : ''"
+            :class="{ 'example-card-disabled': !exampleAvailable(example), 'example-card--recommended': example.recommended }"
             :disabled="!exampleAvailable(example)"
             :title="exampleAvailable(example) ? 'Add this function to the editor' : exampleNeedLabel(example)"
             @click="applyExample(example.id)"
           >
+            <template x-if="example.recommended">
+              <span class="example-card-ribbon" aria-hidden="true">★ Recommended</span>
+            </template>
             <div class="example-card-head">
               <code class="example-card-name" x-text="example.tool.name"></code>
               <span
@@ -4215,6 +4218,11 @@
             </div>
             <div class="example-card-label" x-text="example.label"></div>
             <p class="example-card-blurb" x-text="example.blurb"></p>
+            <pre
+              class="example-card-code"
+              aria-hidden="true"
+              x-html="highlightPython(example.tool.raw_code)"
+            ></pre>
             <div
               class="example-card-need"
               :class="exampleAvailable(example) ? 'example-need-ok' : 'example-need-off'"

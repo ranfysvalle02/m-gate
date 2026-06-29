@@ -4722,6 +4722,7 @@ textarea.field-input {
 }
 
 .example-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
@@ -4731,6 +4732,7 @@ textarea.field-input {
   border-radius: var(--radius-md);
   background: var(--surface-soft);
   cursor: pointer;
+  overflow: hidden;
   transition:
     border-color var(--dur-fast) var(--ease-out),
     transform var(--dur-fast) var(--ease-out),
@@ -4743,11 +4745,81 @@ textarea.field-input {
   box-shadow: var(--shadow-sm);
 }
 
+.example-card--recommended {
+  padding-top: 2.05rem;
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 8%, var(--surface-soft)),
+    var(--surface-soft) 60%
+  );
+}
+
+.example-card--recommended:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.example-card-ribbon {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.12rem 0.45rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--btn-primary-text);
+  background: var(--accent);
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+}
+
 .example-card-disabled,
 .example-card:disabled {
   opacity: 0.55;
   cursor: not-allowed;
   filter: grayscale(0.5);
+}
+
+/* Read-only, syntax-highlighted preview of the starter's source. Tokens reuse
+   the shared --syntax-* palette so previews match the live editor + theme. */
+.example-card-code {
+  margin: 0.1rem 0 0;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-elevated);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.55;
+  color: var(--text-primary);
+  white-space: pre;
+  overflow: hidden;
+  max-height: 7.2rem;
+  -webkit-mask-image: linear-gradient(180deg, #000 72%, transparent);
+  mask-image: linear-gradient(180deg, #000 72%, transparent);
+}
+
+.example-card-code .tk-com {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+.example-card-code .tk-key {
+  color: var(--syntax-keyword);
+  font-weight: 600;
+}
+.example-card-code .tk-str {
+  color: var(--syntax-string);
+}
+.example-card-code .tk-num {
+  color: var(--syntax-number);
+}
+.example-card-code .tk-def {
+  color: var(--syntax-def);
 }
 
 .example-card-head {
