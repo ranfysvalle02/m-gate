@@ -6188,3 +6188,72 @@ textarea.field-input {
 .starter-pack-btn {
   flex: none;
 }
+
+/* --- Demo workspaces --------------------------------------------------- */
+.demo-create-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 1.1rem 1.25rem;
+  background: linear-gradient(145deg, var(--accent-soft), transparent 80%);
+}
+
+.demo-share {
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 16px;
+  padding: 1.1rem 1.25rem;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.demo-share-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.demo-share-grid {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.demo-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  min-width: 0;
+}
+
+.demo-field-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  flex: none;
+  width: 5.5rem;
+}
+
+.demo-field-value {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.demo-countdown {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.demo-countdown-soon {
+  color: #f59e0b;
+}

@@ -62,6 +62,7 @@ from .catalog import (
     migrate_cache,
 )
 from .code_tools import test_code_tool, validate_code_tool_endpoint
+from .demos import create_demo_workspace, delete_demo, list_demos
 from .embeddings import (
     _secret_encryption_label,
     get_embedding_config,
@@ -162,6 +163,10 @@ __all__ = [
     # tools (per-tenant overlay)
     "enable_tool",
     "disable_tool",
+    # demo workspaces
+    "create_demo_workspace",
+    "list_demos",
+    "delete_demo",
     # users
     "who_am_i",
     "create_user",

@@ -305,6 +305,49 @@ class DemoScopesResponse(BaseModel):
     scopes: list[str] = Field(default_factory=list)
 
 
+class DemoWorkspaceCreateRequest(BaseModel):
+    # All optional: omit everything for a fully auto-generated demo workspace.
+    # ``label``/``client`` are cosmetic (e.g. the prospect's name); ``ttl_hours``
+    # overrides the default lifetime and is clamped server-side to a safe ceiling.
+    label: str | None = Field(default=None, max_length=120)
+    client: str | None = Field(default=None, max_length=60)
+    ttl_hours: int | None = Field(default=None, ge=1, le=8760)
+
+
+class DemoWorkspaceSummary(BaseModel):
+    """A demo workspace's listable shape (never carries the password)."""
+
+    tenant_id: str
+    db_name: str
+    label: str | None = None
+    client: str | None = None
+    status: str = "active"
+    created_at: datetime | None = None
+    created_by: str | None = None
+    expires_at: datetime | None = None
+    expired: bool = False
+    user_id: str
+    user_email: str
+    servers: list[str] = Field(default_factory=list)
+    tools: int = 0
+    bridges: dict[str, bool] = Field(default_factory=dict)
+
+
+class DemoWorkspaceResponse(DemoWorkspaceSummary):
+    # The generated tenant-admin password, returned exactly once at creation time
+    # so it can be shared with the prospect. It is never retrievable afterwards.
+    password: str | None = None
+    # Relative console login path for the demo recipient (same-origin).
+    login_url: str = "/ui/login"
+
+
+class DemoWorkspaceListResponse(BaseModel):
+    items: list[DemoWorkspaceSummary] = Field(default_factory=list)
+    # Echoed config so the console can show "3 / 10 demos" and disable the button.
+    max_demo_tenants: int = 0
+    enabled: bool = True
+
+
 class SelfRegisterRequest(BaseModel):
     # The public sign-up surface accepts only an email + password; roles, scopes,
     # tenant, and confirmation tier are pinned server-side (services/registration.py).

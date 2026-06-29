@@ -448,6 +448,12 @@ async def _reaper_loop(interval_seconds: int) -> None:
             purged = await purge_expired_tenants()
             if purged:
                 logger.info("Tenant purge reaper dropped %d expired tenant(s).", purged)
+            # Reap expired demo workspaces on the same cadence. Late import avoids a
+            # module-load cycle (demo_workspace imports from this module); a failure
+            # here is swallowed by the outer handler so it can never kill the reaper.
+            from services.demo_workspace import reap_expired_demo_workspaces
+
+            await reap_expired_demo_workspaces()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # never let the reaper die on a transient error

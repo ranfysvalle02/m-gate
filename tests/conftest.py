@@ -153,6 +153,8 @@ def patch_mongo(monkeypatch, fake_db):
         "services.tenant_pip_policy",
         "services.account_tier",
         "services.registration",
+        "services.demo_seed",
+        "services.demo_workspace",
         "gateway.middleware.rbac",
         "gateway.middleware.ratelimit",
         "gateway.routers.health",

@@ -82,7 +82,7 @@
           Control tenants, routes, approvals, embeddings, and live catalog health in one place.
         </p>
         <nav class="nav-list">
-          <template x-for="item in navItems" :key="item.key">
+          <template x-for="item in visibleNavItems()" :key="item.key">
             <button
               type="button"
               class="nav-link"

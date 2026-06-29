@@ -273,6 +273,194 @@
 </section>
 
 <section
+  x-show="activeSection === 'demos'"
+  class="space-y-4"
+  x-transition:enter="view-active"
+  x-transition:enter-start="view-from"
+  x-transition:enter-end="view-to"
+>
+  <div class="flex items-center justify-between gap-3 flex-wrap">
+    <div>
+      <h2 class="text-2xl font-semibold">Demo workspaces</h2>
+      <p class="text-sm text-slate-500 mt-1 max-w-2xl">
+        One click spins up a fully isolated, pre-seeded demo tenant with a
+        ready-to-share login — perfect for putting a live, self-contained
+        environment in front of a prospect. Each is capped on the tenant axis and
+        self-expires, so they never pile up.
+      </p>
+    </div>
+    <div class="flex items-center gap-3">
+      <span class="cpill cpill-confirmed" x-text="demoCapLabel()"></span>
+      <button type="button" class="btn-secondary" @click="loadDemos()">
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <div class="demo-create-card">
+    <div class="grid gap-3 md:grid-cols-3">
+      <div>
+        <label class="field-label">Label <span class="text-slate-400">(optional)</span></label>
+        <input
+          class="field-input"
+          x-model="state.demoForm.label"
+          placeholder="Acme Corp"
+          maxlength="120"
+        />
+      </div>
+      <div>
+        <label class="field-label">Client <span class="text-slate-400">(optional)</span></label>
+        <input
+          class="field-input"
+          x-model="state.demoForm.client"
+          placeholder="cursor"
+          maxlength="60"
+        />
+      </div>
+      <div>
+        <label class="field-label">Lifetime (hours) <span class="text-slate-400">(optional)</span></label>
+        <input
+          class="field-input"
+          type="number"
+          min="1"
+          x-model.number="state.demoForm.ttl_hours"
+          placeholder="default"
+        />
+      </div>
+    </div>
+    <div class="flex items-center gap-3 mt-4 flex-wrap">
+      <button
+        type="button"
+        class="btn-primary"
+        :disabled="state.demoCreatingWorkspace || demoCapReached() || !state.demosMeta.enabled"
+        @click="createDemoWorkspace()"
+      >
+        <span x-show="!state.demoCreatingWorkspace">🎬 Spin up demo workspace</span>
+        <span x-show="state.demoCreatingWorkspace">Provisioning &amp; seeding…</span>
+      </button>
+      <span
+        x-show="demoCapReached()"
+        class="text-sm text-amber-600"
+      >Demo limit reached — delete one to free a slot.</span>
+      <span
+        x-show="!state.demosMeta.enabled"
+        class="text-sm text-amber-600"
+      >Demo workspaces are disabled in this deployment.</span>
+    </div>
+  </div>
+
+  <!-- One-time shareable details for the workspace just created. -->
+  <template x-if="state.demoResult">
+    <div class="demo-share">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <div class="demo-share-title">✅ Demo workspace ready to share</div>
+          <div class="text-sm text-slate-500">
+            <span x-text="state.demoResult.tools"></span> tools across
+            <span x-text="(state.demoResult.servers || []).join(', ') || 'no'"></span>
+            · <span x-text="demoExpiryLabel(state.demoResult)"></span>
+          </div>
+        </div>
+        <button type="button" class="link-btn" @click="dismissDemoResult()">Dismiss</button>
+      </div>
+      <p class="text-xs text-amber-600 mt-2">
+        The password is shown only once. Copy it now — it can't be retrieved later.
+      </p>
+      <div class="demo-share-grid mt-3">
+        <div class="demo-field">
+          <span class="demo-field-label">Console login</span>
+          <code class="demo-field-value" x-text="window.location.origin + (state.demoResult.login_url || '/ui/login')"></code>
+          <button type="button" class="link-btn" @click="copyText(window.location.origin + (state.demoResult.login_url || '/ui/login'), 'Login URL', $event)">Copy</button>
+        </div>
+        <div class="demo-field">
+          <span class="demo-field-label">Email</span>
+          <code class="demo-field-value" x-text="state.demoResult.user_email"></code>
+          <button type="button" class="link-btn" @click="copyText(state.demoResult.user_email, 'Email', $event)">Copy</button>
+        </div>
+        <div class="demo-field">
+          <span class="demo-field-label">Password</span>
+          <code class="demo-field-value" x-text="state.demoResult.password"></code>
+          <button type="button" class="link-btn" @click="copyText(state.demoResult.password, 'Password', $event)">Copy</button>
+        </div>
+        <div class="demo-field">
+          <span class="demo-field-label">Tenant</span>
+          <code class="demo-field-value" x-text="state.demoResult.tenant_id"></code>
+        </div>
+      </div>
+      <div class="flex items-center gap-3 mt-3">
+        <button type="button" class="btn-secondary" @click="connectDemoWorkspace(state.demoResult)">
+          Get MCP config
+        </button>
+      </div>
+    </div>
+  </template>
+
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Workspace</th>
+          <th>Tenant</th>
+          <th>Contents</th>
+          <th>Expires</th>
+          <th>Created</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-if="(state.demos || []).length === 0">
+          <tr>
+            <td class="empty-cell" colspan="6">
+              <span class="empty-emoji">🎬</span>
+              <span x-text="state.demosLoading ? 'Loading demos…' : 'No demo workspaces yet — spin one up above.'"></span>
+            </td>
+          </tr>
+        </template>
+        <template x-for="demo in state.demos" :key="demo.tenant_id">
+          <tr>
+            <td>
+              <div class="font-medium" x-text="demo.label || 'Demo'"></div>
+              <div class="text-xs text-slate-500" x-show="demo.client" x-text="demo.client"></div>
+              <div class="text-xs text-slate-400" x-text="demo.user_email"></div>
+            </td>
+            <td><code class="text-xs" x-text="demo.tenant_id"></code></td>
+            <td>
+              <span class="cpill cpill-confirmed">
+                <span x-text="demo.tools"></span> tools ·
+                <span x-text="(demo.servers || []).length"></span> servers
+              </span>
+            </td>
+            <td>
+              <span
+                class="demo-countdown"
+                :class="demoExpirySoon(demo) ? 'demo-countdown-soon' : ''"
+                x-text="demoExpiryLabel(demo)"
+              ></span>
+            </td>
+            <td x-text="formatDate(demo.created_at)"></td>
+            <td class="space-x-2 whitespace-nowrap">
+              <button type="button" class="link-btn" @click="connectDemoWorkspace(demo)">
+                MCP config
+              </button>
+              <button
+                type="button"
+                class="link-btn"
+                @click="copyText(window.location.origin + '/ui/login', 'Login URL', $event)"
+              >
+                Copy login
+              </button>
+              <button type="button" class="link-btn text-red-600" @click="deleteDemoWorkspace(demo)">
+                Delete
+              </button>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section
   x-show="activeSection === 'tenants'"
   class="space-y-4"
   x-transition:enter="view-active"

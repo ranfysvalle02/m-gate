@@ -300,6 +300,15 @@ class FakeCollection:
 
         return _Result()
 
+    async def insert_many(self, docs: list[dict[str, Any]], **_kwargs: Any) -> Any:
+        copied = [dict(doc) for doc in docs]
+        self.docs.extend(copied)
+
+        class _Result:
+            inserted_ids = [doc.get("_id") for doc in copied]
+
+        return _Result()
+
     async def update_one(
         self, query: dict[str, Any], update: dict[str, Any], *, upsert: bool = False
     ) -> Any:

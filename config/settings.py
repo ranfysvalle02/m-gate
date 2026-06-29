@@ -333,6 +333,25 @@ class Settings(BaseSettings):
     confirmed_quota_calls_per_period: int = 0
     confirmed_quota_sandbox_seconds_per_period: int = 0
 
+    # --- Demo workspaces (one-click, isolated, self-expiring demo tenants) ----
+    # A platform-admin can spin up a fully-seeded, isolated demo tenant per
+    # prospect/customer (POST /admin/demos). Each is a confirmed tenant pre-loaded
+    # with a curated, capability-aware tool pack + sample data and a ready-to-share
+    # tenant-admin login — so "2 demos for 2 customers" maps to 2 isolated tenants,
+    # never two servers crammed into one. Demos self-expire and are reaped (the
+    # tenant axis is the cap, not servers).
+    demo_workspaces_enabled: bool = True
+    # Hard ceiling on concurrently-active demo tenants (0 => unlimited). Each is a
+    # MongoDB database, so this bounds the Atlas-namespace footprint just like the
+    # self-registration beta cap.
+    max_demo_tenants: int = 10
+    # Lifetime of a demo workspace before it is auto-reaped (hard-dropped). A
+    # per-request override is clamped to [1, demo_ttl_max_hours].
+    demo_ttl_hours: int = 72
+    demo_ttl_max_hours: int = 720
+    # Prefix for the auto-generated demo tenant id; a random suffix is appended.
+    demo_tenant_prefix: str = "demo-"
+
     hybrid_vector_weight: float = 0.5
     hybrid_text_weight: float = 0.5
     hybrid_num_candidates: int = 100

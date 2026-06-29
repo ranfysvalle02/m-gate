@@ -5,6 +5,7 @@ window.adminConsole = function adminConsole(config) {
     navItems: [
       { key: "dashboard", label: "Dashboard", icon: "📊" },
       { key: "servers", label: "MCP Servers", icon: "🧰" },
+      { key: "demos", label: "Demos", icon: "🎬", adminOnly: true },
       { key: "tenants", label: "Tenants", icon: "🏢" },
       { key: "users", label: "Credentials", icon: "🔑" },
       { key: "approvals", label: "Approvals", icon: "✅" },
@@ -124,6 +125,15 @@ window.adminConsole = function adminConsole(config) {
       displayMetrics: { calls: 0, sandbox: 0 },
       // Tenants table client-side filter: "all" or "unconfirmed" (the beta queue).
       tenantFilter: "all",
+      // --- Demo workspaces (one-click, isolated, self-expiring demo tenants) ---
+      demos: [],
+      demosMeta: { max: 0, enabled: true },
+      demosLoading: false,
+      demoForm: { label: "", client: "", ttl_hours: null },
+      demoCreatingWorkspace: false,
+      // The just-provisioned workspace's one-time shareable details (the
+      // tenant-admin password is shown exactly once, here).
+      demoResult: null,
       // Usage & quota management view.
       usage: null,
       usageEvents: { events: [], totals_by_kind: {}, total_amount: 0 },
@@ -903,6 +913,7 @@ window.adminConsole = function adminConsole(config) {
           await this.loadAnalytics();
         }
         if (this.activeSection === "tenants") await this.loadTenants();
+        if (this.activeSection === "demos") await this.loadDemos();
         if (this.activeSection === "users") await this.loadUsers();
         if (this.activeSection === "catalog") await this.loadCatalog();
         if (this.activeSection === "usage") await this.loadUsageView();
@@ -977,6 +988,135 @@ window.adminConsole = function adminConsole(config) {
       }
     },
 
+    // ---- Demo workspaces --------------------------------------------------- //
+    async loadDemos() {
+      this.clearError();
+      this.state.demosLoading = true;
+      try {
+        const result = await this.apiRequest("/admin/demos", {
+          includeTenant: false,
+        });
+        this.state.demos = result.items || [];
+        this.state.demosMeta = {
+          max: Number(result.max_demo_tenants || 0),
+          enabled: result.enabled !== false,
+        };
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.demosLoading = false;
+      }
+    },
+
+    // True when the tenant-axis cap is reached, so the create button is disabled.
+    demoCapReached() {
+      const max = Number(this.state.demosMeta.max || 0);
+      return max > 0 && (this.state.demos || []).length >= max;
+    },
+
+    demoCapLabel() {
+      const max = Number(this.state.demosMeta.max || 0);
+      const used = (this.state.demos || []).length;
+      return max > 0 ? `${used} / ${max} demos` : `${used} demos`;
+    },
+
+    async createDemoWorkspace() {
+      if (this.demoCapReached() || this.state.demoCreatingWorkspace) return;
+      this.clearError();
+      this.state.demoCreatingWorkspace = true;
+      const body = {};
+      const label = (this.state.demoForm.label || "").trim();
+      const client = (this.state.demoForm.client || "").trim();
+      const ttl = Number(this.state.demoForm.ttl_hours || 0);
+      if (label) body.label = label;
+      if (client) body.client = client;
+      if (ttl > 0) body.ttl_hours = ttl;
+      try {
+        const result = await this.apiRequest("/admin/demos", {
+          method: "POST",
+          includeTenant: false,
+          body,
+          // Provisioning a tenant + seeding a pack can take a few seconds.
+          timeoutMs: 60000,
+        });
+        this.state.demoResult = result;
+        this.state.demoForm = { label: "", client: "", ttl_hours: null };
+        await this.loadDemos();
+        this.notify(
+          `Demo workspace ready: ${result.tools} tool${result.tools === 1 ? "" : "s"} across ${result.servers.length} server${result.servers.length === 1 ? "" : "s"}.`,
+        );
+      } catch (error) {
+        this.setError(error);
+      } finally {
+        this.state.demoCreatingWorkspace = false;
+      }
+    },
+
+    async deleteDemoWorkspace(workspace) {
+      const tenant = workspace?.tenant_id;
+      if (!tenant) return;
+      const name = workspace.label || tenant;
+      if (
+        !window.confirm(
+          `Delete demo workspace "${name}"? This permanently drops its database, tools, and login.`,
+        )
+      ) {
+        return;
+      }
+      this.clearError();
+      try {
+        await this.apiRequest(`/admin/demos/${encodeURIComponent(tenant)}`, {
+          method: "DELETE",
+          includeTenant: false,
+        });
+        if (this.state.demoResult?.tenant_id === tenant) {
+          this.state.demoResult = null;
+        }
+        await this.loadDemos();
+        this.notify(`Demo workspace '${name}' deleted.`, "warning");
+      } catch (error) {
+        this.setError(error);
+      }
+    },
+
+    dismissDemoResult() {
+      this.state.demoResult = null;
+    },
+
+    // Open the existing "Get MCP config" modal for a demo's tenant-admin login so
+    // the recipient can connect Cursor/Claude over MCP in one click.
+    async connectDemoWorkspace(workspace) {
+      if (!workspace?.user_id) return;
+      await this.generateUserToken({
+        id: workspace.user_id,
+        email: workspace.user_email,
+        client: workspace.client || "",
+      });
+    },
+
+    // Human "expires in 3h 12m" / "expired" label from an ISO timestamp.
+    demoExpiryLabel(workspace) {
+      const raw = workspace?.expires_at;
+      if (!raw) return "no expiry";
+      const ms = new Date(raw).getTime() - Date.now();
+      if (Number.isNaN(ms)) return "-";
+      if (ms <= 0) return "expired";
+      const totalMinutes = Math.floor(ms / 60000);
+      const days = Math.floor(totalMinutes / 1440);
+      const hours = Math.floor((totalMinutes % 1440) / 60);
+      const minutes = totalMinutes % 60;
+      if (days > 0) return `expires in ${days}d ${hours}h`;
+      if (hours > 0) return `expires in ${hours}h ${minutes}m`;
+      return `expires in ${minutes}m`;
+    },
+
+    demoExpirySoon(workspace) {
+      const raw = workspace?.expires_at;
+      if (!raw) return false;
+      const ms = new Date(raw).getTime() - Date.now();
+      return ms > 0 && ms < 3600000; // under an hour
+    },
+
     async createTenant() {
       this.clearError();
       const created = this.forms.newTenantId;
@@ -1034,6 +1174,13 @@ window.adminConsole = function adminConsole(config) {
 
     isPlatformAdmin() {
       return Boolean(this.state.whoami?.is_platform_admin);
+    },
+
+    // Nav items minus the platform-admin-only entries (e.g. Demos) for everyone
+    // else, so a tenant-admin never sees a section they can't use.
+    visibleNavItems() {
+      const isAdmin = this.isPlatformAdmin();
+      return this.navItems.filter((item) => !item.adminOnly || isAdmin);
     },
 
     async createViewerUser() {
