@@ -4188,6 +4188,8 @@
         <button
           type="button"
           class="btn-primary starter-pack-btn"
+          :disabled="utilitiesPackBlockedByTier()"
+          :title="utilitiesPackBlockedByTier() ? utilitiesPackBlockReason() : 'Load all utility examples'"
           @click="installUtilitiesPack()"
         >
           Load the pack

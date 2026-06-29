@@ -24,7 +24,7 @@ from services.credential_broker import (
 )
 from services.egress_policy import EgressNotAllowed
 from services.egress_transport import make_egress_client_factory
-from services.embeddings import EmbeddingService, get_embedding_service
+from services.embeddings import EmbeddingService, EmbeddingUnavailableError, get_embedding_service
 from services.metrics import observe_usage
 from services.sandbox_executor import (
     ExecRequest,
@@ -189,6 +189,7 @@ class InMemoryFastMCPRegistry:
         server_scopes = (server_doc.get("metadata") or {}).get("scopes") or []
         collection = get_tenant_database(tenant_id)["tool_catalog"]
         now = datetime.now(UTC)
+        embedding_degraded = False
         for tool in tools:
             name = tool.get("name")
             if not name:
@@ -231,7 +232,21 @@ class InMemoryFastMCPRegistry:
             ):
                 embedding = existing["embedding"]
             else:
-                embedding = await self.embedding_service.embed_text(text_for_embedding)
+                if embedding_degraded:
+                    embedding = self._fallback_embedding(existing)
+                else:
+                    try:
+                        embedding = await self.embedding_service.embed_text(text_for_embedding)
+                    except EmbeddingUnavailableError:
+                        embedding_degraded = True
+                        embedding = self._fallback_embedding(existing)
+                        logger.warning(
+                            "Embedding unavailable while syncing tenant=%s server=%s; "
+                            "writing discovery docs with fallback vectors.",
+                            tenant_id,
+                            server_name,
+                            exc_info=True,
+                        )
             await collection.update_one(
                 {"server": server_name, "name": name},
                 {
@@ -250,6 +265,21 @@ class InMemoryFastMCPRegistry:
                 },
                 upsert=True,
             )
+
+    def _fallback_embedding(self, existing_doc: dict[str, Any] | None) -> list[float]:
+        """Return a non-empty vector when the embedding backend is unavailable.
+
+        Discovery (`tools/list`) only needs catalog rows to exist. Reuse a prior
+        embedding when available; otherwise write a zero vector sized to the active
+        embedding width so catalog writes can proceed fail-open.
+        """
+        existing = (existing_doc or {}).get("embedding")
+        if isinstance(existing, list) and existing:
+            return [float(value) for value in existing]
+        dimensions = int(getattr(self.embedding_service, "dimensions", 0) or 0)
+        if dimensions <= 0:
+            dimensions = int(self.settings.ollama_dimensions or 0)
+        return [0.0] * max(1, dimensions)
 
     async def call_tool(
         self,

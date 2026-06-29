@@ -587,6 +587,44 @@ async def test_sync_tool_catalog_stamps_code_transport_without_raw_code(
 
 
 @pytest.mark.asyncio
+async def test_sync_tool_catalog_fails_open_when_embeddings_unavailable(patch_mongo):
+    """A save should still succeed when embeddings are temporarily unavailable.
+
+    Catalog docs are written with fallback vectors so tools remain discoverable via
+    list/catalog endpoints instead of hanging the save path on embedding outages.
+    """
+    from database.mongo import get_tenant_database
+    from fakes import FakeEmbeddingService
+
+    registry = InMemoryFastMCPRegistry(
+        embedding_service=FakeEmbeddingService(dimensions=3, fail=True)
+    )
+    server_doc = {
+        "tenant_id": "local-dev",
+        "server": "my-funcs",
+        "transport": "code",
+        "tools": [
+            {
+                "server": "my-funcs",
+                "name": "word_count",
+                "description": "Count words",
+                "input_schema": {},
+                "metadata": {"action_type": "read"},
+            }
+        ],
+    }
+
+    await registry.sync_tool_catalog(server_doc)
+
+    catalog = get_tenant_database("local-dev")["tool_catalog"].docs
+    assert len(catalog) == 1
+    entry = catalog[0]
+    assert entry["server"] == "my-funcs"
+    assert entry["name"] == "word_count"
+    assert entry["embedding"] == [0.0, 0.0, 0.0]
+
+
+@pytest.mark.asyncio
 async def test_call_tool_code_transport_respects_execution_flag():
     registry = InMemoryFastMCPRegistry()
     registry._servers[("local-dev", "my-funcs")] = DownstreamServer(

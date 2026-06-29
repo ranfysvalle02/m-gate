@@ -280,6 +280,7 @@ window.adminConsole = function adminConsole(config) {
       const method = options.method || "GET";
       const body = options.body || null;
       const includeTenant = options.includeTenant !== false;
+      const timeoutMs = Math.max(1, Number(options.timeoutMs || 20000));
       const url = new URL(path, window.location.origin);
       if (includeTenant && this.state.tenantId) {
         url.searchParams.set("tenant_id", this.state.tenantId);
@@ -305,12 +306,27 @@ window.adminConsole = function adminConsole(config) {
         }
       }
 
-      const response = await fetch(url.toString(), {
-        method,
-        headers,
-        credentials: "same-origin",
-        body: body === null ? undefined : JSON.stringify(body),
-      });
+      const controller = new AbortController();
+      const timeoutHandle = window.setTimeout(() => controller.abort(), timeoutMs);
+      let response;
+      try {
+        response = await fetch(url.toString(), {
+          method,
+          headers,
+          credentials: "same-origin",
+          body: body === null ? undefined : JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (error && error.name === "AbortError") {
+          throw new Error(
+            `Request timed out after ${Math.ceil(timeoutMs / 1000)}s. Check gateway health/logs and try again.`,
+          );
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timeoutHandle);
+      }
       if (response.status === 401) {
         window.location.href = `${this.uiPath}/login`;
         throw new Error("Authentication required");
@@ -3663,6 +3679,17 @@ window.adminConsole = function adminConsole(config) {
       ];
     },
 
+    utilitiesPackBlockedByTier() {
+      const confirmation = String(this.state.whoami?.confirmation || "confirmed").toLowerCase();
+      if (this.isPlatformAdmin()) return false;
+      return confirmation === "unconfirmed" && this.utilitiesPack().length > 1;
+    },
+
+    utilitiesPackBlockReason() {
+      if (!this.utilitiesPackBlockedByTier()) return "";
+      return "Unconfirmed accounts can save only 1 tool. Start from a single-function example.";
+    },
+
     _specToToolForm(spec) {
       const form = this.emptyToolForm();
       form.name = spec.name;
@@ -3681,6 +3708,10 @@ window.adminConsole = function adminConsole(config) {
     // Load the whole pack into the composer as a single "utilities" server for
     // review + Save. Save still enforces the tier cap and surfaces its message.
     installUtilitiesPack() {
+      if (this.utilitiesPackBlockedByTier()) {
+        this.notify(this.utilitiesPackBlockReason(), "warning");
+        return;
+      }
       const tools = this.utilitiesPack().map((spec) => this._specToToolForm(spec));
       if (!tools.length) return;
       this._teardownCodeEditors();
