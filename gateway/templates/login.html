@@ -27,9 +27,23 @@
           </div>
         </div>
         <p class="auth-lede auth-lede-login">
-          One endpoint for every MCP tool — write a Python function, hit save,
-          and an agent can call it in minutes.
+          One gateway for every MCP tool. Your servers each expose tools; your
+          AI clients reach them all through a single secure endpoint.
         </p>
+        <ol class="auth-steps" aria-label="What happens after you sign in">
+          <li class="auth-step">
+            <span class="auth-step-num">1</span>
+            <span><strong>Add a server</strong> — hosted here or one you run</span>
+          </li>
+          <li class="auth-step">
+            <span class="auth-step-num">2</span>
+            <span><strong>It exposes tools</strong> your agents can call</span>
+          </li>
+          <li class="auth-step">
+            <span class="auth-step-num">3</span>
+            <span><strong>Connect a client</strong> and start invoking</span>
+          </li>
+        </ol>
         {% if error %}
           <div class="error-banner">{{ error }}</div>
         {% endif %}

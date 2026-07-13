@@ -6,3 +6,6 @@ types-PyYAML==6.0.12.20250516
 pytest-cov==7.1.0
 respx==0.22.0
 testcontainers==4.13.3
+# UI screenshot capture for the admin console (scripts/ui_screenshots.py).
+# After install run `python -m playwright install chromium` once.
+playwright==1.54.0

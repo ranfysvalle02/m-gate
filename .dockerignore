@@ -16,3 +16,5 @@ vendor/.wasm-cache/
 .mypy_cache/
 .DS_Store
 *.log
+# Captured admin-console screenshots are docs, not runtime assets.
+screenshots/

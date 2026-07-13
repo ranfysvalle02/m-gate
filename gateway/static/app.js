@@ -2,18 +2,29 @@ window.adminConsole = function adminConsole(config) {
   return {
     uiPath: config.uiPath,
     loggedInEmail: config.loggedInEmail,
+    // Flat source of truth (drives hash deep-linking); grouped for display by
+    // navGroups(). `group` maps each item onto a labeled sidebar section.
     navItems: [
-      { key: "dashboard", label: "Dashboard", icon: "📊" },
-      { key: "servers", label: "MCP Servers", icon: "🧰" },
-      { key: "demos", label: "Demos", icon: "🎬", adminOnly: true },
-      { key: "tenants", label: "Tenants", icon: "🏢" },
-      { key: "users", label: "Credentials", icon: "🔑" },
-      { key: "approvals", label: "Approvals", icon: "✅" },
-      { key: "catalog", label: "Catalog", icon: "🗂️" },
-      { key: "usage", label: "Usage & Quota", icon: "📒" },
-      { key: "telemetry", label: "Telemetry", icon: "📈" },
-      { key: "embeddings", label: "Embeddings", icon: "🧠" },
-      { key: "account", label: "Account", icon: "🧑" },
+      { key: "dashboard", label: "Overview", icon: "🛰️", group: "overview" },
+      { key: "servers", label: "Servers", icon: "🧰", group: "build" },
+      { key: "catalog", label: "Tools", icon: "🗂️", group: "build" },
+      { key: "users", label: "Credentials", icon: "🔑", group: "access" },
+      { key: "approvals", label: "Approvals", icon: "✅", group: "access" },
+      { key: "tenants", label: "Tenants", icon: "🏢", group: "access" },
+      { key: "usage", label: "Usage & Quota", icon: "📒", group: "insights" },
+      { key: "telemetry", label: "Telemetry", icon: "📈", group: "insights" },
+      { key: "embeddings", label: "Embeddings", icon: "🧠", group: "settings" },
+      { key: "account", label: "Account", icon: "🧑", group: "settings" },
+      { key: "demos", label: "Demos", icon: "🎬", group: "settings", adminOnly: true },
+    ],
+    // Sidebar groups: order + labels. `advanced` groups start collapsed in
+    // Simple view (they hold power-user tooling), acting as the "More" affordance.
+    navGroupDefs: [
+      { key: "overview", label: "Overview" },
+      { key: "build", label: "Build" },
+      { key: "access", label: "Access & control" },
+      { key: "insights", label: "Insights", advanced: true },
+      { key: "settings", label: "Settings", advanced: true },
     ],
     activeSection: "dashboard",
     forms: {
@@ -96,6 +107,11 @@ window.adminConsole = function adminConsole(config) {
     ],
     state: {
       theme: "dark",
+      // "simple" (guided, plain-language default) | "advanced" (full density).
+      viewMode: "simple",
+      // Per-group collapse overrides, persisted; falls back to a viewMode-aware
+      // default (advanced groups collapsed in Simple view).
+      navCollapsed: {},
       tenantId: config.defaultTenantId,
       tenantOptions: [config.defaultTenantId],
       whoami: null,
@@ -249,6 +265,8 @@ window.adminConsole = function adminConsole(config) {
 
     async init() {
       this.initTheme();
+      this.initViewMode();
+      this.initNav();
       this._initHashRouting();
       try {
         await this.loadWhoAmI();
@@ -845,6 +863,75 @@ window.adminConsole = function adminConsole(config) {
       return this.state.theme === "dark";
     },
 
+    // ---- Simple / Advanced view mode -------------------------------------- //
+    // Simple is the guided default: plain language, fewer knobs, advanced groups
+    // tucked away. Advanced reveals every field, chart, and section at once. The
+    // choice is remembered so a power user isn't re-simplified on each visit.
+    initViewMode() {
+      const stored = window.localStorage.getItem("gateway-admin-view");
+      this.state.viewMode = stored === "advanced" ? "advanced" : "simple";
+    },
+
+    toggleViewMode() {
+      this.state.viewMode =
+        this.state.viewMode === "advanced" ? "simple" : "advanced";
+      window.localStorage.setItem("gateway-admin-view", this.state.viewMode);
+      // The Overview's charts live in an x-show (advanced-only) block; their
+      // canvases size to zero while hidden, so re-render once revealed.
+      if (this.isAdvancedView() && this.activeSection === "dashboard") {
+        this.$nextTick(() => this.renderDashboardCharts());
+      }
+    },
+
+    isAdvancedView() {
+      return this.state.viewMode === "advanced";
+    },
+
+    isSimpleView() {
+      return this.state.viewMode !== "advanced";
+    },
+
+    // ---- Grouped, collapsible sidebar navigation -------------------------- //
+    initNav() {
+      try {
+        const raw = window.localStorage.getItem("gateway-admin-nav-collapsed");
+        this.state.navCollapsed = raw ? JSON.parse(raw) : {};
+      } catch (_) {
+        this.state.navCollapsed = {};
+      }
+    },
+
+    // Build the display groups from the flat navItems, dropping admin-only items
+    // for non-platform-admins and any group left empty as a result.
+    navGroups() {
+      const isAdmin = this.isPlatformAdmin();
+      const groups = [];
+      for (const def of this.navGroupDefs) {
+        const items = this.navItems.filter(
+          (item) => item.group === def.key && (!item.adminOnly || isAdmin),
+        );
+        if (items.length > 0) groups.push({ ...def, items });
+      }
+      return groups;
+    },
+
+    isNavGroupCollapsed(group) {
+      const explicit = this.state.navCollapsed[group.key];
+      if (explicit === true || explicit === false) return explicit;
+      // Default: advanced groups are collapsed in Simple view (the "More" tuck),
+      // and every group is open in Advanced view.
+      return Boolean(group.advanced) && this.isSimpleView();
+    },
+
+    toggleNavGroup(group) {
+      const next = !this.isNavGroupCollapsed(group);
+      this.state.navCollapsed = { ...this.state.navCollapsed, [group.key]: next };
+      window.localStorage.setItem(
+        "gateway-admin-nav-collapsed",
+        JSON.stringify(this.state.navCollapsed),
+      );
+    },
+
     formatDate(raw) {
       if (!raw) return "-";
       const parsed = new Date(raw);
@@ -910,6 +997,9 @@ window.adminConsole = function adminConsole(config) {
       try {
         if (this.activeSection === "dashboard") {
           await this.loadStats();
+          // The Overview gateway map reads server/tool counts; fetch quietly so
+          // it never pops the Functions Studio the way the Servers tab does.
+          await this.loadServers({ quiet: true });
           await this.loadAnalytics();
         }
         if (this.activeSection === "tenants") await this.loadTenants();
@@ -1797,12 +1887,19 @@ window.adminConsole = function adminConsole(config) {
       }
     },
 
-    async loadServers() {
+    async loadServers(options = {}) {
+      // `quiet` fetches the list without the first-run side effect of popping the
+      // Functions Studio — used by the Overview map, which only reads counts.
+      const quiet = options.quiet === true;
       this.clearError();
       try {
         const payload = await this.apiRequest("/admin/servers");
         this.state.servers = payload.items || [];
-        if (this.state.servers.length === 0 && !this.state.serverComposerOpen) {
+        if (
+          !quiet &&
+          this.state.servers.length === 0 &&
+          !this.state.serverComposerOpen
+        ) {
           // First run: open the studio pre-loaded with the runnable starter so a
           // brand-new operator lands on real, highlighted code — not a blank box.
           this.resetServerForm();
@@ -1813,6 +1910,91 @@ window.adminConsole = function adminConsole(config) {
       } catch (error) {
         this.setError(error);
       }
+    },
+
+    // ---- Upstream / downstream model -------------------------------------- //
+    // The gateway hosts two kinds of server. "Upstream" servers run *inside* the
+    // gateway — Python authored in the browser, executed in the wasm sandbox
+    // (transport "code"). "Downstream" servers are external MCP servers the
+    // gateway proxies to over Streamable HTTP, SSE, or stdio. Both expose tools;
+    // this split is derived purely from the existing transport field.
+    serverDirection(server) {
+      return String(server?.transport || "") === "code"
+        ? "upstream"
+        : "downstream";
+    },
+
+    isUpstreamServer(server) {
+      return this.serverDirection(server) === "upstream";
+    },
+
+    serverDirectionLabel(server) {
+      return this.isUpstreamServer(server) ? "Upstream" : "Downstream";
+    },
+
+    // Human-friendly transport wording (the raw enum is shown only in Advanced).
+    serverTransportLabel(server) {
+      const map = {
+        code: "Hosted (sandbox)",
+        streamable_http: "Streamable HTTP",
+        sse: "Server-sent events",
+        stdio: "Local process (stdio)",
+      };
+      return map[String(server?.transport || "")] || String(server?.transport || "—");
+    },
+
+    serverToolList(server) {
+      return Array.isArray(server?.tools) ? server.tools : [];
+    },
+
+    serverToolCount(server) {
+      return this.serverToolList(server).length;
+    },
+
+    upstreamServers() {
+      return (this.state.servers || []).filter((s) => this.isUpstreamServer(s));
+    },
+
+    downstreamServers() {
+      return (this.state.servers || []).filter((s) => !this.isUpstreamServer(s));
+    },
+
+    serversByDirection() {
+      return {
+        upstream: this.upstreamServers(),
+        downstream: this.downstreamServers(),
+      };
+    },
+
+    totalToolCount() {
+      return (this.state.servers || []).reduce(
+        (sum, s) => sum + this.serverToolCount(s),
+        0,
+      );
+    },
+
+    // A tool's action class (read / write / destructive) drives its badge color.
+    toolActionType(tool) {
+      const raw =
+        tool?.metadata?.action_type ?? tool?.action_type ?? "read";
+      const value = String(raw).toLowerCase();
+      return ["read", "write", "destructive"].includes(value) ? value : "read";
+    },
+
+    toolRequiresConfirmation(tool) {
+      return Boolean(
+        tool?.metadata?.requires_confirmation ?? tool?.requires_confirmation,
+      );
+    },
+
+    toolScopeList(tool) {
+      const scopes = tool?.scopes;
+      return Array.isArray(scopes) ? scopes : [];
+    },
+
+    // Whether the operator has any servers wired up at all (drives empty states).
+    hasServers() {
+      return (this.state.servers || []).length > 0;
     },
 
     selectedWorkspaceServer() {

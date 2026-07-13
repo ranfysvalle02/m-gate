@@ -6,38 +6,198 @@
   x-transition:enter-start="view-from"
   x-transition:enter-end="view-to"
 >
-  <h1 class="text-2xl font-semibold">Dashboard</h1>
+  <!-- Hero: the whole mental model in one breath. -->
+  <div class="overview-hero">
+    <div class="overview-hero-copy">
+      <div class="overview-eyebrow">Your gateway</div>
+      <h1 class="overview-title">One gateway. Your servers. Their tools.</h1>
+      <p class="overview-lede">
+        Every AI client connects to a single endpoint. Behind it live your
+        <strong>servers</strong>, and each server exposes one or more
+        <strong>tools</strong> your agents can call. Some servers run right here
+        inside the gateway (<strong>upstream</strong>); others are ones you
+        already operate and simply plug in (<strong>downstream</strong>).
+      </p>
+      <div class="overview-hero-actions">
+        <button
+          type="button"
+          class="btn-primary"
+          x-show="canMutate()"
+          @click="activeSection = 'servers'; openServerComposer('code')"
+        >
+          + Add a server
+        </button>
+        <button type="button" class="btn-secondary" @click="openHelp('mcp')">
+          <span class="help-badge" aria-hidden="true">?</span>
+          New to MCP? 60-second primer
+        </button>
+      </div>
+    </div>
+    <div class="overview-hero-flow" aria-hidden="true">
+      <div class="flow-pill flow-pill-client">
+        <span class="flow-emoji">💬</span><span>AI clients</span>
+      </div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-pill flow-pill-gateway">
+        <span class="flow-emoji">🛰️</span><span>Gateway</span>
+      </div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-pill flow-pill-tools">
+        <span class="flow-emoji">🧰</span><span>Servers &amp; tools</span>
+      </div>
+    </div>
+  </div>
 
-  <!-- Primer first: MCP is just JSON-RPC. Start here if you're new. -->
-  <button type="button" class="learn-cta" @click="openHelp('mcp')">
-    <span class="learn-cta-icon" aria-hidden="true">📡</span>
-    <span class="learn-cta-text">
-      <strong>New to MCP? It's just JSON-RPC.</strong>
-      <span
-        >See how the Model Context Protocol maps onto MongoDB's document model —
-        with copy-paste examples.</span
+  <!-- Summary chips: the shape of the gateway at a glance. -->
+  <div class="overview-stats">
+    <button type="button" class="stat-chip" @click="switchSection('servers')">
+      <span class="stat-chip-value" x-text="(state.servers || []).length"></span>
+      <span class="stat-chip-label">Servers</span>
+    </button>
+    <button type="button" class="stat-chip" @click="switchSection('servers')">
+      <span class="stat-chip-value" x-text="upstreamServers().length"></span>
+      <span class="stat-chip-label"
+        ><span class="dir-dot dir-dot-up"></span> Upstream</span
       >
-    </span>
-    <span class="learn-cta-go">Open the guide →</span>
-  </button>
+    </button>
+    <button type="button" class="stat-chip" @click="switchSection('servers')">
+      <span class="stat-chip-value" x-text="downstreamServers().length"></span>
+      <span class="stat-chip-label"
+        ><span class="dir-dot dir-dot-down"></span> Downstream</span
+      >
+    </button>
+    <button type="button" class="stat-chip" @click="switchSection('catalog')">
+      <span class="stat-chip-value" x-text="totalToolCount()"></span>
+      <span class="stat-chip-label">Tools</span>
+    </button>
+    <div class="stat-chip stat-chip-static">
+      <span
+        class="stat-chip-value stat-chip-value-sm"
+        x-text="state.tenantId"
+      ></span>
+      <span class="stat-chip-label">Active tenant</span>
+    </div>
+  </div>
 
-  <!-- Build first: turn a Python function into a sandboxed virtual MCP tool. -->
-  <button
-    type="button"
-    class="learn-cta"
-    x-show="canMutate()"
-    @click="activeSection = 'servers'; openServerComposer('code')"
-  >
-    <span class="learn-cta-icon" aria-hidden="true">🛠️</span>
-    <span class="learn-cta-text">
-      <strong>Build your first MCP tool</strong>
-      <span
-        >Paste a Python function and the gateway runs it sandboxed as a virtual
-        MCP — no infra, no deploy. This is the fast path to your first tool.</span
+  <!-- Gateway map: clients → gateway → servers (split upstream / downstream). -->
+  <div class="card gateway-map-card">
+    <div class="gateway-map-head">
+      <div>
+        <div class="card-label">How your gateway is wired</div>
+        <p class="gateway-map-sub">
+          Clients call one endpoint; the gateway routes each request to the
+          right server and tool.
+        </p>
+      </div>
+      <button
+        type="button"
+        class="btn-secondary"
+        @click="loadServers({ quiet: true })"
       >
-    </span>
-    <span class="learn-cta-go">Create a virtual server →</span>
-  </button>
+        Refresh
+      </button>
+    </div>
+
+    <!-- Empty state: a gateway needs at least one server. -->
+    <template x-if="!hasServers()">
+      <div class="gateway-empty">
+        <span class="empty-emoji">🧭</span>
+        <div class="gateway-empty-title">
+          A gateway needs at least one server
+        </div>
+        <p class="gateway-empty-copy">
+          Add your first server to expose tools to your agents. The fastest path
+          is a hosted (upstream) server — paste a Python function and the
+          gateway runs it for you, no infrastructure required.
+        </p>
+        <div class="flex gap-2 justify-center flex-wrap" x-show="canMutate()">
+          <button
+            type="button"
+            class="btn-primary"
+            @click="activeSection='servers'; openServerComposer('code')"
+          >
+            + Add hosted server
+          </button>
+          <button
+            type="button"
+            class="btn-secondary"
+            @click="activeSection='servers'; openServerComposer('connect')"
+          >
+            + Connect existing server
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <!-- The wired map. -->
+    <template x-if="hasServers()">
+      <div class="gateway-map">
+        <div class="gw-col gw-col-clients">
+          <div class="gw-col-cap">Clients</div>
+          <div class="gw-client">Cursor</div>
+          <div class="gw-client">Claude</div>
+          <div class="gw-client">VS Code</div>
+        </div>
+        <div class="gw-wire" aria-hidden="true"></div>
+        <div class="gw-node">
+          <span class="gw-node-emoji" aria-hidden="true">🛰️</span>
+          <span class="gw-node-name">Gateway</span>
+          <code class="gw-node-endpoint" x-text="mcpEndpoint()"></code>
+        </div>
+        <div class="gw-wire" aria-hidden="true"></div>
+        <div class="gw-col gw-col-servers">
+          <div class="gw-lane">
+            <div class="gw-lane-cap">
+              <span class="dir-dot dir-dot-up"></span> Upstream · hosted here
+            </div>
+            <template
+              x-for="server in upstreamServers()"
+              :key="'up-' + server.server"
+            >
+              <button
+                type="button"
+                class="gw-chip gw-chip-up"
+                @click="openServerWorkspace(server, 'tools')"
+              >
+                <span class="gw-chip-name" x-text="server.server"></span>
+                <span
+                  class="gw-chip-tools"
+                  x-text="`${serverToolCount(server)} tool${serverToolCount(server) === 1 ? '' : 's'}`"
+                ></span>
+              </button>
+            </template>
+            <template x-if="upstreamServers().length === 0">
+              <div class="gw-lane-empty">No hosted servers yet</div>
+            </template>
+          </div>
+          <div class="gw-lane">
+            <div class="gw-lane-cap">
+              <span class="dir-dot dir-dot-down"></span> Downstream · external
+            </div>
+            <template
+              x-for="server in downstreamServers()"
+              :key="'down-' + server.server"
+            >
+              <button
+                type="button"
+                class="gw-chip gw-chip-down"
+                @click="openServerWorkspace(server, 'tools')"
+              >
+                <span class="gw-chip-name" x-text="server.server"></span>
+                <span
+                  class="gw-chip-tools"
+                  x-text="`${serverToolCount(server)} tool${serverToolCount(server) === 1 ? '' : 's'}`"
+                ></span>
+              </button>
+            </template>
+            <template x-if="downstreamServers().length === 0">
+              <div class="gw-lane-empty">No external servers connected</div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
 
   <!-- Connect Now: connect an MCP client once you have tools to expose. -->
   <section class="connect-now" aria-labelledby="connect-now-title">
@@ -128,6 +288,8 @@
     </p>
   </section>
 
+  <!-- Advanced: platform stats, live charts, and onboarding. Hidden in Simple. -->
+  <div class="space-y-4" x-show="isAdvancedView()" x-cloak>
   <div class="grid gap-4 md:grid-cols-3">
     <div class="card">
       <div class="card-label">Catalog Version</div>
@@ -270,6 +432,7 @@
   <button type="button" class="btn-secondary" @click="loadStats()">
     Refresh stats
   </button>
+  </div>
 </section>
 
 <section
@@ -1397,14 +1560,15 @@
 >
   <div class="studio-hero">
     <div class="studio-hero-copy">
-      <div class="studio-eyebrow">MCP Servers</div>
-      <h2 class="studio-h1">Build a virtual MCP tool</h2>
+      <div class="studio-eyebrow">Servers &amp; tools</div>
+      <h2 class="studio-h1">Every server exposes tools</h2>
       <p class="studio-lede">
-        Start here: write a <strong>Python function</strong> and the gateway
-        lints it, encrypts it, runs it in a <strong>wasm sandbox</strong>, and
-        exposes it as a real MCP tool — no infra, no deploy. Already run an MCP
-        server? <strong>Connecting an existing one</strong> (like the official
-        GitHub or MongoDB MCP) is the advanced path below.
+        Your gateway needs at least one server, and each server offers one or
+        more tools. <strong>Upstream</strong> servers run right here — paste a
+        Python function and the gateway lints, encrypts, and runs it in a
+        sandbox. <strong>Downstream</strong> servers are MCP servers you already
+        operate (like the official GitHub or MongoDB MCP) that the gateway
+        proxies to over HTTP, SSE, or stdio.
       </p>
     </div>
     <button type="button" class="studio-learn" @click="openHelp('mcp')">
@@ -1415,34 +1579,46 @@
 
   <div class="server-browse-actions card">
     <div class="studio-intro">
-      Pick a server and hit <strong>Edit</strong> to manage its tools, search,
-      database exploration, and secure per-server env keys.
+      Click any server below to manage its tools, search, database exploration,
+      and secure per-server env keys — or add a new one:
     </div>
-    <div class="builder-actions">
+    <div class="add-server-choices">
       <button
         type="button"
-        class="btn-primary"
+        class="add-server-choice add-server-choice-up"
+        x-show="canMutate()"
         @click="openServerComposer('code')"
       >
-        + New virtual server (code)
+        <span class="add-server-choice-head">
+          <span class="dir-dot dir-dot-up"></span>
+          <span class="add-server-choice-title">Add upstream server</span>
+          <span class="segment-tag">No infra</span>
+        </span>
+        <span class="add-server-choice-sub">
+          Hosted here — write a Python function, we run it sandboxed as a real
+          MCP tool.
+        </span>
       </button>
+      <button
+        type="button"
+        class="add-server-choice add-server-choice-down"
+        x-show="canMutate()"
+        @click="openServerComposer('connect')"
+      >
+        <span class="add-server-choice-head">
+          <span class="dir-dot dir-dot-down"></span>
+          <span class="add-server-choice-title">Add downstream server</span>
+        </span>
+        <span class="add-server-choice-sub">
+          Connect an MCP server you already run over Streamable HTTP, SSE, or
+          stdio.
+        </span>
+      </button>
+    </div>
+    <div class="builder-actions">
       <button type="button" class="btn-secondary" @click="loadServers()">
         Refresh list
       </button>
-    </div>
-    <div class="mt-3 flex flex-wrap items-center gap-2">
-      <span class="segment-tag">Advanced</span>
-      <button
-        type="button"
-        class="btn-secondary"
-        @click="openServerComposer('connect')"
-      >
-        + Connect existing server
-      </button>
-      <span class="text-sm text-slate-500">
-        Already run an MCP server? Front an official one — e.g. the GitHub or
-        MongoDB MCP — over Streamable HTTP, SSE, or stdio.
-      </span>
     </div>
   </div>
 
@@ -2977,62 +3153,159 @@
       </template>
     </div>
   </form>
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Server</th>
-          <th>Transport</th>
-          <th>Functions</th>
-          <th>Endpoint</th>
-          <th>Enabled</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        <template x-if="!state.servers || state.servers.length === 0">
-          <tr>
-            <td class="empty-cell" colspan="6">
-              <span class="empty-emoji">🧰</span>No servers configured yet
-            </td>
-          </tr>
+  <div class="server-lanes">
+    <template x-for="lane in [
+        { key: 'upstream', label: 'Upstream', sub: 'Hosted in the gateway', servers: upstreamServers(), dot: 'dir-dot-up', empty: 'No upstream servers yet — add one to run a Python tool here.' },
+        { key: 'downstream', label: 'Downstream', sub: 'External, proxied', servers: downstreamServers(), dot: 'dir-dot-down', empty: 'No downstream servers connected — plug in an MCP server you already run.' }
+      ]" :key="lane.key">
+      <div class="server-lane">
+        <div class="server-lane-head">
+          <span class="server-lane-title">
+            <span class="dir-dot" :class="lane.dot"></span>
+            <span x-text="lane.label"></span>
+          </span>
+          <span class="server-lane-sub" x-text="lane.sub"></span>
+          <span class="server-lane-count" x-text="lane.servers.length"></span>
+        </div>
+
+        <template x-if="lane.servers.length === 0">
+          <div class="server-lane-empty">
+            <span class="empty-emoji">🧰</span>
+            <span x-text="lane.empty"></span>
+          </div>
         </template>
-        <template x-for="server in state.servers" :key="server.server">
-          <tr>
-            <td x-text="server.server"></td>
-            <td x-text="server.transport"></td>
-            <td x-text="(server.tools || []).length"></td>
-            <td
-              class="truncate max-w-xs"
-              x-text="server.endpoint || server.command || '-'"
-            ></td>
-            <td x-text="server.enabled ? 'yes' : 'no'"></td>
-            <td class="space-x-2">
+
+        <template x-for="server in lane.servers" :key="lane.key + '-' + server.server">
+          <article
+            class="server-card"
+            :class="server.enabled ? '' : 'server-card-off'"
+            x-data="{ open: false }"
+          >
+            <div class="server-card-main">
               <button
                 type="button"
-                class="link-btn"
-                @click.prevent.stop="openServerWorkspace(server, 'tools')"
+                class="server-card-toggle"
+                @click="open = !open"
+                :aria-expanded="open"
               >
-                Edit
+                <span class="server-card-caret" :class="open ? 'is-open' : ''"
+                  >▸</span
+                >
+                <span class="server-card-name" x-text="server.server"></span>
+                <span
+                  class="direction-badge"
+                  :class="isUpstreamServer(server) ? 'dir-up' : 'dir-down'"
+                  x-text="serverDirectionLabel(server)"
+                ></span>
+                <span
+                  class="tool-count-badge"
+                  x-text="`${serverToolCount(server)} tool${serverToolCount(server) === 1 ? '' : 's'}`"
+                ></span>
+                <span
+                  class="status-pill"
+                  :class="server.enabled ? 'status-on' : 'status-off'"
+                  x-text="server.enabled ? 'Enabled' : 'Disabled'"
+                ></span>
               </button>
-              <button
-                type="button"
-                class="link-btn"
-                @click="toggleServerEnabled(server)"
-                x-text="server.enabled ? 'Disable' : 'Enable'"
-              ></button>
-              <button
-                type="button"
-                class="link-btn text-rose-600"
-                @click="deleteServer(server.server)"
+              <div class="server-card-actions">
+                <button
+                  type="button"
+                  class="btn-secondary server-manage-btn"
+                  @click="openServerWorkspace(server, 'tools')"
+                >
+                  Manage
+                </button>
+                <button
+                  type="button"
+                  class="link-btn"
+                  x-show="canMutate()"
+                  @click="toggleServerEnabled(server)"
+                  x-text="server.enabled ? 'Disable' : 'Enable'"
+                ></button>
+                <button
+                  type="button"
+                  class="link-btn text-rose-600"
+                  x-show="canMutate()"
+                  @click="deleteServer(server.server)"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+
+            <!-- Advanced-only: raw transport / target / origin. -->
+            <div class="server-card-meta" x-show="isAdvancedView()">
+              <span class="meta-kv">
+                <span class="meta-k">transport</span>
+                <code x-text="server.transport"></code>
+              </span>
+              <span class="meta-kv" x-show="server.endpoint || server.command">
+                <span class="meta-k">target</span>
+                <code x-text="server.endpoint || server.command"></code>
+              </span>
+              <span class="meta-kv">
+                <span class="meta-k">origin</span>
+                <code x-text="server.origin || 'platform'"></code>
+              </span>
+            </div>
+
+            <!-- Tool drilldown. -->
+            <div class="server-card-tools" x-show="open" x-cloak>
+              <template x-if="serverToolCount(server) === 0">
+                <div class="tool-empty">
+                  <span x-show="isUpstreamServer(server)"
+                    >No tools yet — open Manage to author one.</span
+                  >
+                  <span x-show="!isUpstreamServer(server)"
+                    >Tools are discovered from this server and appear in the
+                    Tools catalog once synced.</span
+                  >
+                </div>
+              </template>
+              <template
+                x-for="tool in serverToolList(server)"
+                :key="server.server + ':' + tool.name"
               >
-                Delete
-              </button>
-            </td>
-          </tr>
+                <div class="tool-row">
+                  <span
+                    class="action-badge"
+                    :class="`action-${toolActionType(tool)}`"
+                    :title="`Action type: ${toolActionType(tool)}`"
+                    x-text="toolActionType(tool)"
+                  ></span>
+                  <div class="tool-row-body">
+                    <div class="tool-row-name">
+                      <span x-text="tool.name"></span>
+                      <span
+                        class="confirm-flag"
+                        x-show="toolRequiresConfirmation(tool)"
+                        title="Pauses for human approval before it runs"
+                        >needs approval</span
+                      >
+                    </div>
+                    <div
+                      class="tool-row-desc"
+                      x-text="tool.description || 'No description provided.'"
+                    ></div>
+                    <div
+                      class="tool-row-scopes"
+                      x-show="isAdvancedView() && toolScopeList(tool).length > 0"
+                    >
+                      <template
+                        x-for="scope in toolScopeList(tool)"
+                        :key="server.server + ':' + tool.name + ':' + scope"
+                      >
+                        <code class="scope-chip" x-text="scope"></code>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </article>
         </template>
-      </tbody>
-    </table>
+      </div>
+    </template>
   </div>
 </section>
 

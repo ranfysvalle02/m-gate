@@ -82,16 +82,34 @@
           Control tenants, routes, approvals, embeddings, and live catalog health in one place.
         </p>
         <nav class="nav-list">
-          <template x-for="item in visibleNavItems()" :key="item.key">
-            <button
-              type="button"
-              class="nav-link"
-              :class="activeSection === item.key ? 'nav-link-active' : ''"
-              @click="switchSection(item.key)"
+          <template x-for="group in navGroups()" :key="group.key">
+            <div
+              class="nav-group"
+              :class="isNavGroupCollapsed(group) ? 'nav-group-collapsed' : ''"
             >
-              <span class="nav-icon" x-text="item.icon"></span>
-              <span x-text="item.label"></span>
-            </button>
+              <button
+                type="button"
+                class="nav-group-head"
+                @click="toggleNavGroup(group)"
+                :aria-expanded="!isNavGroupCollapsed(group)"
+              >
+                <span class="nav-group-label" x-text="group.label"></span>
+                <span class="nav-group-chevron" aria-hidden="true">▾</span>
+              </button>
+              <div class="nav-group-items" x-show="!isNavGroupCollapsed(group)">
+                <template x-for="item in group.items" :key="item.key">
+                  <button
+                    type="button"
+                    class="nav-link"
+                    :class="activeSection === item.key ? 'nav-link-active' : ''"
+                    @click="switchSection(item.key)"
+                  >
+                    <span class="nav-icon" x-text="item.icon"></span>
+                    <span x-text="item.label"></span>
+                  </button>
+                </template>
+              </div>
+            </div>
           </template>
         </nav>
         <div class="sidebar-footer">
@@ -120,6 +138,29 @@
             <div class="topbar-value" x-text="state.whoami?.user_id || loggedInEmail"></div>
           </div>
           <div class="topbar-actions">
+            <div
+              class="view-toggle"
+              role="group"
+              aria-label="Detail level"
+              :title="isSimpleView() ? 'Simple view — guided, less clutter. Click for full detail.' : 'Advanced view — every field and chart. Click for the guided view.'"
+            >
+              <button
+                type="button"
+                class="view-toggle-btn"
+                :class="isSimpleView() ? 'view-toggle-btn-active' : ''"
+                @click="isAdvancedView() && toggleViewMode()"
+              >
+                <span aria-hidden="true">🌱</span> Simple
+              </button>
+              <button
+                type="button"
+                class="view-toggle-btn"
+                :class="isAdvancedView() ? 'view-toggle-btn-active' : ''"
+                @click="isSimpleView() && toggleViewMode()"
+              >
+                <span aria-hidden="true">⚙️</span> Advanced
+              </button>
+            </div>
             <label class="field-label !mb-0" for="tenant-picker">Tenant</label>
             <select
               id="tenant-picker"

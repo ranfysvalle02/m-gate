@@ -1,0 +1,18 @@
+# Local override (auto-loaded by `docker compose` alongside docker-compose.yml).
+#
+# The gateway reaches MongoDB over the internal compose network (mongodb:27017),
+# so there is no need to publish MongoDB's port on the host. We drop the host
+# publish here to avoid colliding with any other MongoDB already bound to 27017
+# on this machine (e.g. another local project). The `!override` tag replaces the
+# base `ports` list instead of Compose's default append-merge.
+services:
+  mongodb:
+    ports: !override []
+
+  # Live-mount the admin UI assets so template/CSS/JS edits show up on the next
+  # page load without rebuilding the image (the app reads a per-render cache-
+  # busting token from file mtimes). Read-only; purely a local dev convenience.
+  gateway:
+    volumes:
+      - ./gateway/templates:/app/gateway/templates:ro
+      - ./gateway/static:/app/gateway/static:ro
